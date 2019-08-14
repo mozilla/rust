@@ -1297,10 +1297,10 @@ pub struct L4Bender<'a> {
 }
 
 impl<'a> Linker for L4Bender<'a> {
-    fn link_dylib(&mut self, lib: &str) {
-        self.link_staticlib(lib); // do not support dynamic linking for now
+    fn link_dylib(&mut self, _lib: Symbol) {
+        panic!("dylibs not supported yet")
     }
-    fn link_staticlib(&mut self, lib: &str) {
+    fn link_staticlib(&mut self, lib: Symbol) {
         self.hint_static();
         self.cmd.arg(format!("-PC{}", lib));
     }
@@ -1325,9 +1325,11 @@ impl<'a> Linker for L4Bender<'a> {
     fn build_static_executable(&mut self) { self.cmd.arg("-static"); }
     fn args(&mut self, args: &[String]) { self.cmd.args(args); }
 
-    fn link_rust_dylib(&mut self, lib: &str, _path: &Path) { self.link_dylib(lib); }
+    fn link_rust_dylib(&mut self, _: Symbol, _: &Path) {
+        panic!("Rust dylibs not supported");
+    }
 
-    fn link_framework(&mut self, _: &str) {
+    fn link_framework(&mut self, _: Symbol) {
         bug!("Frameworks not supported on L4Re.");
     }
 
@@ -1337,10 +1339,9 @@ impl<'a> Linker for L4Bender<'a> {
     // don't otherwise explicitly reference them. This can occur for
     // libraries which are just providing bindings, libraries with generic
     // functions, etc.
-    fn link_whole_staticlib(&mut self, lib: &str, _: &[PathBuf]) {
+    fn link_whole_staticlib(&mut self, lib: Symbol, _: &[PathBuf]) {
         self.hint_static();
-        self.cmd.arg("--whole-archive");
-        self.cmd.arg("-l").arg(lib);
+        self.cmd.arg("--whole-archive").arg(format!("-l{}", lib));
         self.cmd.arg("--no-whole-archive");
     }
 
@@ -1385,7 +1386,8 @@ impl<'a> Linker for L4Bender<'a> {
     }
 
     fn export_symbols(&mut self, _: &Path, _: CrateType) {
-        bug!("Not implemented");
+        // ToDo, not implemented, copy from GCC
+        return;
     }
 
     fn subsystem(&mut self, subsystem: &str) {
@@ -1403,6 +1405,9 @@ impl<'a> Linker for L4Bender<'a> {
     fn group_end(&mut self) { self.cmd.arg("--end-group"); }
     fn linker_plugin_lto(&mut self) {
         // do nothing
+    }
+    fn control_flow_guard(&mut self) {
+        self.sess.warn("Windows Control Flow Guard is not supported by this linker.");
     }
 }
 
