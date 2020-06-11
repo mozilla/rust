@@ -202,6 +202,7 @@ crate struct SharedContext {
     /// The default edition used to parse doctests.
     pub edition: Edition,
     pub codes: ErrorCodes,
+    pub source_code_external_url: Option<String>,
     playground: Option<markdown::Playground>,
 }
 
@@ -469,6 +470,7 @@ pub fn run(
         static_root_path,
         generate_search_filter,
         generate_redirect_pages,
+        source_code_external_url,
         ..
     } = options;
 
@@ -527,6 +529,7 @@ pub fn run(
         collapsed: krate.collapsed,
         src_root,
         include_sources,
+        source_code_external_url,
         local_sources: Default::default(),
         issue_tracker_base_url,
         layout,
@@ -1604,6 +1607,21 @@ impl Context {
     }
 }
 
+fn compute_path(path: String) -> String {
+    if path.split('/').find(|x| *x == "..").is_none() {
+        return path;
+    }
+    let mut new_path = Vec::new();
+    for part in path.split('/') {
+        if part != ".." {
+            new_path.push(part);
+        } else if !new_path.is_empty() {
+            new_path.pop();
+        }
+    }
+    new_path.join("/")
+}
+
 impl Context {
     /// Generates a url appropriate for an `href` attribute back to the source of
     /// this item.
@@ -1657,13 +1675,26 @@ impl Context {
         } else {
             format!("{}-{}", item.source.loline, item.source.hiline)
         };
-        Some(format!(
-            "{root}src/{krate}/{path}#{lines}",
-            root = Escape(&root),
-            krate = krate,
-            path = path,
-            lines = lines
-        ))
+        if let Some(ref source_code_external_url) = self.shared.source_code_external_url {
+            Some(format!(
+                "{path}#{lines}",
+                path = compute_path(format!(
+                    "{root}/{path}",
+                    root = source_code_external_url,
+                    krate = krate,
+                    path = path,
+                ),),
+                lines = lines
+            ))
+        } else {
+            Some(format!(
+                "{root}src/{krate}/{path}#{lines}",
+                root = Escape(&root),
+                krate = krate,
+                path = path,
+                lines = lines
+            ))
+        }
     }
 }
 

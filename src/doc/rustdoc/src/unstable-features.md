@@ -434,3 +434,20 @@ $ rustdoc src/lib.rs -Z unstable-options --runtool valgrind
 ```
 
 Another use case would be to run a test inside an emulator, or through a Virtual Machine.
+
+### `--source-code-external-url`: using external source code
+
+In case you don't want to generate the source code files and instead use existing ones (available
+through an HTTP URL!), you can use this option:
+
+```bash
+$ rustdoc src/lib.rs -Z unstable-options --source-code-external-url 'https://somewhere.com'
+```
+
+Note that generated source URLs will look like this:
+
+```text
+https://somewhere.com/[crate name]
+```
+
+It is equivalent to the local `src/[crate name]` folder.
