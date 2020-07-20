@@ -2,11 +2,16 @@
 
 #![stable(feature = "process_extensions", since = "1.2.0")]
 
+use crate::ffi::OsStr;
+use crate::io;
 use crate::os::windows::io::{AsRawHandle, FromRawHandle, IntoRawHandle, RawHandle};
 use crate::process;
 use crate::sealed::Sealed;
 use crate::sys;
-use crate::sys_common::{AsInner, AsInnerMut, FromInner, IntoInner};
+#[unstable(feature = "windows_raw_cmdline", issue = "74549")]
+pub use crate::sys::process::{Arg, Problem, RawArg};
+use crate::sys_common::{process_ext, AsInner, AsInnerMut, FromInner, IntoInner};
+use core::convert::TryFrom;
 
 #[stable(feature = "process_extensions", since = "1.2.0")]
 impl FromRawHandle for process::Stdio {
@@ -121,6 +126,13 @@ pub trait CommandExt: Sealed {
     /// [2]: <https://msdn.microsoft.com/en-us/library/17w5ykft.aspx>
     #[unstable(feature = "windows_process_extensions_force_quotes", issue = "82227")]
     fn force_quotes(&mut self, enabled: bool) -> &mut process::Command;
+    /// Pass an argument with custom escape rules.
+    #[unstable(feature = "windows_raw_cmdline", issue = "74549")]
+    fn arg_ext(&mut self, arg: impl Arg) -> &mut process::Command;
+
+    /// Pass arguments with custom escape rules.
+    #[unstable(feature = "windows_raw_cmdline", issue = "74549")]
+    fn args_ext(&mut self, args: impl IntoIterator<Item = impl Arg>) -> &mut process::Command;
 }
 
 #[stable(feature = "windows_process_extensions", since = "1.16.0")]
@@ -134,4 +146,23 @@ impl CommandExt for process::Command {
         self.as_inner_mut().force_quotes(enabled);
         self
     }
+
+    fn arg_ext(&mut self, arg: impl Arg) -> &mut process::Command {
+        self.as_inner_mut().arg_ext(arg);
+        self
+    }
+
+    fn args_ext(&mut self, args: impl IntoIterator<Item = impl Arg>) -> &mut process::Command {
+        for arg in args {
+            self.arg_ext(arg);
+        }
+        self
+    }
+}
+
+// FIXME: export maybe_arg_ext so the macro doesn't explicitly reach for as_inner_mut()
+impl process_ext::CommandSized for process::Command {
+    impl_command_sized! { marg  sys::process::Command::maybe_arg_ext }
+    impl_command_sized! { margs sys::process::Command::maybe_arg_ext }
+    impl_command_sized! { xargs process::Command::args_ext }
 }

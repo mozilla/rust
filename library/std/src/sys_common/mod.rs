@@ -60,6 +60,9 @@ pub mod mutex;
 pub mod os_str_bytes;
 pub mod poison;
 pub mod process;
+#[cfg(any(unix, windows))]
+#[macro_use]
+pub(crate) mod process_ext;
 pub mod remutex;
 pub mod rwlock;
 pub mod thread;
