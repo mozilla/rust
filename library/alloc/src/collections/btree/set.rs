@@ -85,7 +85,7 @@ pub struct Iter<'a, T: 'a> {
 }
 
 #[stable(feature = "collection_debug", since = "1.17.0")]
-impl<T: fmt::Debug> fmt::Debug for Iter<'_, T> {
+impl<T: Debug> Debug for Iter<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("Iter").field(&self.iter.clone()).finish()
     }
@@ -141,7 +141,7 @@ enum DifferenceInner<'a, T: 'a> {
 }
 
 #[stable(feature = "collection_debug", since = "1.17.0")]
-impl<T: fmt::Debug> fmt::Debug for Difference<'_, T> {
+impl<T: Debug> Debug for Difference<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("Difference").field(&self.inner).finish()
     }
@@ -157,7 +157,7 @@ impl<T: fmt::Debug> fmt::Debug for Difference<'_, T> {
 pub struct SymmetricDifference<'a, T: 'a>(MergeIterInner<Iter<'a, T>>);
 
 #[stable(feature = "collection_debug", since = "1.17.0")]
-impl<T: fmt::Debug> fmt::Debug for SymmetricDifference<'_, T> {
+impl<T: Debug> Debug for SymmetricDifference<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("SymmetricDifference").field(&self.0).finish()
     }
@@ -189,7 +189,7 @@ enum IntersectionInner<'a, T: 'a> {
 }
 
 #[stable(feature = "collection_debug", since = "1.17.0")]
-impl<T: fmt::Debug> fmt::Debug for Intersection<'_, T> {
+impl<T: Debug> Debug for Intersection<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("Intersection").field(&self.inner).finish()
     }
@@ -205,7 +205,7 @@ impl<T: fmt::Debug> fmt::Debug for Intersection<'_, T> {
 pub struct Union<'a, T: 'a>(MergeIterInner<Iter<'a, T>>);
 
 #[stable(feature = "collection_debug", since = "1.17.0")]
-impl<T: fmt::Debug> fmt::Debug for Union<'_, T> {
+impl<T: Debug> Debug for Union<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("Union").field(&self.0).finish()
     }
@@ -1035,9 +1035,9 @@ where
 }
 
 #[unstable(feature = "btree_drain_filter", issue = "70530")]
-impl<T, F> fmt::Debug for DrainFilter<'_, T, F>
+impl<T, F> Debug for DrainFilter<'_, T, F>
 where
-    T: fmt::Debug,
+    T: Debug,
     F: FnMut(&T) -> bool,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
