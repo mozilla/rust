@@ -1,15 +1,17 @@
 use super::map::MIN_LEN;
 use super::node::{marker, ForceResult, Handle, NodeRef};
 use super::unwrap_unchecked;
+use core::alloc::AllocRef;
 use core::mem;
 use core::ptr;
 
 impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::KV> {
     /// Removes a key/value-pair from the map, and returns that pair, as well as
     /// the leaf edge corresponding to that former pair.
-    pub fn remove_kv_tracking<F: FnOnce()>(
+    pub fn remove_kv_tracking<F: FnOnce(&A), A: AllocRef>(
         self,
         handle_emptied_internal_root: F,
+        alloc: &A,
     ) -> ((K, V), Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>) {
         let (old_kv, mut pos, was_internal) = match self.force() {
             ForceResult::Leaf(leaf) => {
@@ -42,7 +44,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInter
         let mut cur_node = unsafe { ptr::read(&pos).into_node().forget_type() };
         let mut at_leaf = true;
         while cur_node.len() < MIN_LEN {
-            match handle_underfull_node(cur_node) {
+            match handle_underfull_node(cur_node, alloc) {
                 UnderflowResult::AtRoot => break,
                 UnderflowResult::Merged(edge, merged_with_left, offset) => {
                     // If we merged with our right sibling then our tracked
@@ -62,7 +64,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInter
                         // The parent that was just emptied must be the root,
                         // because nodes on a lower level would not have been
                         // left with a single child.
-                        handle_emptied_internal_root();
+                        handle_emptied_internal_root(alloc);
                         break;
                     } else {
                         cur_node = parent.forget_type();
@@ -99,9 +101,10 @@ enum UnderflowResult<'a, K, V> {
     Stole(bool),
 }
 
-fn handle_underfull_node<'a, K: 'a, V: 'a>(
+fn handle_underfull_node<'a, K: 'a, V: 'a, A: AllocRef>(
     node: NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>,
-) -> UnderflowResult<'_, K, V> {
+    alloc: &A,
+) -> UnderflowResult<'a, K, V> {
     let parent = match node.ascend() {
         Ok(parent) => parent,
         Err(_) => return UnderflowResult::AtRoot,
@@ -121,7 +124,7 @@ fn handle_underfull_node<'a, K: 'a, V: 'a>(
 
     if handle.can_merge() {
         let offset = if is_left { handle.reborrow().left_edge().descend().len() + 1 } else { 0 };
-        UnderflowResult::Merged(handle.merge(), is_left, offset)
+        UnderflowResult::Merged(handle.merge(alloc), is_left, offset)
     } else {
         if is_left {
             handle.steal_left();

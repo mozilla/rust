@@ -1,11 +1,16 @@
 use super::map::MIN_LEN;
 use super::node::{ForceResult::*, Root};
 use super::search::{search_node, SearchResult::*};
+use core::alloc::AllocRef;
 use core::borrow::Borrow;
 
 impl<K, V> Root<K, V> {
-    pub fn split_off<Q: ?Sized + Ord>(&mut self, right_root: &mut Self, key: &Q)
-    where
+    pub fn split_off<Q: ?Sized + Ord, A: AllocRef>(
+        &mut self,
+        right_root: &mut Self,
+        key: &Q,
+        alloc: &A,
+    ) where
         K: Borrow<Q>,
     {
         debug_assert!(right_root.height() == 0);
@@ -13,7 +18,7 @@ impl<K, V> Root<K, V> {
 
         let left_root = self;
         for _ in 0..left_root.height() {
-            right_root.push_internal_level();
+            right_root.push_internal_level(alloc);
         }
 
         {
@@ -42,19 +47,19 @@ impl<K, V> Root<K, V> {
             }
         }
 
-        left_root.fix_right_border();
-        right_root.fix_left_border();
+        left_root.fix_right_border(alloc);
+        right_root.fix_left_border(alloc);
     }
 
     /// Removes empty levels on the top, but keeps an empty leaf if the entire tree is empty.
-    fn fix_top(&mut self) {
+    fn fix_top<A: AllocRef>(&mut self, alloc: &A) {
         while self.height() > 0 && self.node_as_ref().len() == 0 {
-            self.pop_internal_level();
+            self.pop_internal_level(alloc);
         }
     }
 
-    fn fix_right_border(&mut self) {
-        self.fix_top();
+    fn fix_right_border<A: AllocRef>(&mut self, alloc: &A) {
+        self.fix_top(alloc);
 
         {
             let mut cur_node = self.node_as_mut();
@@ -63,7 +68,7 @@ impl<K, V> Root<K, V> {
                 let mut last_kv = node.last_kv();
 
                 if last_kv.can_merge() {
-                    cur_node = last_kv.merge().descend();
+                    cur_node = last_kv.merge(alloc).descend();
                 } else {
                     let right_len = last_kv.reborrow().right_edge().descend().len();
                     // `MIN_LEN + 1` to avoid readjust if merge happens on the next level.
@@ -75,12 +80,12 @@ impl<K, V> Root<K, V> {
             }
         }
 
-        self.fix_top();
+        self.fix_top(alloc);
     }
 
     /// The symmetric clone of `fix_right_border`.
-    fn fix_left_border(&mut self) {
-        self.fix_top();
+    fn fix_left_border<A: AllocRef>(&mut self, alloc: &A) {
+        self.fix_top(alloc);
 
         {
             let mut cur_node = self.node_as_mut();
@@ -89,7 +94,7 @@ impl<K, V> Root<K, V> {
                 let mut first_kv = node.first_kv();
 
                 if first_kv.can_merge() {
-                    cur_node = first_kv.merge().descend();
+                    cur_node = first_kv.merge(alloc).descend();
                 } else {
                     let left_len = first_kv.reborrow().left_edge().descend().len();
                     // `MIN_LEN + 1` to avoid readjust if merge happens on the next level.
@@ -101,6 +106,6 @@ impl<K, V> Root<K, V> {
             }
         }
 
-        self.fix_top();
+        self.fix_top(alloc);
     }
 }

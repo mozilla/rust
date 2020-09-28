@@ -8,6 +8,8 @@ use super::node::{marker, ForceResult::*, Handle, NodeRef};
 use super::search::{self, SearchResult};
 use super::unwrap_unchecked;
 
+use crate::alloc::AllocRef;
+
 /// Finds the leaf edges delimiting a specified range in or underneath a node.
 fn range_search<BorrowType, K, V, Q, R>(
     root1: NodeRef<BorrowType, K, V, marker::LeafOrInternal>,
@@ -280,8 +282,9 @@ macro_rules! def_next_kv_uncheched_dealloc {
         /// - The leaf edge must not be the last one in the direction travelled.
         /// - The node carrying the next KV returned must not have been deallocated by a
         ///   previous call on any handle obtained for this tree.
-        unsafe fn $name <K, V>(
+        unsafe fn $name <K, V, A: AllocRef>(
             leaf_edge: Handle<NodeRef<marker::Owned, K, V, marker::Leaf>, marker::Edge>,
+            alloc: &A
         ) -> Handle<NodeRef<marker::Owned, K, V, marker::LeafOrInternal>, marker::KV> {
             let mut edge = leaf_edge.forget_node_type();
             loop {
@@ -289,7 +292,7 @@ macro_rules! def_next_kv_uncheched_dealloc {
                     Ok(internal_kv) => return internal_kv,
                     Err(last_edge) => {
                         unsafe {
-                            let parent_edge = last_edge.into_node().deallocate_and_ascend();
+                            let parent_edge = last_edge.into_node().deallocate_and_ascend(&alloc);
                             unwrap_unchecked(parent_edge).forget_node_type()
                         }
                     }
@@ -389,9 +392,9 @@ impl<K, V> Handle<NodeRef<marker::Owned, K, V, marker::Leaf>, marker::Edge> {
     /// The only safe way to proceed with the updated handle is to compare it, drop it,
     /// call this method again subject to its safety conditions, or call counterpart
     /// `next_back_unchecked` subject to its safety conditions.
-    pub unsafe fn next_unchecked(&mut self) -> (K, V) {
+    pub unsafe fn next_unchecked<A: AllocRef>(&mut self, alloc: &A) -> (K, V) {
         super::mem::replace(self, |leaf_edge| {
-            let kv = unsafe { next_kv_unchecked_dealloc(leaf_edge) };
+            let kv = unsafe { next_kv_unchecked_dealloc(leaf_edge, alloc) };
             let k = unsafe { ptr::read(kv.reborrow().into_kv().0) };
             let v = unsafe { ptr::read(kv.reborrow().into_kv().1) };
             (kv.next_leaf_edge(), (k, v))
@@ -410,9 +413,9 @@ impl<K, V> Handle<NodeRef<marker::Owned, K, V, marker::Leaf>, marker::Edge> {
     /// The only safe way to proceed with the updated handle is to compare it, drop it,
     /// call this method again subject to its safety conditions, or call counterpart
     /// `next_unchecked` subject to its safety conditions.
-    pub unsafe fn next_back_unchecked(&mut self) -> (K, V) {
+    pub unsafe fn next_back_unchecked<A: AllocRef>(&mut self, alloc: &A) -> (K, V) {
         super::mem::replace(self, |leaf_edge| {
-            let kv = unsafe { next_back_kv_unchecked_dealloc(leaf_edge) };
+            let kv = unsafe { next_back_kv_unchecked_dealloc(leaf_edge, alloc) };
             let k = unsafe { ptr::read(kv.reborrow().into_kv().0) };
             let v = unsafe { ptr::read(kv.reborrow().into_kv().1) };
             (kv.next_back_leaf_edge(), (k, v))

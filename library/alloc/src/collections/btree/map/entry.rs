@@ -2,6 +2,8 @@ use core::fmt::{self, Debug};
 use core::marker::PhantomData;
 use core::mem;
 
+use crate::alloc::{AllocRef, Global};
+
 use super::super::borrow::DormantMutRef;
 use super::super::node::{marker, Handle, InsertResult::*, NodeRef};
 use super::BTreeMap;
@@ -14,18 +16,18 @@ use Entry::*;
 ///
 /// [`entry`]: BTreeMap::entry
 #[stable(feature = "rust1", since = "1.0.0")]
-pub enum Entry<'a, K: 'a, V: 'a> {
+pub enum Entry<'a, K, V, A: AllocRef = Global> {
     /// A vacant entry.
     #[stable(feature = "rust1", since = "1.0.0")]
-    Vacant(#[stable(feature = "rust1", since = "1.0.0")] VacantEntry<'a, K, V>),
+    Vacant(#[stable(feature = "rust1", since = "1.0.0")] VacantEntry<'a, K, V, A>),
 
     /// An occupied entry.
     #[stable(feature = "rust1", since = "1.0.0")]
-    Occupied(#[stable(feature = "rust1", since = "1.0.0")] OccupiedEntry<'a, K, V>),
+    Occupied(#[stable(feature = "rust1", since = "1.0.0")] OccupiedEntry<'a, K, V, A>),
 }
 
 #[stable(feature = "debug_btree_map", since = "1.12.0")]
-impl<K: Debug + Ord, V: Debug> Debug for Entry<'_, K, V> {
+impl<K: Debug + Ord, V: Debug, A: AllocRef> Debug for Entry<'_, K, V, A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Vacant(ref v) => f.debug_tuple("Entry").field(v).finish(),
@@ -37,17 +39,19 @@ impl<K: Debug + Ord, V: Debug> Debug for Entry<'_, K, V> {
 /// A view into a vacant entry in a `BTreeMap`.
 /// It is part of the [`Entry`] enum.
 #[stable(feature = "rust1", since = "1.0.0")]
-pub struct VacantEntry<'a, K: 'a, V: 'a> {
+pub struct VacantEntry<'a, K, V, A: AllocRef = Global> {
     pub(super) key: K,
     pub(super) handle: Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>,
-    pub(super) dormant_map: DormantMutRef<'a, BTreeMap<K, V>>,
+    pub(super) dormant_map: DormantMutRef<'a, BTreeMap<K, V, A>>,
+
+    pub(super) alloc: &'a A,
 
     // Be invariant in `K` and `V`
     pub(super) _marker: PhantomData<&'a mut (K, V)>,
 }
 
 #[stable(feature = "debug_btree_map", since = "1.12.0")]
-impl<K: Debug + Ord, V> Debug for VacantEntry<'_, K, V> {
+impl<K: Debug + Ord, V, A: AllocRef> Debug for VacantEntry<'_, K, V, A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("VacantEntry").field(self.key()).finish()
     }
@@ -56,22 +60,24 @@ impl<K: Debug + Ord, V> Debug for VacantEntry<'_, K, V> {
 /// A view into an occupied entry in a `BTreeMap`.
 /// It is part of the [`Entry`] enum.
 #[stable(feature = "rust1", since = "1.0.0")]
-pub struct OccupiedEntry<'a, K: 'a, V: 'a> {
+pub struct OccupiedEntry<'a, K, V, A: AllocRef = Global> {
     pub(super) handle: Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::KV>,
-    pub(super) dormant_map: DormantMutRef<'a, BTreeMap<K, V>>,
+    pub(super) dormant_map: DormantMutRef<'a, BTreeMap<K, V, A>>,
+
+    pub(super) alloc: &'a A,
 
     // Be invariant in `K` and `V`
     pub(super) _marker: PhantomData<&'a mut (K, V)>,
 }
 
 #[stable(feature = "debug_btree_map", since = "1.12.0")]
-impl<K: Debug + Ord, V: Debug> Debug for OccupiedEntry<'_, K, V> {
+impl<K: Debug + Ord, V: Debug, A: AllocRef> Debug for OccupiedEntry<'_, K, V, A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("OccupiedEntry").field("key", self.key()).field("value", self.get()).finish()
     }
 }
 
-impl<'a, K: Ord, V> Entry<'a, K, V> {
+impl<'a, K: Ord, V, A: AllocRef> Entry<'a, K, V, A> {
     /// Ensures a value is in the entry by inserting the default if empty, and returns
     /// a mutable reference to the value in the entry.
     ///
@@ -197,7 +203,7 @@ impl<'a, K: Ord, V> Entry<'a, K, V> {
     }
 }
 
-impl<'a, K: Ord, V: Default> Entry<'a, K, V> {
+impl<'a, K: Ord, V: Default, A: AllocRef> Entry<'a, K, V, A> {
     #[stable(feature = "entry_or_default", since = "1.28.0")]
     /// Ensures a value is in the entry by inserting the default value if empty,
     /// and returns a mutable reference to the value in the entry.
@@ -220,7 +226,7 @@ impl<'a, K: Ord, V: Default> Entry<'a, K, V> {
     }
 }
 
-impl<'a, K: Ord, V> VacantEntry<'a, K, V> {
+impl<'a, K: Ord, V, A: AllocRef> VacantEntry<'a, K, V, A> {
     /// Gets a reference to the key that would be used when inserting a value
     /// through the VacantEntry.
     ///
@@ -274,7 +280,7 @@ impl<'a, K: Ord, V> VacantEntry<'a, K, V> {
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn insert(self, value: V) -> &'a mut V {
-        let out_ptr = match self.handle.insert_recursing(self.key, value) {
+        let out_ptr = match self.handle.insert_recursing(self.key, value, self.alloc) {
             (Fit(_), val_ptr) => {
                 // Safety: We have consumed self.handle and the handle returned.
                 let map = unsafe { self.dormant_map.awaken() };
@@ -286,7 +292,7 @@ impl<'a, K: Ord, V> VacantEntry<'a, K, V> {
                 // Safety: We have consumed self.handle and the reference returned.
                 let map = unsafe { self.dormant_map.awaken() };
                 let root = map.root.as_mut().unwrap();
-                root.push_internal_level().push(ins.k, ins.v, ins.right);
+                root.push_internal_level(&*self.alloc).push(ins.k, ins.v, ins.right);
                 map.length += 1;
                 val_ptr
             }
@@ -297,7 +303,7 @@ impl<'a, K: Ord, V> VacantEntry<'a, K, V> {
     }
 }
 
-impl<'a, K: Ord, V> OccupiedEntry<'a, K, V> {
+impl<'a, K: Ord, V, A: AllocRef> OccupiedEntry<'a, K, V, A> {
     /// Gets a reference to the key in the entry.
     ///
     /// # Examples
@@ -462,13 +468,14 @@ impl<'a, K: Ord, V> OccupiedEntry<'a, K, V> {
     // Body of `remove_entry`, separate to keep the above implementations short.
     pub(super) fn remove_kv(self) -> (K, V) {
         let mut emptied_internal_root = false;
-        let (old_kv, _) = self.handle.remove_kv_tracking(|| emptied_internal_root = true);
+        let (old_kv, _) =
+            self.handle.remove_kv_tracking(|_| emptied_internal_root = true, self.alloc);
         // SAFETY: we consumed the intermediate root borrow, `self.handle`.
         let map = unsafe { self.dormant_map.awaken() };
         map.length -= 1;
         if emptied_internal_root {
             let root = map.root.as_mut().unwrap();
-            root.pop_internal_level();
+            root.pop_internal_level(&*self.alloc);
         }
         old_kv
     }

@@ -34,7 +34,7 @@ use core::mem::{self, MaybeUninit};
 use core::ptr::{self, NonNull, Unique};
 use core::slice;
 
-use crate::alloc::{AllocRef, Global, Layout};
+use crate::alloc::{AllocRef, Layout};
 use crate::boxed::Box;
 
 const B: usize = 6;
@@ -119,11 +119,11 @@ struct BoxedNode<K, V> {
 }
 
 impl<K, V> BoxedNode<K, V> {
-    fn from_leaf(node: Box<LeafNode<K, V>>) -> Self {
+    fn from_leaf<A: AllocRef>(node: Box<LeafNode<K, V>, A>) -> Self {
         BoxedNode { ptr: Box::into_unique(node).0 }
     }
 
-    fn from_internal(node: Box<InternalNode<K, V>>) -> Self {
+    fn from_internal<A: AllocRef>(node: Box<InternalNode<K, V>, A>) -> Self {
         BoxedNode { ptr: Unique::from(&mut Box::leak(node).data) }
     }
 
@@ -151,8 +151,11 @@ impl<K, V> Root<K, V> {
     }
 
     /// Returns a new owned tree, with its own root node that is initially empty.
-    pub fn new_leaf() -> Self {
-        Root { node: BoxedNode::from_leaf(Box::new(unsafe { LeafNode::new() })), height: 0 }
+    pub fn new_leaf<A: AllocRef>(alloc: &A) -> Self {
+        Root {
+            node: BoxedNode::from_leaf(Box::new_in(unsafe { LeafNode::new() }, alloc)),
+            height: 0,
+        }
     }
 
     /// Borrows and returns an immutable reference to the node owned by the root.
@@ -192,8 +195,11 @@ impl<K, V> Root<K, V> {
     /// Adds a new internal node with a single edge pointing to the previous root node,
     /// make that new node the root node, and return it. This increases the height by 1
     /// and is the opposite of `pop_internal_level`.
-    pub fn push_internal_level(&mut self) -> NodeRef<marker::Mut<'_>, K, V, marker::Internal> {
-        let mut new_node = Box::new(unsafe { InternalNode::new() });
+    pub fn push_internal_level<A: AllocRef>(
+        &mut self,
+        alloc: &A,
+    ) -> NodeRef<marker::Mut<'_>, K, V, marker::Internal> {
+        let mut new_node = Box::new_in(unsafe { InternalNode::new() }, alloc);
         new_node.edges[0].write(unsafe { ptr::read(&mut self.node) });
 
         self.node = BoxedNode::from_internal(new_node);
@@ -215,7 +221,7 @@ impl<K, V> Root<K, V> {
     /// it will not invalidate existing handles or references to the root node.
     ///
     /// Panics if there is no internal level, i.e., if the root node is a leaf.
-    pub fn pop_internal_level(&mut self) {
+    pub fn pop_internal_level<A: AllocRef>(&mut self, alloc: &A) {
         assert!(self.height > 0);
 
         let top = self.node.ptr;
@@ -226,7 +232,7 @@ impl<K, V> Root<K, V> {
         self.node_as_mut().as_leaf_mut().parent = None;
 
         unsafe {
-            Global.dealloc(NonNull::from(top).cast(), Layout::new::<InternalNode<K, V>>());
+            alloc.dealloc(NonNull::from(top).cast(), Layout::new::<InternalNode<K, V>>());
         }
     }
 }
@@ -432,14 +438,15 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::LeafOrInternal> {
     /// Similar to `ascend`, gets a reference to a node's parent node, but also
     /// deallocate the current node in the process. This is unsafe because the
     /// current node will still be accessible despite being deallocated.
-    pub unsafe fn deallocate_and_ascend(
+    pub unsafe fn deallocate_and_ascend<A: AllocRef>(
         self,
+        alloc: &A,
     ) -> Option<Handle<NodeRef<marker::Owned, K, V, marker::Internal>, marker::Edge>> {
         let height = self.height;
         let node = self.node;
         let ret = self.ascend().ok();
         unsafe {
-            Global.dealloc(
+            alloc.dealloc(
                 node.cast(),
                 if height > 0 {
                     Layout::new::<InternalNode<K, V>>()
@@ -938,7 +945,12 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
     /// this edge. This method splits the node if there isn't enough room.
     ///
     /// The returned pointer points to the inserted value.
-    fn insert(mut self, key: K, val: V) -> (InsertResult<'a, K, V, marker::Leaf>, *mut V) {
+    fn insert<A: AllocRef>(
+        mut self,
+        key: K,
+        val: V,
+        alloc: &A,
+    ) -> (InsertResult<'a, K, V, marker::Leaf>, *mut V) {
         if self.node.len() < CAPACITY {
             let val_ptr = self.insert_fit(key, val);
             let kv = unsafe { Handle::new_kv(self.node, self.idx) };
@@ -946,7 +958,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
         } else {
             let (middle_kv_idx, insertion) = splitpoint(self.idx);
             let middle = unsafe { Handle::new_kv(self.node, middle_kv_idx) };
-            let (mut left, k, v, mut right) = middle.split();
+            let (mut left, k, v, mut right) = middle.split(alloc);
             let mut insertion_edge = match insertion {
                 InsertionPlace::Left(insert_idx) => unsafe {
                     Handle::new_edge(left.reborrow_mut(), insert_idx)
@@ -994,11 +1006,12 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
     /// Inserts a new key/value pair and an edge that will go to the right of that new pair
     /// between this edge and the key/value pair to the right of this edge. This method splits
     /// the node if there isn't enough room.
-    fn insert(
+    fn insert<A: AllocRef>(
         mut self,
         key: K,
         val: V,
         edge: Root<K, V>,
+        alloc: &A,
     ) -> InsertResult<'a, K, V, marker::Internal> {
         assert!(edge.height == self.node.height - 1);
 
@@ -1009,7 +1022,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
         } else {
             let (middle_kv_idx, insertion) = splitpoint(self.idx);
             let middle = unsafe { Handle::new_kv(self.node, middle_kv_idx) };
-            let (mut left, k, v, mut right) = middle.split();
+            let (mut left, k, v, mut right) = middle.split(alloc);
             let mut insertion_edge = match insertion {
                 InsertionPlace::Left(insert_idx) => unsafe {
                     Handle::new_edge(left.reborrow_mut(), insert_idx)
@@ -1032,12 +1045,13 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
     /// If the returned result is a `Fit`, its handle's node can be this edge's node or an ancestor.
     /// If the returned result is a `Split`, the `left` field will be the root node.
     /// The returned pointer points to the inserted value.
-    pub fn insert_recursing(
+    pub fn insert_recursing<A: AllocRef>(
         self,
         key: K,
         value: V,
+        alloc: &A,
     ) -> (InsertResult<'a, K, V, marker::LeafOrInternal>, *mut V) {
-        let (mut split, val_ptr) = match self.insert(key, value) {
+        let (mut split, val_ptr) = match self.insert(key, value, alloc) {
             (InsertResult::Fit(handle), ptr) => {
                 return (InsertResult::Fit(handle.forget_node_type()), ptr);
             }
@@ -1046,7 +1060,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
 
         loop {
             split = match split.left.ascend() {
-                Ok(parent) => match parent.insert(split.k, split.v, split.right) {
+                Ok(parent) => match parent.insert(split.k, split.v, split.right, alloc) {
                     InsertResult::Fit(handle) => {
                         return (InsertResult::Fit(handle.forget_node_type()), val_ptr);
                     }
@@ -1157,9 +1171,12 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
     /// - The key and value pointed to by this handle are extracted.
     /// - All the key/value pairs to the right of this handle are put into a newly
     ///   allocated node.
-    pub fn split(mut self) -> (NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, K, V, Root<K, V>) {
+    pub fn split<A: AllocRef>(
+        mut self,
+        alloc: &A,
+    ) -> (NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, K, V, Root<K, V>) {
         unsafe {
-            let mut new_node = Box::new(LeafNode::new());
+            let mut new_node = Box::new_in(LeafNode::new(), alloc);
 
             let (k, v) = self.split_leaf_data(&mut new_node);
 
@@ -1202,9 +1219,12 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
     /// - The key and value pointed to by this handle are extracted.
     /// - All the edges and key/value pairs to the right of this handle are put into
     ///   a newly allocated node.
-    pub fn split(mut self) -> (NodeRef<marker::Mut<'a>, K, V, marker::Internal>, K, V, Root<K, V>) {
+    pub fn split<A: AllocRef>(
+        mut self,
+        alloc: &A,
+    ) -> (NodeRef<marker::Mut<'a>, K, V, marker::Internal>, K, V, Root<K, V>) {
         unsafe {
-            let mut new_node = Box::new(InternalNode::new());
+            let mut new_node = Box::new_in(InternalNode::new(), alloc);
             // Move edges out before reducing length:
             let new_len = self.split_new_node_len();
             ptr::copy_nonoverlapping(
@@ -1228,8 +1248,9 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
     /// child of the underlying node, returning an edge referencing that new child.
     ///
     /// Panics unless this edge `.can_merge()`.
-    pub fn merge(
+    pub fn merge<A: AllocRef>(
         mut self,
+        alloc: &A,
     ) -> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, marker::Edge> {
         let self1 = unsafe { ptr::read(&self) };
         let self2 = unsafe { ptr::read(&self) };
@@ -1280,9 +1301,9 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
 
                 left_node.correct_childrens_parent_links(left_len + 1..=left_len + 1 + right_len);
 
-                Global.dealloc(right_node.node.cast(), Layout::new::<InternalNode<K, V>>());
+                alloc.dealloc(right_node.node.cast(), Layout::new::<InternalNode<K, V>>());
             } else {
-                Global.dealloc(right_node.node.cast(), Layout::new::<LeafNode<K, V>>());
+                alloc.dealloc(right_node.node.cast(), Layout::new::<LeafNode<K, V>>());
             }
 
             Handle::new_edge(self.node, self.idx)
