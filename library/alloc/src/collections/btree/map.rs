@@ -538,8 +538,7 @@ impl<K: Ord, V, A: AllocRef> BTreeMap<K, V, A> {
     /// // entries can now be inserted into the empty map
     /// map.insert(1, "a");
     /// ```
-    // TODO: Add stability attribute
-    #[unstable(feature = "btreemap_alloc", issue = "none")] // TODO
+    #[unstable(feature = "btreemap_alloc", issue = "32838")]
     pub fn new_in(alloc: A) -> BTreeMap<K, V, A> {
         BTreeMap { root: None, length: 0, alloc: ManuallyDrop::new(alloc) }
     }

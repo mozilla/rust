@@ -159,7 +159,6 @@ pub struct Range<'a, T: 'a> {
 pub struct Difference<'a, T: 'a, A: AllocRef = Global> {
     inner: DifferenceInner<'a, T, A>,
 }
-#[derive(Debug)]
 enum DifferenceInner<'a, T: 'a, A: AllocRef> {
     Stitch {
         // iterate all of `self` and some of `other`, spotting matches along the way
@@ -174,9 +173,27 @@ enum DifferenceInner<'a, T: 'a, A: AllocRef> {
     Iterate(Iter<'a, T>), // simply produce all values in `self`
 }
 
+// Explicit Debug impl necessary because of issue #26925
+impl<T: Debug, A: AllocRef> Debug for DifferenceInner<'_, T, A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DifferenceInner::Stitch { self_iter, other_iter } => f
+                .debug_struct("Stitch")
+                .field("self_iter", self_iter)
+                .field("other_iter", other_iter)
+                .finish(),
+            DifferenceInner::Search { self_iter, other_set } => f
+                .debug_struct("Search")
+                .field("self_iter", self_iter)
+                .field("other_iter", other_set)
+                .finish(),
+            DifferenceInner::Iterate(x) => f.debug_tuple("Iterate").field(x).finish(),
+        }
+    }
+}
+
 #[stable(feature = "collection_debug", since = "1.17.0")]
-// TODO: remove Debug bound on A
-impl<T: Debug, A: AllocRef + Debug> Debug for Difference<'_, T, A> {
+impl<T: Debug, A: AllocRef> Debug for Difference<'_, T, A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("Difference").field(&self.inner).finish()
     }
@@ -208,7 +225,6 @@ impl<T: Debug> Debug for SymmetricDifference<'_, T> {
 pub struct Intersection<'a, T: 'a, A: AllocRef = Global> {
     inner: IntersectionInner<'a, T, A>,
 }
-#[derive(Debug)]
 enum IntersectionInner<'a, T: 'a, A: AllocRef> {
     Stitch {
         // iterate similarly sized sets jointly, spotting matches along the way
@@ -223,9 +239,25 @@ enum IntersectionInner<'a, T: 'a, A: AllocRef> {
     Answer(Option<&'a T>), // return a specific value or emptiness
 }
 
+// Explicit Debug impl necessary because of issue #26925
+impl<T: Debug, A: AllocRef> Debug for IntersectionInner<'_, T, A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            IntersectionInner::Stitch { a, b } => {
+                f.debug_struct("Stitch").field("a", a).field("b", b).finish()
+            }
+            IntersectionInner::Search { small_iter, large_set } => f
+                .debug_struct("Search")
+                .field("small_iter", small_iter)
+                .field("large_set", large_set)
+                .finish(),
+            IntersectionInner::Answer(x) => f.debug_tuple("Answer").field(x).finish(),
+        }
+    }
+}
+
 #[stable(feature = "collection_debug", since = "1.17.0")]
-// TODO: remove Debug bound on A
-impl<T: Debug, A: AllocRef + Debug> Debug for Intersection<'_, T, A> {
+impl<T: Debug, A: AllocRef> Debug for Intersection<'_, T, A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("Intersection").field(&self.inner).finish()
     }
@@ -260,7 +292,7 @@ impl<T: Ord> BTreeSet<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// # #![allow(unused_mut)]
     /// use std::collections::BTreeSet;
     ///
@@ -278,14 +310,14 @@ impl<T: Ord, A: AllocRef> BTreeSet<T, A> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// # #![allow(unused_mut)]
     /// use std::collections::BTreeSet;
     /// use std::alloc::Global;
     ///
     /// let mut set: BTreeSet<i32> = BTreeSet::new_in(Global);
     /// ```
-    #[unstable(feature = "btreemap_alloc", issue = "none")] // FIXME(exrook): btreemap_all
+    #[unstable(feature = "btreemap_alloc", issue = "32838")]
     pub fn new_in(alloc: A) -> BTreeSet<T, A> {
         BTreeSet { map: BTreeMap::new_in(alloc) }
     }
