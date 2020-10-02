@@ -518,8 +518,11 @@ impl<K: Ord, V, A: AllocRef + Clone> BTreeMap<K, V, A> {
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn clear(&mut self) {
-        // TODO: relax clone bound
-        *self = BTreeMap::new_in(ManuallyDrop::into_inner(self.alloc.clone()));
+        let alloc = unsafe {
+            // drop all elements and retrieve allocator
+            ptr::read(self).into_iter().into_alloc()
+        };
+        *self = BTreeMap::new_in(alloc);
     }
 }
 impl<K: Ord, V, A: AllocRef> BTreeMap<K, V, A> {
@@ -1517,6 +1520,11 @@ impl<K, V, A: AllocRef> IntoIterator for BTreeMap<K, V, A> {
 #[stable(feature = "btree_drop", since = "1.7.0")]
 impl<K, V, A: AllocRef> Drop for IntoIter<K, V, A> {
     fn drop(&mut self) {
+        self.dealloc()
+    }
+}
+impl<K, V, A: AllocRef> IntoIter<K, V, A> {
+    fn dealloc(&mut self) {
         struct DropGuard<'a, K, V, A: AllocRef>(&'a mut IntoIter<K, V, A>);
 
         impl<'a, K, V, A: AllocRef> Drop for DropGuard<'a, K, V, A> {
@@ -1551,6 +1559,11 @@ impl<K, V, A: AllocRef> Drop for IntoIter<K, V, A> {
                 }
             }
         }
+    }
+    fn into_alloc(mut self) -> A {
+        self.dealloc(); // Deallocate, then don't drop as drop will also call dealloc
+        let iter = ManuallyDrop::new(self);
+        unsafe { ptr::read(&iter.alloc) }
     }
 }
 
