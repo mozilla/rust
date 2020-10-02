@@ -61,7 +61,8 @@ use crate::alloc::{AllocRef, Global};
 /// }
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-pub struct BTreeSet<T, A: AllocRef = Global> {
+pub struct BTreeSet<T, #[unstable(feature = "allocator_api", issue = "32838")] A: AllocRef = Global>
+{
     map: BTreeMap<T, (), A>,
 }
 
@@ -133,7 +134,8 @@ impl<T: Debug> Debug for Iter<'_, T> {
 /// [`into_iter`]: BTreeSet#method.into_iter
 #[stable(feature = "rust1", since = "1.0.0")]
 #[derive(Debug)]
-pub struct IntoIter<T, A: AllocRef = Global> {
+pub struct IntoIter<T, #[unstable(feature = "allocator_api", issue = "32838")] A: AllocRef = Global>
+{
     iter: super::map::IntoIter<T, (), A>,
 }
 
@@ -156,7 +158,11 @@ pub struct Range<'a, T: 'a> {
 ///
 /// [`difference`]: BTreeSet::difference
 #[stable(feature = "rust1", since = "1.0.0")]
-pub struct Difference<'a, T: 'a, A: AllocRef = Global> {
+pub struct Difference<
+    'a,
+    T: 'a,
+    #[unstable(feature = "allocator_api", issue = "32838")] A: AllocRef = Global,
+> {
     inner: DifferenceInner<'a, T, A>,
 }
 enum DifferenceInner<'a, T: 'a, A: AllocRef> {
@@ -222,7 +228,11 @@ impl<T: Debug> Debug for SymmetricDifference<'_, T> {
 ///
 /// [`intersection`]: BTreeSet::intersection
 #[stable(feature = "rust1", since = "1.0.0")]
-pub struct Intersection<'a, T: 'a, A: AllocRef = Global> {
+pub struct Intersection<
+    'a,
+    T: 'a,
+    #[unstable(feature = "allocator_api", issue = "32838")] A: AllocRef = Global,
+> {
     inner: IntersectionInner<'a, T, A>,
 }
 enum IntersectionInner<'a, T: 'a, A: AllocRef> {
@@ -1109,8 +1119,12 @@ impl<'a, T, A: AllocRef> IntoIterator for &'a BTreeSet<T, A> {
 
 /// An iterator produced by calling `drain_filter` on BTreeSet.
 #[unstable(feature = "btree_drain_filter", issue = "70530")]
-pub struct DrainFilter<'a, T, F, A: AllocRef = Global>
-where
+pub struct DrainFilter<
+    'a,
+    T,
+    F,
+    #[unstable(feature = "allocator_api", issue = "32838")] A: AllocRef = Global,
+> where
     T: 'a,
     F: 'a + FnMut(&T) -> bool,
 {

@@ -130,7 +130,11 @@ pub(super) const MIN_LEN: usize = node::MIN_LEN_AFTER_SPLIT;
 /// *stat += random_stat_buff();
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-pub struct BTreeMap<K, V, A: AllocRef = Global> {
+pub struct BTreeMap<
+    K,
+    V,
+    #[unstable(feature = "allocator_api", issue = "32838")] A: AllocRef = Global,
+> {
     root: Option<node::Root<K, V>>,
     length: usize,
     pub(super) alloc: ManuallyDrop<A>,
@@ -312,7 +316,11 @@ pub struct IterMut<'a, K, V> {
 ///
 /// [`into_iter`]: IntoIterator::into_iter
 #[stable(feature = "rust1", since = "1.0.0")]
-pub struct IntoIter<K, V, A: AllocRef = Global> {
+pub struct IntoIter<
+    K,
+    V,
+    #[unstable(feature = "allocator_api", issue = "32838")] A: AllocRef = Global,
+> {
     front: Option<Handle<NodeRef<marker::Owned, K, V, marker::Leaf>, marker::Edge>>,
     back: Option<Handle<NodeRef<marker::Owned, K, V, marker::Leaf>, marker::Edge>>,
     length: usize,
@@ -418,7 +426,11 @@ impl<K: fmt::Debug, V, A: AllocRef> fmt::Debug for IntoKeys<K, V, A> {
 ///
 /// [`into_values`]: BTreeMap::into_values
 #[unstable(feature = "map_into_keys_values", issue = "75294")]
-pub struct IntoValues<K, V, A: AllocRef = Global> {
+pub struct IntoValues<
+    K,
+    V,
+    #[unstable(feature = "allocator_api", issue = "32838")] A: AllocRef = Global,
+> {
     inner: IntoIter<K, V, A>,
 }
 
@@ -1699,8 +1711,13 @@ impl<K, V> Clone for Values<'_, K, V> {
 
 /// An iterator produced by calling `drain_filter` on BTreeMap.
 #[unstable(feature = "btree_drain_filter", issue = "70530")]
-pub struct DrainFilter<'a, K, V, F, A: AllocRef = Global>
-where
+pub struct DrainFilter<
+    'a,
+    K,
+    V,
+    F,
+    #[unstable(feature = "allocator_api", issue = "32838")] A: AllocRef = Global,
+> where
     F: 'a + FnMut(&K, &mut V) -> bool,
 {
     pred: F,

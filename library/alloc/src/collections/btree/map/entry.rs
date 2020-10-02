@@ -16,7 +16,12 @@ use Entry::*;
 ///
 /// [`entry`]: BTreeMap::entry
 #[stable(feature = "rust1", since = "1.0.0")]
-pub enum Entry<'a, K, V, A: AllocRef = Global> {
+pub enum Entry<
+    'a,
+    K,
+    V,
+    #[unstable(feature = "allocator_api", issue = "32838")] A: AllocRef = Global,
+> {
     /// A vacant entry.
     #[stable(feature = "rust1", since = "1.0.0")]
     Vacant(#[stable(feature = "rust1", since = "1.0.0")] VacantEntry<'a, K, V, A>),
@@ -39,7 +44,12 @@ impl<K: Debug + Ord, V: Debug, A: AllocRef> Debug for Entry<'_, K, V, A> {
 /// A view into a vacant entry in a `BTreeMap`.
 /// It is part of the [`Entry`] enum.
 #[stable(feature = "rust1", since = "1.0.0")]
-pub struct VacantEntry<'a, K, V, A: AllocRef = Global> {
+pub struct VacantEntry<
+    'a,
+    K,
+    V,
+    #[unstable(feature = "allocator_api", issue = "32838")] A: AllocRef = Global,
+> {
     pub(super) key: K,
     pub(super) handle: Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>,
     pub(super) dormant_map: DormantMutRef<'a, BTreeMap<K, V, A>>,
@@ -60,7 +70,12 @@ impl<K: Debug + Ord, V, A: AllocRef> Debug for VacantEntry<'_, K, V, A> {
 /// A view into an occupied entry in a `BTreeMap`.
 /// It is part of the [`Entry`] enum.
 #[stable(feature = "rust1", since = "1.0.0")]
-pub struct OccupiedEntry<'a, K, V, A: AllocRef = Global> {
+pub struct OccupiedEntry<
+    'a,
+    K,
+    V,
+    #[unstable(feature = "allocator_api", issue = "32838")] A: AllocRef = Global,
+> {
     pub(super) handle: Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::KV>,
     pub(super) dormant_map: DormantMutRef<'a, BTreeMap<K, V, A>>,
 
