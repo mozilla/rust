@@ -1970,10 +1970,12 @@ dependencies = [
 [[package]]
 name = "measureme"
 version = "9.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22bf8d885d073610aee20e7fa205c4341ed32a761dbde96da5fd96301a8d3e82"
+source = "git+https://github.com/eddyb/measureme?branch=rdpmc-tweaks#42e97a6060700c4cf33c4ddca0725339e5d526fe"
 dependencies = [
+ "log",
+ "memmap",
  "parking_lot 0.11.0",
+ "perf-event-open-sys",
  "rustc-hash",
  "smallvec 1.4.2",
 ]
@@ -2426,6 +2428,15 @@ name = "percent-encoding"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4fd5641d01c8f18a23da7b6fe29298ff4b55afcccdf78973b24cf3175fee32e"
+
+[[package]]
+name = "perf-event-open-sys"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce9bedf5da2c234fdf2391ede2b90fabf585355f33100689bc364a3ea558561a"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "pest"

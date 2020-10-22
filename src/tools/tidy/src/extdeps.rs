@@ -4,7 +4,11 @@ use std::fs;
 use std::path::Path;
 
 /// List of allowed sources for packages.
-const ALLOWED_SOURCES: &[&str] = &["\"registry+https://github.com/rust-lang/crates.io-index\""];
+const ALLOWED_SOURCES: &[&str] = &[
+    "\"registry+https://github.com/rust-lang/crates.io-index\"",
+    // HACK(eddyb) temporarily using my fork until `rust-lang/measureme#174` is merged
+    "\"git+https://github.com/eddyb/measureme?branch=rdpmc-tweaks#42e97a6060700c4cf33c4ddca0725339e5d526fe\"",
+];
 
 /// Checks for external package sources. `root` is the path to the directory that contains the
 /// workspace `Cargo.toml`.

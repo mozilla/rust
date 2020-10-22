@@ -370,18 +370,39 @@ pub struct SelfProfiler {
     query_cache_hit_event_kind: StringId,
 }
 
+// HACK(eddyb) this is semantically `warn!` but uses `error!` because
+// that's the only log level enabled by default - see also
+// https://github.com/rust-lang/rust/issues/76824
+macro_rules! really_warn {
+    ($msg:literal $($rest:tt)*) => {
+        error!(concat!("[WARNING] ", $msg) $($rest)*)
+    }
+}
+
 impl SelfProfiler {
     pub fn new(
         output_directory: &Path,
         crate_name: Option<&str>,
-        event_filters: &Option<Vec<String>>,
+        event_filters: Option<&[String]>,
+        counter_name: &str,
     ) -> Result<SelfProfiler, Box<dyn Error + Send + Sync>> {
         fs::create_dir_all(output_directory)?;
 
         let crate_name = crate_name.unwrap_or("unknown-crate");
-        let filename = format!("{}-{}.rustc_profile", crate_name, process::id());
+        // HACK(eddyb) we need to pad the PID, strange as it may seem, as its
+        // length can behave as a source of entropy for heap addresses, when
+        // ASLR is disabled and the heap is otherwise determinic.
+        let pid = process::id();
+        if pid >= 1_000_000 {
+            really_warn!(
+                "pid {} has more than 6 digits, self-profiling results may be noisier than usual",
+                pid
+            );
+        }
+        let filename = format!("{}-{:06}.rustc_profile", crate_name, pid);
         let path = output_directory.join(&filename);
-        let profiler = Profiler::new(&path)?;
+        let profiler =
+            Profiler::with_counter(&path, measureme::counters::Counter::by_name(counter_name)?)?;
 
         let query_event_kind = profiler.alloc_string("Query");
         let generic_activity_event_kind = profiler.alloc_string("GenericActivity");
@@ -391,7 +412,7 @@ impl SelfProfiler {
 
         let mut event_filter_mask = EventFilter::empty();
 
-        if let Some(ref event_filters) = *event_filters {
+        if let Some(event_filters) = event_filters {
             let mut unknown_events = vec![];
             for item in event_filters {
                 if let Some(&(_, mask)) =
@@ -408,7 +429,7 @@ impl SelfProfiler {
                 unknown_events.sort();
                 unknown_events.dedup();
 
-                warn!(
+                really_warn!(
                     "Unknown self-profiler events specified: {}. Available options are: {}.",
                     unknown_events.join(", "),
                     EVENT_FILTERS_BY_NAME
