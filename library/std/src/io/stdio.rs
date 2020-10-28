@@ -7,7 +7,10 @@ use crate::io::prelude::*;
 
 use crate::cell::RefCell;
 use crate::fmt;
-use crate::io::{self, BufReader, Initializer, IoSlice, IoSliceMut, LineWriter};
+use crate::io::{
+    self, buffered::SwitchWriter, BufReader, BufferMode, Initializer, IoSlice, IoSliceMut,
+    LineWriter,
+};
 use crate::lazy::SyncOnceCell;
 use crate::sync::atomic::{AtomicBool, Ordering};
 use crate::sync::{Mutex, MutexGuard};
@@ -488,7 +491,7 @@ pub struct Stdout {
     // FIXME: this should be LineWriter or BufWriter depending on the state of
     //        stdout (tty or not). Note that if this is not line buffered it
     //        should also flush-on-panic or some form of flush-on-abort.
-    inner: &'static ReentrantMutex<RefCell<LineWriter<StdoutRaw>>>,
+    inner: &'static ReentrantMutex<RefCell<SwitchWriter<StdoutRaw>>>,
 }
 
 /// A locked reference to the `Stdout` handle.
@@ -502,7 +505,7 @@ pub struct Stdout {
 /// an error.
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct StdoutLock<'a> {
-    inner: ReentrantMutexGuard<'a, RefCell<LineWriter<StdoutRaw>>>,
+    inner: ReentrantMutexGuard<'a, RefCell<SwitchWriter<StdoutRaw>>>,
 }
 
 /// Constructs a new handle to the standard output of the current process.
@@ -546,24 +549,28 @@ pub struct StdoutLock<'a> {
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
 pub fn stdout() -> Stdout {
-    static INSTANCE: SyncOnceCell<ReentrantMutex<RefCell<LineWriter<StdoutRaw>>>> =
+    static INSTANCE: SyncOnceCell<ReentrantMutex<RefCell<SwitchWriter<StdoutRaw>>>> =
         SyncOnceCell::new();
     Stdout {
         inner: INSTANCE.get_or_init(|| unsafe {
             let _ = sys_common::at_exit(|| {
                 if let Some(instance) = INSTANCE.get() {
-                    // Flush the data and disable buffering during shutdown
-                    // by replacing the line writer by one with zero
-                    // buffering capacity.
+                    // Flush the data and disable buffering during shutdown.
+                    //
                     // We use try_lock() instead of lock(), because someone
                     // might have leaked a StdoutLock, which would
                     // otherwise cause a deadlock here.
                     if let Some(lock) = instance.try_lock() {
-                        *lock.borrow_mut() = LineWriter::with_capacity(0, stdout_raw());
+                        let writer = lock.borrow_mut();
+                        writer.set_mode(BufferMode::None);
+                        let _ = writer.flush();
                     }
                 }
             });
-            let r = ReentrantMutex::new(RefCell::new(LineWriter::new(stdout_raw())));
+            let r = ReentrantMutex::new(RefCell::new(SwitchWriter::new(
+                stdout_raw(),
+                BufferMode::Line,
+            )));
             r.init();
             r
         }),
@@ -656,6 +663,18 @@ impl Write for &Stdout {
     }
 }
 
+impl StdoutLock<'_> {
+    /// Get the current global stdout buffering mode
+    pub fn buffer_mode(&self) -> BufferMode {
+        self.inner.borrow().mode()
+    }
+
+    /// Set the current global stdout buffering mode
+    pub fn set_buffer_mode(&mut self, mode: BufferMode) {
+        self.inner.borrow_mut().set_mode(mode)
+    }
+}
+
 #[stable(feature = "rust1", since = "1.0.0")]
 impl Write for StdoutLock<'_> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
@@ -677,6 +696,8 @@ impl Write for StdoutLock<'_> {
     fn write_all_vectored(&mut self, bufs: &mut [IoSlice<'_>]) -> io::Result<()> {
         self.inner.borrow_mut().write_all_vectored(bufs)
     }
+    // Don't specialize write_fmt because we need to be sure we don't
+    // reentrantly call borrow_mut
 }
 
 #[stable(feature = "std_debug", since = "1.16.0")]

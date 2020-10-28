@@ -261,6 +261,8 @@ use crate::slice;
 use crate::str;
 use crate::sys;
 
+#[unstable(feature = "stdout_switchable_buffering", issue = "none")]
+pub use self::buffered::BufferMode;
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use self::buffered::IntoInnerError;
 #[stable(feature = "rust1", since = "1.0.0")]
