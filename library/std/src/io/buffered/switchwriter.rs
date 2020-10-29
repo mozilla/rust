@@ -1,6 +1,7 @@
-use crate::fmt::{self, Debug, Formatter};
-use crate::io::{buffered::LineWriterShim, BufWriter, Write};
+use crate::fmt::Arguments;
+use crate::io::{self, buffered::LineWriterShim, BufWriter, IoSlice, Write};
 /// Different buffering modes a writer can use
+#[unstable(feature = "stdout_switchable_buffering", issue = "none")]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum BufferMode {
     /// Unbuffered: forward writes directly to the underlying writer. In some
@@ -19,6 +20,7 @@ pub enum BufferMode {
 }
 
 /// Wraps a writer and provides a switchable buffering mode for its output
+#[unstable(feature = "stdout_switchable_buffering", issue = "none")]
 #[derive(Debug)]
 pub struct SwitchWriter<W: Write> {
     buffer: BufWriter<W>,
@@ -26,20 +28,21 @@ pub struct SwitchWriter<W: Write> {
 }
 
 impl<W: Write> SwitchWriter<W> {
-    pub fn with_capacity(capacity: usize, writer: W, mode: BufferMode) -> Self {
-        Self { buffer: BufWriter::with_capacity(capacity, writer), mode }
-    }
-
-    pub fn new(writer: W, mode: BufferMode) {
+    #[unstable(feature = "stdout_switchable_buffering", issue = "none")]
+    pub fn new(writer: W, mode: BufferMode) -> Self {
         Self { buffer: BufWriter::new(writer), mode }
     }
 
+    // Don't forget to add with_capacity if this type ever becomes public
+
+    #[unstable(feature = "stdout_switchable_buffering", issue = "none")]
     pub fn mode(&self) -> BufferMode {
         self.mode
     }
 
     /// Set the buffering mode. This will not attempt any io; it only changes
     /// the mode used for subsequent writes.
+    #[unstable(feature = "stdout_switchable_buffering", issue = "none")]
     pub fn set_mode(&mut self, mode: BufferMode) {
         self.mode = mode
     }
@@ -51,15 +54,15 @@ macro_rules! use_correct_writer {
         match $this.mode {
             BufferMode::None => {
                 $this.buffer.flush_buf()?;
-                let $writer = self.buffer.get_mut();
+                let $writer = $this.buffer.get_mut();
                 $usage
             }
             BufferMode::Block => {
-                let $writer = &mut self.buffer;
+                let $writer = &mut $this.buffer;
                 $usage
             }
             BufferMode::Line => {
-                let shim = LineWriterShim::new(&mut self.buffer);
+                let mut $writer = LineWriterShim::new(&mut $this.buffer);
                 $usage
             }
         }
@@ -75,7 +78,7 @@ impl<W: Write> Write for SwitchWriter<W> {
         self.buffer.flush()
     }
 
-    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> Result<usize> {
+    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
         use_correct_writer!(self, |writer| writer.write_vectored(bufs))
     }
 
@@ -83,15 +86,15 @@ impl<W: Write> Write for SwitchWriter<W> {
         self.buffer.is_write_vectored()
     }
 
-    fn write_all(&mut self, buf: &[u8]) -> Result<()> {
+    fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
         use_correct_writer!(self, |writer| writer.write_all(buf))
     }
 
-    fn write_all_vectored(&mut self, bufs: &mut [IoSlice<'_>]) -> Result<()> {
+    fn write_all_vectored(&mut self, bufs: &mut [IoSlice<'_>]) -> io::Result<()> {
         use_correct_writer!(self, |writer| writer.write_all_vectored(bufs))
     }
 
-    fn write_fmt(&mut self, fmt: Arguments<'_>) -> Result<()> {
+    fn write_fmt(&mut self, fmt: Arguments<'_>) -> io::Result<()> {
         match self.mode {
             BufferMode::None => {
                 // write_fmt is usually going to be very numerous tiny writes
@@ -104,7 +107,7 @@ impl<W: Write> Write for SwitchWriter<W> {
             }
             BufferMode::Block => self.buffer.write_fmt(fmt),
             BufferMode::Line => {
-                let shim = LineWriterShim::new(&mut self.buffer);
+                let mut shim = LineWriterShim::new(&mut self.buffer);
                 shim.write_fmt(fmt)
             }
         }

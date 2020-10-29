@@ -9,7 +9,6 @@ use crate::cell::RefCell;
 use crate::fmt;
 use crate::io::{
     self, buffered::SwitchWriter, BufReader, BufferMode, Initializer, IoSlice, IoSliceMut,
-    LineWriter,
 };
 use crate::lazy::SyncOnceCell;
 use crate::sync::atomic::{AtomicBool, Ordering};
@@ -561,12 +560,17 @@ pub fn stdout() -> Stdout {
                     // might have leaked a StdoutLock, which would
                     // otherwise cause a deadlock here.
                     if let Some(lock) = instance.try_lock() {
-                        let writer = lock.borrow_mut();
+                        let mut writer = lock.borrow_mut();
                         writer.set_mode(BufferMode::None);
                         let _ = writer.flush();
                     }
                 }
             });
+            // TODO: In the future, when we pick a default buffering mode based
+            // on the startup environment (ie, isatty), we can also pick a
+            // default buffer size. Right now stdlib we use 8KB for BufWriter
+            // and 1KB for LineWriter; these seem like reasonable standards
+            // to follow.
             let r = ReentrantMutex::new(RefCell::new(SwitchWriter::new(
                 stdout_raw(),
                 BufferMode::Line,
@@ -665,11 +669,13 @@ impl Write for &Stdout {
 
 impl StdoutLock<'_> {
     /// Get the current global stdout buffering mode
+    #[unstable(feature = "stdout_switchable_buffering", issue = "none")]
     pub fn buffer_mode(&self) -> BufferMode {
         self.inner.borrow().mode()
     }
 
     /// Set the current global stdout buffering mode
+    #[unstable(feature = "stdout_switchable_buffering", issue = "none")]
     pub fn set_buffer_mode(&mut self, mode: BufferMode) {
         self.inner.borrow_mut().set_mode(mode)
     }

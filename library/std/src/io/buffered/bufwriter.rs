@@ -291,11 +291,14 @@ impl<W: Write> BufWriter<W> {
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<W: Write> Write for BufWriter<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        // We assume that callers of `write` prefer to avoid split writes where
+        // possible, so we pre-flush the buffer rather than doing a partial
+        // write to fill it.
         if self.buf.len() + buf.len() > self.buf.capacity() {
             self.flush_buf()?;
         }
         if buf.len() >= self.buf.capacity() {
-            self.get_mut().write(buf);
+            self.get_mut().write(buf)
         } else {
             self.buf.extend_from_slice(buf);
             Ok(buf.len())
@@ -380,7 +383,7 @@ impl<W: Write> Write for BufWriter<W> {
     }
 
     fn is_write_vectored(&self) -> bool {
-        self.is_write_vectored()
+        self.get_ref().is_write_vectored()
     }
 
     fn flush(&mut self) -> io::Result<()> {
