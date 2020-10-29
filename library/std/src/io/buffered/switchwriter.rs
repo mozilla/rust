@@ -1,7 +1,7 @@
 use crate::fmt::Arguments;
 use crate::io::{self, buffered::LineWriterShim, BufWriter, IoSlice, Write};
 /// Different buffering modes a writer can use
-#[unstable(feature = "stdout_switchable_buffering", issue = "none")]
+#[unstable(feature = "stdout_switchable_buffering", issue = "78515")]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum BufferMode {
     /// Unbuffered: forward writes directly to the underlying writer. In some
@@ -20,7 +20,7 @@ pub enum BufferMode {
 }
 
 /// Wraps a writer and provides a switchable buffering mode for its output
-#[unstable(feature = "stdout_switchable_buffering", issue = "none")]
+#[unstable(feature = "stdout_switchable_buffering", issue = "78515")]
 #[derive(Debug)]
 pub struct SwitchWriter<W: Write> {
     buffer: BufWriter<W>,
@@ -28,21 +28,21 @@ pub struct SwitchWriter<W: Write> {
 }
 
 impl<W: Write> SwitchWriter<W> {
-    #[unstable(feature = "stdout_switchable_buffering", issue = "none")]
+    #[unstable(feature = "stdout_switchable_buffering", issue = "78515")]
     pub fn new(writer: W, mode: BufferMode) -> Self {
         Self { buffer: BufWriter::new(writer), mode }
     }
 
     // Don't forget to add with_capacity if this type ever becomes public
 
-    #[unstable(feature = "stdout_switchable_buffering", issue = "none")]
+    #[unstable(feature = "stdout_switchable_buffering", issue = "78515")]
     pub fn mode(&self) -> BufferMode {
         self.mode
     }
 
     /// Set the buffering mode. This will not attempt any io; it only changes
     /// the mode used for subsequent writes.
-    #[unstable(feature = "stdout_switchable_buffering", issue = "none")]
+    #[unstable(feature = "stdout_switchable_buffering", issue = "78515")]
     pub fn set_mode(&mut self, mode: BufferMode) {
         self.mode = mode
     }
@@ -98,7 +98,7 @@ impl<W: Write> Write for SwitchWriter<W> {
         match self.mode {
             BufferMode::None => {
                 // write_fmt is usually going to be very numerous tiny writes
-                // from the constituent writers, so even though we're in
+                // from the constituent fmt calls, so even though we're in
                 // unbuffered mode we still collect it to the buffer so that
                 // we can flush it in a single write.
                 self.buffer.flush_buf()?;

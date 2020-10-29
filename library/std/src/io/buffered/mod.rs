@@ -18,7 +18,7 @@ pub use bufwriter::BufWriter;
 pub use linewriter::LineWriter;
 use linewritershim::LineWriterShim;
 
-#[unstable(feature = "stdout_switchable_buffering", issue = "none")]
+#[unstable(feature = "stdout_switchable_buffering", issue = "78515")]
 pub use switchwriter::{BufferMode, SwitchWriter};
 
 /// An error returned by [`BufWriter::into_inner`] which combines an error that

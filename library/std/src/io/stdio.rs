@@ -566,7 +566,7 @@ pub fn stdout() -> Stdout {
                     }
                 }
             });
-            // TODO: In the future, when we pick a default buffering mode based
+            // FIXME: In the future, when we pick a default buffering mode based
             // on the startup environment (ie, isatty), we can also pick a
             // default buffer size. Right now stdlib we use 8KB for BufWriter
             // and 1KB for LineWriter; these seem like reasonable standards
@@ -669,13 +669,13 @@ impl Write for &Stdout {
 
 impl StdoutLock<'_> {
     /// Get the current global stdout buffering mode
-    #[unstable(feature = "stdout_switchable_buffering", issue = "none")]
+    #[unstable(feature = "stdout_switchable_buffering", issue = "78515")]
     pub fn buffer_mode(&self) -> BufferMode {
         self.inner.borrow().mode()
     }
 
     /// Set the current global stdout buffering mode
-    #[unstable(feature = "stdout_switchable_buffering", issue = "none")]
+    #[unstable(feature = "stdout_switchable_buffering", issue = "78515")]
     pub fn set_buffer_mode(&mut self, mode: BufferMode) {
         self.inner.borrow_mut().set_mode(mode)
     }
