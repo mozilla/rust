@@ -3,12 +3,14 @@ use crate::io::{self, buffered::LineWriterShim, BufWriter, IoSlice, Write};
 /// Different buffering modes a writer can use
 #[unstable(feature = "stdout_switchable_buffering", issue = "78515")]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BufferMode {
-    /// Unbuffered: forward writes directly to the underlying writer. In some
-    /// cases, a writer may buffer temporarily (for instance, when processing
-    /// a formatted write), but even in this case it will always immediately
-    /// flush.
-    None,
+    /// Immediate: forward writes directly to the underlying writer. In some
+    /// cases, a writer may buffer temporarily to reduce the number of
+    /// underlying writes (for instance, when processing a formatted write),
+    /// but even in this case the formatted buffer will always be forwarded
+    /// immediately.
+    Immediate,
 
     /// Block buffering: buffer writes until the buffer is full, then forward
     /// to the underlying writer
@@ -52,7 +54,7 @@ impl<W: Write> SwitchWriter<W> {
 macro_rules! use_correct_writer {
     ($this:ident, |$writer:ident| $usage:expr) => {
         match $this.mode {
-            BufferMode::None => {
+            BufferMode::Immediate => {
                 $this.buffer.flush_buf()?;
                 let $writer = $this.buffer.get_mut();
                 $usage
@@ -96,7 +98,7 @@ impl<W: Write> Write for SwitchWriter<W> {
 
     fn write_fmt(&mut self, fmt: Arguments<'_>) -> io::Result<()> {
         match self.mode {
-            BufferMode::None => {
+            BufferMode::Immediate => {
                 // write_fmt is usually going to be very numerous tiny writes
                 // from the constituent fmt calls, so even though we're in
                 // unbuffered mode we still collect it to the buffer so that

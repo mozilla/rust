@@ -561,7 +561,7 @@ pub fn stdout() -> Stdout {
                     // otherwise cause a deadlock here.
                     if let Some(lock) = instance.try_lock() {
                         let mut writer = lock.borrow_mut();
-                        writer.set_mode(BufferMode::None);
+                        writer.set_mode(BufferMode::Immediate);
                         let _ = writer.flush();
                     }
                 }
