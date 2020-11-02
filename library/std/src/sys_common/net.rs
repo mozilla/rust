@@ -593,7 +593,7 @@ impl UdpSocket {
 
     pub fn join_multicast_v6(&self, multiaddr: &Ipv6Addr, interface: u32) -> io::Result<()> {
         let mreq = c::ipv6_mreq {
-            ipv6mr_multiaddr: *multiaddr.as_inner(),
+            ipv6mr_multiaddr: multiaddr.into_inner(),
             ipv6mr_interface: to_ipv6mr_interface(interface),
         };
         setsockopt(&self.inner, c::IPPROTO_IPV6, IPV6_ADD_MEMBERSHIP, mreq)
@@ -609,7 +609,7 @@ impl UdpSocket {
 
     pub fn leave_multicast_v6(&self, multiaddr: &Ipv6Addr, interface: u32) -> io::Result<()> {
         let mreq = c::ipv6_mreq {
-            ipv6mr_multiaddr: *multiaddr.as_inner(),
+            ipv6mr_multiaddr: multiaddr.into_inner(),
             ipv6mr_interface: to_ipv6mr_interface(interface),
         };
         setsockopt(&self.inner, c::IPPROTO_IPV6, IPV6_DROP_MEMBERSHIP, mreq)
