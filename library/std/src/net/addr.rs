@@ -285,7 +285,8 @@ impl SocketAddrV4 {
     /// assert_eq!(socket.ip(), &Ipv4Addr::new(127, 0, 0, 1));
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn ip(&self) -> &Ipv4Addr {
+    #[rustc_const_unstable(feature = "const_socketaddr", issue = "none")]
+    pub const fn ip(&self) -> &Ipv4Addr {
         &self.ip
     }
 
@@ -316,7 +317,8 @@ impl SocketAddrV4 {
     /// assert_eq!(socket.port(), 8080);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn port(&self) -> u16 {
+    #[rustc_const_unstable(feature = "const_socketaddr", issue = "none")]
+    pub const fn port(&self) -> u16 {
         self.port
     }
 
@@ -371,7 +373,8 @@ impl SocketAddrV6 {
     /// assert_eq!(socket.ip(), &Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1));
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn ip(&self) -> &Ipv6Addr {
+    #[rustc_const_unstable(feature = "const_socketaddr", issue = "none")]
+    pub const fn ip(&self) -> &Ipv6Addr {
         &self.ip
     }
 
@@ -402,7 +405,8 @@ impl SocketAddrV6 {
     /// assert_eq!(socket.port(), 8080);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn port(&self) -> u16 {
+    #[rustc_const_unstable(feature = "const_socketaddr", issue = "none")]
+    pub const fn port(&self) -> u16 {
         self.port
     }
 
@@ -443,7 +447,8 @@ impl SocketAddrV6 {
     /// assert_eq!(socket.flowinfo(), 10);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn flowinfo(&self) -> u32 {
+    #[rustc_const_unstable(feature = "const_socketaddr", issue = "none")]
+    pub const fn flowinfo(&self) -> u32 {
         self.flowinfo
     }
 
@@ -481,7 +486,8 @@ impl SocketAddrV6 {
     /// assert_eq!(socket.scope_id(), 78);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn scope_id(&self) -> u32 {
+    #[rustc_const_unstable(feature = "const_socketaddr", issue = "none")]
+    pub const fn scope_id(&self) -> u32 {
         self.scope_id
     }
 
