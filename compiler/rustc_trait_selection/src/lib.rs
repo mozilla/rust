@@ -12,6 +12,7 @@
 
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/nightly-rustc/")]
 #![feature(array_value_iter)]
+#![feature(asm)]
 #![feature(bool_to_option)]
 #![feature(box_patterns)]
 #![feature(drain_filter)]
