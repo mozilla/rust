@@ -417,6 +417,7 @@ impl fmt::Display for Location<'_> {
 )]
 #[doc(hidden)]
 #[derive(Debug, Copy, Clone)]
+#[non_exhaustive]
 pub enum ExtraInfo<'a> {
     AssertInfo(&'a assert_info::AssertInfo<'a>),
 }
