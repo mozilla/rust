@@ -10,9 +10,11 @@ use rustc_ast::{self as ast, NodeId};
 use rustc_ast_lowering::ResolverAstLowering;
 use rustc_ast_pretty::pprust;
 use rustc_attr::StabilityLevel;
-use rustc_data_structures::fx::FxHashSet;
+use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_errors::struct_span_err;
-use rustc_expand::base::{Indeterminate, InvocationRes, ResolverExpand, SyntaxExtension};
+use rustc_expand::base::{
+    Indeterminate, InvocationRes, ResolverExpand, SyntaxExtension, SyntaxExtensionKind,
+};
 use rustc_expand::compile_declarative_macro;
 use rustc_expand::expand::{AstFragment, AstFragmentKind, Invocation, InvocationKind};
 use rustc_feature::is_builtin_attr_name;
@@ -250,6 +252,7 @@ impl<'a> ResolverExpand for Resolver<'a> {
                 // FIXME: Try to avoid repeated resolutions for derives here and in expansion.
                 let mut exts = Vec::new();
                 let mut helper_attrs = Vec::new();
+                let mut helper_attrs_map = FxHashMap::default();
                 for path in derives {
                     exts.push(
                         match self.resolve_macro_path(
@@ -260,6 +263,13 @@ impl<'a> ResolverExpand for Resolver<'a> {
                             force,
                         ) {
                             Ok((Some(ext), _)) => {
+
+                                let krate = if let SyntaxExtensionKind::Derive(ext_inner) = &ext.kind {
+                                    ext_inner.krate()
+                                } else {
+                                    None
+                                };
+
                                 let span = path
                                     .segments
                                     .last()
@@ -267,6 +277,16 @@ impl<'a> ResolverExpand for Resolver<'a> {
                                     .ident
                                     .span
                                     .normalize_to_macros_2_0();
+                                for attr_name in &ext.helper_attrs {
+                                    if let Some((old_derive, old_crate)) = helper_attrs_map.insert(attr_name.clone(), (path, krate)) {
+                                        if old_crate != krate {
+                                            self.session.span_err(
+                                                span,
+                                                &format!("Overlapping helper attribute {} (defined on {} and {})", attr_name, fast_print_path(old_derive), fast_print_path(path))
+                                            );
+                                        }
+                                    }
+                                }
                                 helper_attrs.extend(
                                     ext.helper_attrs.iter().map(|name| Ident::new(*name, span)),
                                 );
