@@ -374,3 +374,11 @@ fn cell_allows_array_cycle() {
     b3.a[0].set(Some(&b1));
     b3.a[1].set(Some(&b2));
 }
+
+#[test]
+fn array_collects() {
+    let v = vec![1, 2, 3, 4, 5];
+    let a: [i32; 5] = v.clone().into_iter().collect::<Result<[i32; 5], _>>().unwrap();
+
+    assert_eq!(v[..], a[..]);
+}

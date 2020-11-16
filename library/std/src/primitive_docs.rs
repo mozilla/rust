@@ -494,6 +494,7 @@ mod prim_pointer {}
 /// - [`Copy`]
 /// - [`Clone`]
 /// - [`Debug`]
+/// - [`iter::FromIterator`]
 /// - [`IntoIterator`] (implemented for `&[T; N]` and `&mut [T; N]`)
 /// - [`PartialEq`], [`PartialOrd`], [`Eq`], [`Ord`]
 /// - [`Hash`]
