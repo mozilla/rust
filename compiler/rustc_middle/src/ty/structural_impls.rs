@@ -181,6 +181,7 @@ impl fmt::Debug for ty::PredicateKind<'tcx> {
                 a.fmt(f)
             }
             ty::PredicateKind::Subtype(ref pair) => pair.fmt(f),
+            ty::PredicateKind::Coerce(ref pair) => pair.fmt(f),
             ty::PredicateKind::RegionOutlives(ref pair) => pair.fmt(f),
             ty::PredicateKind::TypeOutlives(ref pair) => pair.fmt(f),
             ty::PredicateKind::Projection(ref pair) => pair.fmt(f),
@@ -381,6 +382,13 @@ impl<'a, 'tcx> Lift<'tcx> for ty::SubtypePredicate<'a> {
     }
 }
 
+impl<'a, 'tcx> Lift<'tcx> for ty::CoercePredicate<'a> {
+    type Lifted = ty::CoercePredicate<'tcx>;
+    fn lift_to_tcx(self, tcx: TyCtxt<'tcx>) -> Option<ty::CoercePredicate<'tcx>> {
+        tcx.lift((self.a, self.b)).map(|(a, b)| ty::CoercePredicate { a, b })
+    }
+}
+
 impl<'tcx, A: Copy + Lift<'tcx>, B: Copy + Lift<'tcx>> Lift<'tcx> for ty::OutlivesPredicate<A, B> {
     type Lifted = ty::OutlivesPredicate<A::Lifted, B::Lifted>;
     fn lift_to_tcx(self, tcx: TyCtxt<'tcx>) -> Option<Self::Lifted> {
@@ -423,6 +431,7 @@ impl<'a, 'tcx> Lift<'tcx> for ty::PredicateKind<'a> {
                 tcx.lift(data).map(|data| ty::PredicateKind::Trait(data, constness))
             }
             ty::PredicateKind::Subtype(data) => tcx.lift(data).map(ty::PredicateKind::Subtype),
+            ty::PredicateKind::Coerce(data) => tcx.lift(data).map(ty::PredicateKind::Coerce),
             ty::PredicateKind::RegionOutlives(data) => {
                 tcx.lift(data).map(ty::PredicateKind::RegionOutlives)
             }
