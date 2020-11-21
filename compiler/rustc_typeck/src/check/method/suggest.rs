@@ -10,6 +10,7 @@ use rustc_hir::def_id::{DefId, CRATE_DEF_INDEX};
 use rustc_hir::intravisit;
 use rustc_hir::lang_items::LangItem;
 use rustc_hir::{ExprKind, Node, QPath};
+use rustc_index::vec::Idx;
 use rustc_infer::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use rustc_middle::ty::fast_reject::simplify_type;
 use rustc_middle::ty::print::with_crate_prefix;
@@ -746,7 +747,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                 let projection_ty = pred.skip_binder().projection_ty;
 
                                 let substs_with_infer_self = tcx.mk_substs(
-                                    iter::once(tcx.mk_ty_var(ty::TyVid { index: 0 }).into())
+                                    iter::once(tcx.mk_ty_var(ty::TyVid::new(0)).into())
                                         .chain(projection_ty.substs.iter().skip(1)),
                                 );
 

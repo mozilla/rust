@@ -1068,7 +1068,11 @@ impl<'tcx, T> Binder<'tcx, T> {
     where
         T: TypeFoldable<'tcx>,
     {
-        if self.0.has_escaping_bound_vars() { None } else { Some(self.skip_binder()) }
+        if self.0.has_escaping_bound_vars() {
+            None
+        } else {
+            Some(self.skip_binder())
+        }
     }
 
     /// Splits the contents into two things that share the same binder
@@ -1410,6 +1414,18 @@ pub struct EarlyBoundRegion {
     pub name: Symbol,
 }
 
+rustc_index::newtype_index! {
+    pub struct TyVid {
+        DEBUG_FORMAT = custom,
+    }
+}
+
+impl fmt::Debug for TyVid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "_#{}t", u32::from(*self))
+    }
+}
+
 /// A **`const`** **v**ariable **ID**.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, TyEncodable, TyDecodable)]
 pub struct ConstVid<'tcx> {
@@ -1676,7 +1692,11 @@ impl<'tcx> TyS<'tcx> {
 
     #[inline]
     pub fn is_phantom_data(&self) -> bool {
-        if let Adt(def, _) = self.kind() { def.is_phantom_data() } else { false }
+        if let Adt(def, _) = self.kind() {
+            def.is_phantom_data()
+        } else {
+            false
+        }
     }
 
     #[inline]
