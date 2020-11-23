@@ -1,7 +1,7 @@
 use super::callee::DeferredCallResolution;
 use super::MaybeInProgressTables;
 
-use rustc_data_structures::fx::FxHashMap;
+use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::vec_map::VecMap;
 use rustc_hir as hir;
 use rustc_hir::def_id::{DefIdMap, LocalDefId};
@@ -69,6 +69,11 @@ pub struct Inherited<'a, 'tcx> {
     pub(super) opaque_types_vars: RefCell<FxHashMap<Ty<'tcx>, Ty<'tcx>>>,
 
     pub(super) body_id: Option<hir::BodyId>,
+
+    /// Whenever we introduce an adjustment from `!` into a type variable,
+    /// we record that type variable here. This is later used to inform
+    /// fallback. See the `fallback` module for details.
+    pub(super) diverging_type_vars: RefCell<FxHashSet<Ty<'tcx>>>,
 }
 
 impl<'a, 'tcx> Deref for Inherited<'a, 'tcx> {
@@ -126,6 +131,7 @@ impl Inherited<'a, 'tcx> {
             deferred_generator_interiors: RefCell::new(Vec::new()),
             opaque_types: RefCell::new(Default::default()),
             opaque_types_vars: RefCell::new(Default::default()),
+            diverging_type_vars: RefCell::new(Default::default()),
             body_id,
         }
     }
