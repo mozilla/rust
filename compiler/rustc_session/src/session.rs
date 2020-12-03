@@ -1339,7 +1339,8 @@ pub fn build_session(
         let profiler = SelfProfiler::new(
             directory,
             sopts.crate_name.as_ref().map(|s| &s[..]),
-            &sopts.debugging_opts.self_profile_events,
+            sopts.debugging_opts.self_profile_events.as_ref().map(|xs| &xs[..]),
+            &sopts.debugging_opts.self_profile_counter,
         );
         match profiler {
             Ok(profiler) => Some(Arc::new(profiler)),

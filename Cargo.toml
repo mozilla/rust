@@ -107,5 +107,8 @@ rustc-std-workspace-std = { path = 'library/rustc-std-workspace-std' }
 # source code for this crate.
 backtrace = { path = "library/backtrace" }
 
+# HACK(eddyb) temporarily using my fork until `rust-lang/measureme#174` is merged
+measureme = { git = "https://github.com/eddyb/measureme", branch = "rdpmc-tweaks", rev = "4068b2bbdc33ea02f034725a493a15fb8af721e9" }
+
 [patch."https://github.com/rust-lang/rust-clippy"]
 clippy_lints = { path = "src/tools/clippy/clippy_lints" }
