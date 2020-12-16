@@ -51,7 +51,7 @@ use rustc_data_structures::sync::{Lock, Lrc};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::cmp::{self, Ordering};
-use std::fmt;
+use std::fmt::{self, Display};
 use std::hash::Hash;
 use std::ops::{Add, Range, Sub};
 use std::path::{Path, PathBuf};
@@ -1034,6 +1034,16 @@ pub enum SourceFileHashAlgorithm {
     Md5,
     Sha1,
     Sha256,
+}
+
+impl Display for SourceFileHashAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SourceFileHashAlgorithm::Md5 => write!(f, "md5"),
+            SourceFileHashAlgorithm::Sha1 => write!(f, "sha1"),
+            SourceFileHashAlgorithm::Sha256 => write!(f, "sha256"),
+        }
+    }
 }
 
 impl FromStr for SourceFileHashAlgorithm {

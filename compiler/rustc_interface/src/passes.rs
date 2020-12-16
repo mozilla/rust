@@ -7,6 +7,7 @@ use rustc_ast::{self as ast, visit};
 use rustc_codegen_ssa::back::link::emit_metadata;
 use rustc_codegen_ssa::traits::CodegenBackend;
 use rustc_data_structures::steal::Steal;
+use rustc_data_structures::svh::Svh;
 use rustc_data_structures::sync::{par_iter, Lrc, OnceCell, ParallelIterator, WorkerLocal};
 use rustc_data_structures::temp_dir::MaybeTempDir;
 use rustc_data_structures::{box_region_allow_access, declare_box_region_type, parallel};
@@ -33,7 +34,7 @@ use rustc_session::output::{filename_for_input, filename_for_metadata};
 use rustc_session::search_paths::PathKind;
 use rustc_session::Session;
 use rustc_span::symbol::Symbol;
-use rustc_span::{FileName, RealFileName};
+use rustc_span::{FileName, RealFileName, SourceFile};
 use rustc_trait_selection::traits;
 use rustc_typeck as typeck;
 use tracing::{info, warn};
@@ -526,6 +527,11 @@ fn escape_dep_env(symbol: Symbol) -> String {
     escaped
 }
 
+enum FileHash {
+    SourceFile(Lrc<SourceFile>),
+    BinaryHash(u64, String),
+}
+
 fn write_out_deps(
     sess: &Session,
     boxed_resolver: &Steal<Rc<RefCell<BoxedResolver>>>,
@@ -541,34 +547,42 @@ fn write_out_deps(
     let result = (|| -> io::Result<()> {
         // Build a list of files used to compile the output and
         // write Makefile-compatible dependency rules
-        let mut files: Vec<String> = sess
-            .source_map()
-            .files()
+        let source_files = sess.source_map().files();
+        let mut files: Vec<(String, Option<FileHash>)> = source_files
             .iter()
             .filter(|fmap| fmap.is_real_file())
             .filter(|fmap| !fmap.is_imported())
-            .map(|fmap| escape_dep_filename(&fmap.unmapped_path.as_ref().unwrap_or(&fmap.name)))
+            .map(|fmap| {
+                (
+                    escape_dep_filename(&fmap.unmapped_path.as_ref().unwrap_or(&fmap.name)),
+                    Some(FileHash::SourceFile(fmap.clone())),
+                )
+            })
             .collect();
 
         if let Some(ref backend) = sess.opts.debugging_opts.codegen_backend {
-            files.push(backend.to_string());
+            files.push((backend.to_string(), None)); // TO DO: is this something we need to hash?
         }
 
         if sess.binary_dep_depinfo() {
             boxed_resolver.borrow().borrow_mut().access(|resolver| {
                 for cnum in resolver.cstore().crates_untracked() {
                     let source = resolver.cstore().crate_source_untracked(cnum);
+                    let svh = resolver.cstore().crate_hash_untracked(cnum);
                     if let Some((path, _)) = source.dylib {
+                        let hash = hash_bin(&path, &svh).ok();
                         let file_name = FileName::Real(RealFileName::Named(path));
-                        files.push(escape_dep_filename(&file_name));
+                        files.push((escape_dep_filename(&file_name), hash));
                     }
                     if let Some((path, _)) = source.rlib {
+                        let hash = hash_bin(&path, &svh).ok();
                         let file_name = FileName::Real(RealFileName::Named(path));
-                        files.push(escape_dep_filename(&file_name));
+                        files.push((escape_dep_filename(&file_name), hash));
                     }
                     if let Some((path, _)) = source.rmeta {
+                        let hash = hash_bin(&path, &svh).ok();
                         let file_name = FileName::Real(RealFileName::Named(path));
-                        files.push(escape_dep_filename(&file_name));
+                        files.push((escape_dep_filename(&file_name), hash));
                     }
                 }
             });
@@ -576,14 +590,36 @@ fn write_out_deps(
 
         let mut file = BufWriter::new(fs::File::create(&deps_filename)?);
         for path in out_filenames {
-            writeln!(file, "{}: {}\n", path.display(), files.join(" "))?;
+            let line: Vec<&str> = files.iter().map(|(f, _)| f.as_ref()).collect();
+            writeln!(file, "{}: {}\n", path.display(), line.join(" "))?;
         }
 
         // Emit a fake target for each input file to the compilation. This
         // prevents `make` from spitting out an error if a file is later
         // deleted. For more info see #28735
-        for path in files {
+        for (path, file_hash) in files {
             writeln!(file, "{}:", path)?;
+
+            match file_hash {
+                Some(FileHash::SourceFile(src_file)) => {
+                    let bytes = src_file.src_hash.hash_bytes();
+                    let mut hash_as_hex = String::with_capacity(bytes.len() * 2);
+                    for byte in bytes {
+                        hash_as_hex.push_str(&format!("{:x}", byte));
+                    }
+                    writeln!(
+                        file,
+                        "# size:{} {}:{}",
+                        src_file.byte_length(),
+                        src_file.src_hash.kind.to_string(),
+                        hash_as_hex
+                    )?;
+                }
+                Some(FileHash::BinaryHash(size, svh)) => {
+                    writeln!(file, "# size:{} svh:{}", size, svh)?;
+                }
+                None => {}
+            }
         }
 
         // Emit special comments with information about accessed environment variables.
@@ -621,6 +657,12 @@ fn write_out_deps(
             e
         )),
     }
+}
+
+fn hash_bin(path: &PathBuf, svh: &Svh) -> io::Result<FileHash> {
+    let size = fs::metadata(path)?.len();
+    let svh_str = format!("{}", svh);
+    Ok(FileHash::BinaryHash(size, svh_str))
 }
 
 pub fn prepare_outputs(
@@ -964,7 +1006,16 @@ fn encode_and_write_metadata(
             .tempdir_in(out_filename.parent().unwrap())
             .unwrap_or_else(|err| tcx.sess.fatal(&format!("couldn't create a temp dir: {}", err)));
         let metadata_tmpdir = MaybeTempDir::new(metadata_tmpdir, tcx.sess.opts.cg.save_temps);
-        let metadata_filename = emit_metadata(tcx.sess, &metadata, &metadata_tmpdir);
+
+        let crate_name = &tcx.crate_name(LOCAL_CRATE).as_str();
+
+        let metadata_filename = emit_metadata(
+            tcx.sess,
+            &metadata,
+            &metadata_tmpdir,
+            &crate_name,
+            &tcx.crate_hash(LOCAL_CRATE),
+        );
         if let Err(e) = fs::rename(&metadata_filename, &out_filename) {
             tcx.sess.fatal(&format!("failed to write {}: {}", out_filename.display(), e));
         }

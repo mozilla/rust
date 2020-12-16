@@ -5,7 +5,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use rustc_codegen_ssa::back::archive::{find_library, ArchiveBuilder};
-use rustc_codegen_ssa::METADATA_FILENAME;
+use rustc_codegen_ssa::{METADATA_FILE_EXTENSION, METADATA_FILE_PREFIX};
 use rustc_session::Session;
 
 use object::{Object, ObjectSymbol, SymbolKind};
@@ -116,7 +116,7 @@ impl<'a> ArchiveBuilder<'a> for ArArchiveBuilder<'a> {
 
         self.add_archive(rlib.to_owned(), move |fname: &str| {
             // Ignore metadata files, no matter the name.
-            if fname == METADATA_FILENAME {
+            if fname.starts_with(METADATA_FILE_PREFIX) && fname.ends_with(METADATA_FILE_EXTENSION) {
                 return true;
             }
 

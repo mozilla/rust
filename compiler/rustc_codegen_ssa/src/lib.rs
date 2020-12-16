@@ -22,6 +22,7 @@ extern crate tracing;
 extern crate rustc_middle;
 
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_data_structures::svh::Svh;
 use rustc_data_structures::sync::Lrc;
 use rustc_hir::def_id::CrateNum;
 use rustc_hir::LangItem;
@@ -57,8 +58,8 @@ pub struct ModuleCodegen<M> {
     pub kind: ModuleKind,
 }
 
-// FIXME(eddyb) maybe include the crate name in this?
-pub const METADATA_FILENAME: &str = "lib.rmeta";
+pub const METADATA_FILE_PREFIX: &str = "lib";
+pub const METADATA_FILE_EXTENSION: &str = ".rmeta";
 
 impl<M> ModuleCodegen<M> {
     pub fn into_compiled_module(
@@ -131,6 +132,7 @@ pub struct CrateInfo {
 #[derive(Encodable, Decodable)]
 pub struct CodegenResults {
     pub crate_name: Symbol,
+    pub crate_hash: Svh,
     pub modules: Vec<CompiledModule>,
     pub allocator_module: Option<CompiledModule>,
     pub metadata_module: Option<CompiledModule>,

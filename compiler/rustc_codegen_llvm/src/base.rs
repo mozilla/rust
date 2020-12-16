@@ -28,6 +28,8 @@ use rustc_codegen_ssa::mono_item::MonoItemExt;
 use rustc_codegen_ssa::traits::*;
 use rustc_codegen_ssa::{ModuleCodegen, ModuleKind};
 use rustc_data_structures::small_c_str::SmallCStr;
+use rustc_data_structures::svh::Svh;
+use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::dep_graph;
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrs;
 use rustc_middle::middle::cstore::EncodedMetadata;
@@ -70,6 +72,9 @@ pub fn write_compressed_metadata<'tcx>(
         let directive = format!(".section {}", section_name);
         llvm::LLVMSetModuleInlineAsm2(metadata_llmod, directive.as_ptr().cast(), directive.len())
     }
+
+    let svh = tcx.crate_hash(LOCAL_CRATE);
+    add_svh_symbol(tcx, &llvm_module, &svh);
 }
 
 pub struct ValueIter<'ll> {
@@ -91,6 +96,42 @@ impl Iterator for ValueIter<'ll> {
 
 pub fn iter_globals(llmod: &'ll llvm::Module) -> ValueIter<'ll> {
     unsafe { ValueIter { cur: llvm::LLVMGetFirstGlobal(llmod), step: llvm::LLVMGetNextGlobal } }
+}
+
+pub fn svh_symbol_name(
+    tcx: TyCtxt<'_>,
+    svh: &Svh, //, cgu_name: Symbol
+) -> String {
+    format!("rust_svh_{}_{}", tcx.original_crate_name(LOCAL_CRATE), svh)
+}
+
+fn add_svh_symbol(tcx: TyCtxt<'tcx>, llvm_module: &'ll ModuleLlvm, svh: &Svh) {
+    let (metadata_llcx, metadata_llmod) = (&*llvm_module.llcx, llvm_module.llmod());
+
+    let svh_bytes: Vec<u8> = format!("{}", svh).as_bytes().to_vec();
+    let llconst = common::bytes_in_context(metadata_llcx, &svh_bytes);
+    let name = svh_symbol_name(tcx, &svh); //cgu_name
+    let buf = CString::new(name).unwrap();
+    let llglobal =
+        unsafe { llvm::LLVMAddGlobal(metadata_llmod, common::val_ty(llconst), buf.as_ptr()) };
+    unsafe {
+        llvm::LLVMSetInitializer(llglobal, llconst);
+        let section_name =
+            if tcx.sess.target.options.is_like_osx { "__DATA,.rust_svh" } else { ".rust_svh" };
+
+        let name = SmallCStr::new(&section_name);
+        llvm::LLVMSetSection(llglobal, name.as_ptr());
+
+        // Also generate a .section directive to force no
+        // flags, at least for ELF outputs, so that the
+        // metadata doesn't get loaded into memory.
+        let directive = format!(".section {}", section_name);
+        llvm::LLVMRustAppendModuleInlineAsm(
+            metadata_llmod,
+            directive.as_ptr().cast(),
+            directive.len(),
+        )
+    }
 }
 
 pub fn compile_codegen_unit(
@@ -118,6 +159,7 @@ pub fn compile_codegen_unit(
         let llvm_module = ModuleLlvm::new(tcx, &cgu_name.as_str());
         {
             let cx = CodegenCx::new(tcx, cgu, &llvm_module);
+
             let mono_items = cx.codegen_unit.items_in_deterministic_order(cx.tcx);
             for &(mono_item, (linkage, visibility)) in &mono_items {
                 mono_item.predefine::<Builder<'_, '_, '_>>(&cx, linkage, visibility);
