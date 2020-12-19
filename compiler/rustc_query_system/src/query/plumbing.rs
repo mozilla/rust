@@ -303,15 +303,6 @@ where
     }
 }
 
-fn with_diagnostics<F, R>(f: F) -> (R, ThinVec<Diagnostic>)
-where
-    F: FnOnce(Option<&Lock<ThinVec<Diagnostic>>>) -> R,
-{
-    let diagnostics = Lock::new(ThinVec::new());
-    let result = f(Some(&diagnostics));
-    (result, diagnostics.into_inner())
-}
-
 impl<'tcx, D, K> Drop for JobOwner<'tcx, D, K>
 where
     D: Copy + Clone + Eq + Hash,
@@ -473,37 +464,35 @@ where
     }
 
     let (result, dep_node_index) = if query.anon {
-        let prof_timer = tcx.dep_context().profiler().query_provider();
-
-        let ((result, dep_node_index), diagnostics) = with_diagnostics(|diagnostics| {
-            tcx.start_query(job_id, diagnostics, || {
-                dep_graph.with_anon_task(*tcx.dep_context(), query.dep_kind, || {
-                    compute(*tcx.dep_context(), key)
-                })
-            })
-        });
-
-        prof_timer.finish_with_query_invocation_id(dep_node_index.into());
-
-        dep_graph.read_index(dep_node_index);
-
-        if unlikely!(!diagnostics.is_empty()) {
-            tcx.store_diagnostics_for_anon_node(dep_node_index, diagnostics);
-        }
-
-        (result, dep_node_index)
+        force_query_with_job(
+            tcx,
+            job_id,
+            || {
+                tcx.dep_context().dep_graph().with_anon_task(
+                    *tcx.dep_context(),
+                    query.dep_kind,
+                    || compute(*tcx.dep_context(), key),
+                )
+            },
+            CTX::store_diagnostics_for_anon_node,
+        )
     } else if query.eval_always {
         // `to_dep_node` is expensive for some `DepKind`s.
         let dep_node = dep_node.unwrap_or_else(|| query.to_dep_node(*tcx.dep_context(), &key));
-        force_query_with_job(tcx, job_id, dep_node.kind, || {
-            tcx.dep_context().dep_graph().with_eval_always_task(
-                dep_node,
-                *tcx.dep_context(),
-                key,
-                compute,
-                query.hash_result,
-            )
-        })
+        force_query_with_job(
+            tcx,
+            job_id,
+            || {
+                tcx.dep_context().dep_graph().with_eval_always_task(
+                    dep_node,
+                    *tcx.dep_context(),
+                    key,
+                    compute,
+                    query.hash_result,
+                )
+            },
+            CTX::store_diagnostics,
+        )
     } else {
         // `to_dep_node` is expensive for some `DepKind`s.
         let dep_node = dep_node.unwrap_or_else(|| query.to_dep_node(*tcx.dep_context(), &key));
@@ -516,15 +505,20 @@ where
         if let Some((result, dep_node_index)) = loaded {
             (result, dep_node_index)
         } else {
-            force_query_with_job(tcx, job_id, dep_node.kind, || {
-                tcx.dep_context().dep_graph().with_task(
-                    dep_node,
-                    *tcx.dep_context(),
-                    key,
-                    compute,
-                    query.hash_result,
-                )
-            })
+            force_query_with_job(
+                tcx,
+                job_id,
+                || {
+                    tcx.dep_context().dep_graph().with_task(
+                        dep_node,
+                        *tcx.dep_context(),
+                        key,
+                        compute,
+                        query.hash_result,
+                    )
+                },
+                CTX::store_diagnostics,
+            )
         }
     };
     (result, dep_node_index)
@@ -640,21 +634,22 @@ fn incremental_verify_ich<CTX, K, V: Debug>(
 fn force_query_with_job<CTX, V>(
     tcx: CTX,
     job_id: QueryJobId<CTX::DepKind>,
-    dep_kind: CTX::DepKind,
     invoke: impl FnOnce() -> (V, DepNodeIndex),
+    store_diagnostics: fn(&CTX, DepNodeIndex, ThinVec<Diagnostic>),
 ) -> (V, DepNodeIndex)
 where
     CTX: QueryContext,
 {
     let prof_timer = tcx.dep_context().profiler().query_provider();
 
-    let ((result, dep_node_index), diagnostics) =
-        with_diagnostics(|diagnostics| tcx.start_query(job_id, diagnostics, invoke));
+    let diagnostics = Lock::new(ThinVec::new());
+    let (result, dep_node_index) = tcx.start_query(job_id, Some(&diagnostics), invoke);
+    let diagnostics = diagnostics.into_inner();
 
     prof_timer.finish_with_query_invocation_id(dep_node_index.into());
 
-    if unlikely!(!diagnostics.is_empty()) && dep_kind != DepKind::NULL {
-        tcx.store_diagnostics(dep_node_index, diagnostics);
+    if unlikely!(!diagnostics.is_empty()) {
+        store_diagnostics(&tcx, dep_node_index, diagnostics);
     }
 
     (result, dep_node_index)
