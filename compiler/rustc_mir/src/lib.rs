@@ -4,42 +4,38 @@ Rust MIR: a lowered representation of Rust.
 
 */
 
-#![feature(nll)]
-#![feature(in_band_lifetimes)]
 #![feature(array_windows)]
 #![feature(assert_matches)]
+#![feature(associated_type_defaults)]
 #![feature(bindings_after_at)]
 #![feature(bool_to_option)]
 #![feature(box_patterns)]
 #![feature(box_syntax)]
 #![feature(const_panic)]
+#![feature(control_flow_enum)]
 #![feature(crate_visibility_modifier)]
 #![feature(decl_macro)]
 #![feature(exact_size_is_empty)]
-#![feature(exhaustive_patterns)]
+#![feature(in_band_lifetimes)]
 #![feature(iter_zip)]
-#![feature(never_type)]
 #![feature(map_try_insert)]
 #![feature(min_specialization)]
 #![feature(slice_ptr_len)]
 #![feature(slice_ptr_get)]
-#![feature(trusted_len)]
-#![feature(try_blocks)]
-#![feature(associated_type_defaults)]
-#![feature(stmt_expr_attributes)]
-#![feature(trait_alias)]
 #![feature(option_get_or_insert_default)]
 #![feature(once_cell)]
-#![feature(control_flow_enum)]
+#![feature(never_type)]
+#![feature(stmt_expr_attributes)]
+#![feature(trait_alias)]
+#![feature(trusted_len)]
 #![feature(trusted_step)]
-#![recursion_limit = "256"]
+#![feature(try_blocks)]
 
 #[macro_use]
 extern crate tracing;
 #[macro_use]
 extern crate rustc_middle;
 
-mod borrow_check;
 pub mod const_eval;
 pub mod dataflow;
 pub mod interpret;
@@ -51,7 +47,6 @@ pub mod util;
 use rustc_middle::ty::query::Providers;
 
 pub fn provide(providers: &mut Providers) {
-    borrow_check::provide(providers);
     const_eval::provide(providers);
     shim::provide(providers);
     transform::provide(providers);
