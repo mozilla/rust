@@ -483,12 +483,11 @@ where
             tcx.store_diagnostics_for_anon_node(dep_node_index, diagnostics);
         }
 
-        let result = job.complete(result, dep_node_index);
         (result, dep_node_index)
     } else if query.eval_always {
         // `to_dep_node` is expensive for some `DepKind`s.
         let dep_node = dep_node.unwrap_or_else(|| query.to_dep_node(*tcx.dep_context(), &key));
-        force_query_with_job(tcx, key, job, dep_node, query, compute)
+        force_query_with_job(tcx, key, job.id, dep_node, query, compute)
     } else {
         // `to_dep_node` is expensive for some `DepKind`s.
         let dep_node = dep_node.unwrap_or_else(|| query.to_dep_node(*tcx.dep_context(), &key));
@@ -499,12 +498,12 @@ where
             try_load_from_disk_and_cache_in_memory(tcx, &key, &dep_node, query, compute)
         });
         if let Some((result, dep_node_index)) = loaded {
-            let result = job.complete(result, dep_node_index);
             (result, dep_node_index)
         } else {
-            force_query_with_job(tcx, key, job, dep_node, query, compute)
+            force_query_with_job(tcx, key, job.id, dep_node, query, compute)
         }
     };
+    let result = job.complete(result, dep_node_index);
     (result, Some(dep_node_index))
 }
 
@@ -615,22 +614,22 @@ fn incremental_verify_ich<CTX, K, V: Debug>(
     }
 }
 
-fn force_query_with_job<C, CTX>(
+fn force_query_with_job<CTX, K, V>(
     tcx: CTX,
-    key: C::Key,
-    job: JobOwner<'_, CTX::DepKind, C>,
+    key: K,
+    job_id: QueryJobId<CTX::DepKind>,
     dep_node: DepNode<CTX::DepKind>,
-    query: &QueryVtable<CTX, C::Key, C::Value>,
-    compute: fn(CTX::DepContext, C::Key) -> C::Value,
-) -> (C::Stored, DepNodeIndex)
+    query: &QueryVtable<CTX, K, V>,
+    compute: fn(CTX::DepContext, K) -> V,
+) -> (V, DepNodeIndex)
 where
-    C: QueryCache,
     CTX: QueryContext,
+    K: Debug,
 {
     let prof_timer = tcx.dep_context().profiler().query_provider();
 
     let ((result, dep_node_index), diagnostics) = with_diagnostics(|diagnostics| {
-        tcx.start_query(job.id, diagnostics, || {
+        tcx.start_query(job_id, diagnostics, || {
             if query.eval_always {
                 tcx.dep_context().dep_graph().with_eval_always_task(
                     dep_node,
@@ -656,8 +655,6 @@ where
     if unlikely!(!diagnostics.is_empty()) && dep_node.kind != DepKind::NULL {
         tcx.store_diagnostics(dep_node_index, diagnostics);
     }
-
-    let result = job.complete(result, dep_node_index);
 
     (result, dep_node_index)
 }
