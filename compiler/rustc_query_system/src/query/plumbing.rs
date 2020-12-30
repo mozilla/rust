@@ -495,7 +495,15 @@ where
     } else if query.eval_always {
         // `to_dep_node` is expensive for some `DepKind`s.
         let dep_node = dep_node.unwrap_or_else(|| query.to_dep_node(*tcx.dep_context(), &key));
-        force_query_with_job(tcx, key, job_id, dep_node, query, compute)
+        force_query_with_job(tcx, job_id, dep_node.kind, || {
+            tcx.dep_context().dep_graph().with_eval_always_task(
+                dep_node,
+                *tcx.dep_context(),
+                key,
+                compute,
+                query.hash_result,
+            )
+        })
     } else {
         // `to_dep_node` is expensive for some `DepKind`s.
         let dep_node = dep_node.unwrap_or_else(|| query.to_dep_node(*tcx.dep_context(), &key));
@@ -508,7 +516,15 @@ where
         if let Some((result, dep_node_index)) = loaded {
             (result, dep_node_index)
         } else {
-            force_query_with_job(tcx, key, job_id, dep_node, query, compute)
+            force_query_with_job(tcx, job_id, dep_node.kind, || {
+                tcx.dep_context().dep_graph().with_task(
+                    dep_node,
+                    *tcx.dep_context(),
+                    key,
+                    compute,
+                    query.hash_result,
+                )
+            })
         }
     };
     (result, dep_node_index)
@@ -621,45 +637,23 @@ fn incremental_verify_ich<CTX, K, V: Debug>(
     }
 }
 
-fn force_query_with_job<CTX, K, V>(
+fn force_query_with_job<CTX, V>(
     tcx: CTX,
-    key: K,
     job_id: QueryJobId<CTX::DepKind>,
-    dep_node: DepNode<CTX::DepKind>,
-    query: &QueryVtable<CTX, K, V>,
-    compute: fn(CTX::DepContext, K) -> V,
+    dep_kind: CTX::DepKind,
+    invoke: impl FnOnce() -> (V, DepNodeIndex),
 ) -> (V, DepNodeIndex)
 where
     CTX: QueryContext,
-    K: Debug,
 {
     let prof_timer = tcx.dep_context().profiler().query_provider();
 
-    let ((result, dep_node_index), diagnostics) = with_diagnostics(|diagnostics| {
-        tcx.start_query(job_id, diagnostics, || {
-            if query.eval_always {
-                tcx.dep_context().dep_graph().with_eval_always_task(
-                    dep_node,
-                    *tcx.dep_context(),
-                    key,
-                    compute,
-                    query.hash_result,
-                )
-            } else {
-                tcx.dep_context().dep_graph().with_task(
-                    dep_node,
-                    *tcx.dep_context(),
-                    key,
-                    compute,
-                    query.hash_result,
-                )
-            }
-        })
-    });
+    let ((result, dep_node_index), diagnostics) =
+        with_diagnostics(|diagnostics| tcx.start_query(job_id, diagnostics, invoke));
 
     prof_timer.finish_with_query_invocation_id(dep_node_index.into());
 
-    if unlikely!(!diagnostics.is_empty()) && dep_node.kind != DepKind::NULL {
+    if unlikely!(!diagnostics.is_empty()) && dep_kind != DepKind::NULL {
         tcx.store_diagnostics(dep_node_index, diagnostics);
     }
 
