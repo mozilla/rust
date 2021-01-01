@@ -7,7 +7,6 @@ Rust MIR: a lowered representation of Rust.
 #![feature(array_windows)]
 #![feature(assert_matches)]
 #![feature(associated_type_defaults)]
-#![feature(bindings_after_at)]
 #![feature(bool_to_option)]
 #![feature(box_patterns)]
 #![feature(box_syntax)]
@@ -40,7 +39,6 @@ pub mod const_eval;
 pub mod dataflow;
 pub mod interpret;
 pub mod monomorphize;
-mod shim;
 pub mod transform;
 pub mod util;
 
@@ -48,15 +46,11 @@ use rustc_middle::ty::query::Providers;
 
 pub fn provide(providers: &mut Providers) {
     const_eval::provide(providers);
-    shim::provide(providers);
-    transform::provide(providers);
     monomorphize::partitioning::provide(providers);
     monomorphize::polymorphize::provide(providers);
     providers.eval_to_const_value_raw = const_eval::eval_to_const_value_raw_provider;
     providers.eval_to_allocation_raw = const_eval::eval_to_allocation_raw_provider;
     providers.const_caller_location = const_eval::const_caller_location;
-    providers.mir_callgraph_reachable = transform::inline::cycle::mir_callgraph_reachable;
-    providers.mir_inliner_callees = transform::inline::cycle::mir_inliner_callees;
     providers.destructure_const = |tcx, param_env_and_value| {
         let (param_env, value) = param_env_and_value.into_parts();
         const_eval::destructure_const(tcx, param_env, value)

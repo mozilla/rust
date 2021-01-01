@@ -287,7 +287,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     /// Note that for a given layout, this operation will either always fail or always
     /// succeed!  Whether it succeeds depends on whether the layout can be represented
     /// in a `Immediate`, not on which data is stored there currently.
-    pub(crate) fn try_read_immediate(
+    pub fn try_read_immediate(
         &self,
         src: &OpTy<'tcx, M::PointerTag>,
     ) -> InterpResult<'tcx, Result<ImmTy<'tcx, M::PointerTag>, MPlaceTy<'tcx, M::PointerTag>>> {
@@ -530,7 +530,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     // in patterns via the `const_eval` module
     /// The `val` and `layout` are assumed to already be in our interpreter
     /// "universe" (param_env).
-    crate fn const_to_op(
+    pub fn const_to_op(
         &self,
         val: &ty::Const<'tcx>,
         layout: Option<TyAndLayout<'tcx>>,
@@ -549,7 +549,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         }
     }
 
-    crate fn mir_const_to_op(
+    pub fn mir_const_to_op(
         &self,
         val: &mir::ConstantKind<'tcx>,
         layout: Option<TyAndLayout<'tcx>>,
