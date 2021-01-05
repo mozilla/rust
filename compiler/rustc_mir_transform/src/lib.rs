@@ -269,7 +269,7 @@ fn mir_const<'tcx>(
 
     let mut body = tcx.mir_built(def).steal();
 
-    util::dump_mir(tcx, None, "mir_map", &0, &body, |_, _| Ok(()));
+    rustc_middle::mir::dump_mir(tcx, None, "mir_map", &0, &body, |_, _| Ok(()));
 
     run_passes(
         tcx,
@@ -282,7 +282,7 @@ fn mir_const<'tcx>(
             &function_item_references::FunctionItemReferences,
             // What we need to do constant evaluation.
             &simplify::SimplifyCfg::new("initial"),
-            &rustc_mir::transform::rustc_peek::SanityCheck,
+            &rustc_mir_dataflow::rustc_peek::SanityCheck,
         ]],
     );
     tcx.alloc_steal_mir(body)

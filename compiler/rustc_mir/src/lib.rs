@@ -5,11 +5,9 @@ Rust MIR: a lowered representation of Rust.
 */
 
 #![feature(assert_matches)]
-#![feature(associated_type_defaults)]
 #![feature(bool_to_option)]
 #![feature(box_patterns)]
 #![feature(box_syntax)]
-#![feature(const_panic)]
 #![feature(control_flow_enum)]
 #![feature(crate_visibility_modifier)]
 #![feature(decl_macro)]
@@ -21,9 +19,7 @@ Rust MIR: a lowered representation of Rust.
 #![feature(slice_ptr_len)]
 #![feature(slice_ptr_get)]
 #![feature(option_get_or_insert_default)]
-#![feature(once_cell)]
 #![feature(never_type)]
-#![feature(stmt_expr_attributes)]
 #![feature(trait_alias)]
 #![feature(trusted_len)]
 #![feature(trusted_step)]
@@ -35,7 +31,6 @@ extern crate tracing;
 extern crate rustc_middle;
 
 pub mod const_eval;
-pub mod dataflow;
 pub mod interpret;
 pub mod transform;
 pub mod util;
