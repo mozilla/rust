@@ -3642,6 +3642,7 @@ dependencies = [
  "either",
  "itertools 0.9.0",
  "polonius-engine",
+ "rustc_const_eval",
  "rustc_data_structures",
  "rustc_errors",
  "rustc_graphviz",
@@ -3650,7 +3651,6 @@ dependencies = [
  "rustc_infer",
  "rustc_lexer",
  "rustc_middle",
- "rustc_mir",
  "rustc_mir_dataflow",
  "rustc_serialize",
  "rustc_session",
@@ -3744,6 +3744,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustc_const_eval"
+version = "0.0.0"
+dependencies = [
+ "either",
+ "gsgdt",
+ "rustc_apfloat",
+ "rustc_ast",
+ "rustc_attr",
+ "rustc_data_structures",
+ "rustc_errors",
+ "rustc_hir",
+ "rustc_index",
+ "rustc_infer",
+ "rustc_macros",
+ "rustc_middle",
+ "rustc_mir_dataflow",
+ "rustc_session",
+ "rustc_span",
+ "rustc_target",
+ "rustc_trait_selection",
+ "tracing",
+]
+
+[[package]]
 name = "rustc_data_structures"
 version = "0.0.0"
 dependencies = [
@@ -3782,6 +3806,7 @@ dependencies = [
  "rustc_ast",
  "rustc_ast_pretty",
  "rustc_codegen_ssa",
+ "rustc_const_eval",
  "rustc_data_structures",
  "rustc_error_codes",
  "rustc_errors",
@@ -3792,7 +3817,6 @@ dependencies = [
  "rustc_lint",
  "rustc_metadata",
  "rustc_middle",
- "rustc_mir",
  "rustc_mir_build",
  "rustc_parse",
  "rustc_plugin_impl",
@@ -3958,6 +3982,7 @@ dependencies = [
  "rustc_builtin_macros",
  "rustc_codegen_llvm",
  "rustc_codegen_ssa",
+ "rustc_const_eval",
  "rustc_data_structures",
  "rustc_errors",
  "rustc_expand",
@@ -3967,7 +3992,6 @@ dependencies = [
  "rustc_lint",
  "rustc_metadata",
  "rustc_middle",
- "rustc_mir",
  "rustc_mir_build",
  "rustc_mir_transform",
  "rustc_monomorphize",
@@ -4115,30 +4139,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustc_mir"
-version = "0.0.0"
-dependencies = [
- "either",
- "gsgdt",
- "rustc_apfloat",
- "rustc_ast",
- "rustc_attr",
- "rustc_data_structures",
- "rustc_errors",
- "rustc_hir",
- "rustc_index",
- "rustc_infer",
- "rustc_macros",
- "rustc_middle",
- "rustc_mir_dataflow",
- "rustc_session",
- "rustc_span",
- "rustc_target",
- "rustc_trait_selection",
- "tracing",
-]
-
-[[package]]
 name = "rustc_mir_build"
 version = "0.0.0"
 dependencies = [
@@ -4189,12 +4189,12 @@ dependencies = [
  "itertools 0.9.0",
  "rustc_ast",
  "rustc_attr",
+ "rustc_const_eval",
  "rustc_data_structures",
  "rustc_errors",
  "rustc_hir",
  "rustc_index",
  "rustc_middle",
- "rustc_mir",
  "rustc_mir_dataflow",
  "rustc_serialize",
  "rustc_session",

@@ -34,7 +34,7 @@ rustc_codegen_llvm = { path = "../rustc_codegen_llvm", optional = true }
 rustc_hir = { path = "../rustc_hir" }
 rustc_index = { path = "../rustc_index" }
 rustc_metadata = { path = "../rustc_metadata" }
-rustc_mir = { path = "../rustc_mir" }
+rustc_const_eval = { path = "../rustc_const_eval" }
 rustc_mir_build = { path = "../rustc_mir_build" }
 rustc_mir_transform = { path = "../rustc_mir_transform" }
 rustc_monomorphize = { path = "../rustc_monomorphize" }
