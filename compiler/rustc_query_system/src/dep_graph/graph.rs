@@ -211,11 +211,9 @@ impl<K: DepKind> DepGraph<K> {
         task: fn(Ctxt, A) -> R,
         hash_result: impl FnOnce(&mut Ctxt::StableHashingContext, &R) -> Option<Fingerprint>,
     ) -> (R, DepNodeIndex) {
-        self.with_task_impl(
-            key,
-            cx,
-            arg,
-            task,
+        let create_task: fn(_) -> _ = if key.kind.is_eval_always() {
+            |_| None
+        } else {
             |_key| {
                 Some(TaskDeps {
                     #[cfg(debug_assertions)]
@@ -224,9 +222,9 @@ impl<K: DepKind> DepGraph<K> {
                     read_set: Default::default(),
                     phantom_data: PhantomData,
                 })
-            },
-            hash_result,
-        )
+            }
+        };
+        self.with_task_impl(key, cx, arg, task, create_task, hash_result)
     }
 
     fn with_task_impl<Ctxt: HasDepContext<DepKind = K>, A: Debug, R>(
@@ -356,19 +354,6 @@ impl<K: DepKind> DepGraph<K> {
         } else {
             (op(), self.next_virtual_depnode_index())
         }
-    }
-
-    /// Executes something within an "eval-always" task which is a task
-    /// that runs whenever anything changes.
-    pub fn with_eval_always_task<Ctxt: HasDepContext<DepKind = K>, A: Debug, R>(
-        &self,
-        key: DepNode<K>,
-        cx: Ctxt,
-        arg: A,
-        task: fn(Ctxt, A) -> R,
-        hash_result: impl FnOnce(&mut Ctxt::StableHashingContext, &R) -> Option<Fingerprint>,
-    ) -> (R, DepNodeIndex) {
-        self.with_task_impl(key, cx, arg, task, |_| None, hash_result)
     }
 
     #[inline]

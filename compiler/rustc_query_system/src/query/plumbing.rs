@@ -476,32 +476,19 @@ where
             },
             CTX::store_diagnostics_for_anon_node,
         )
-    } else if query.eval_always {
-        // `to_dep_node` is expensive for some `DepKind`s.
-        let dep_node = dep_node.unwrap_or_else(|| query.to_dep_node(*tcx.dep_context(), &key));
-        force_query_with_job(
-            tcx,
-            job_id,
-            || {
-                tcx.dep_context().dep_graph().with_eval_always_task(
-                    dep_node,
-                    *tcx.dep_context(),
-                    key,
-                    compute,
-                    query.hash_result,
-                )
-            },
-            CTX::store_diagnostics,
-        )
     } else {
         // `to_dep_node` is expensive for some `DepKind`s.
         let dep_node = dep_node.unwrap_or_else(|| query.to_dep_node(*tcx.dep_context(), &key));
-        // The diagnostics for this query will be
-        // promoted to the current session during
-        // `try_mark_green()`, so we can ignore them here.
-        let loaded = tcx.start_query(job_id, None, || {
-            try_load_from_disk_and_cache_in_memory(tcx, &key, &dep_node, query, compute)
-        });
+        let loaded = if query.eval_always {
+            None
+        } else {
+            // The diagnostics for this query will be
+            // promoted to the current session during
+            // `try_mark_green()`, so we can ignore them here.
+            tcx.start_query(job_id, None, || {
+                try_load_from_disk_and_cache_in_memory(tcx, &key, &dep_node, query, compute)
+            })
+        };
         if let Some((result, dep_node_index)) = loaded {
             (result, dep_node_index)
         } else {
