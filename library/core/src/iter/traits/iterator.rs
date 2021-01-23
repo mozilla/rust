@@ -238,6 +238,7 @@ pub trait Iterator {
     /// ```
     #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[must_use = "if you really need to exhaust the iterator, consider `.for_each(drop)` instead"]
     fn count(self) -> usize
     where
         Self: Sized,
@@ -270,6 +271,7 @@ pub trait Iterator {
     /// ```
     #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[must_use = "if you really need to exhaust the iterator, consider `.for_each(drop)` instead"]
     fn last(self) -> Option<Self::Item>
     where
         Self: Sized,
