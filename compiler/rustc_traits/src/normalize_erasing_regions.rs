@@ -3,6 +3,7 @@ use rustc_middle::traits::query::NoSolution;
 use rustc_middle::ty::query::Providers;
 use rustc_middle::ty::subst::GenericArg;
 use rustc_middle::ty::{self, ParamEnvAnd, TyCtxt, TypeFoldable};
+use rustc_span::DUMMY_SP;
 use rustc_trait_selection::traits::query::normalize::AtExt;
 use rustc_trait_selection::traits::{Normalized, ObligationCause};
 use std::sync::atomic::Ordering;
@@ -40,7 +41,13 @@ fn normalize_generic_arg_after_erasing_regions<'tcx>(
                 debug_assert!(!erased.needs_infer(), "{:?}", erased);
                 erased
             }
-            Err(NoSolution) => bug!("could not fully normalize `{:?}`", value),
+            Err(NoSolution) => {
+                infcx
+                    .tcx
+                    .sess
+                    .delay_span_bug(DUMMY_SP, &format!("could not fully normalize `{:?}`", value));
+                value
+            }
         }
     })
 }
