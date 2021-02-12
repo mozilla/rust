@@ -33,6 +33,15 @@ help: to link to the builtin type, prefix with `prim@`
 LL | /// [prim@char]
    |      ^^^^^^^^^
 
+warning: documentation for `char` links to item `char` which will not have documentation generated
+  --> $DIR/prim-conflict.rs:16:6
+   |
+LL | /// [mod@char] // ok
+   |      ^^^^^^^^ this item is will not be documented
+   |
+   = note: `#[warn(rustdoc::private_intra_doc_links)]` on by default
+   = note: `char` may be in a private module with all re-exports marked as `#[doc(no_inline)]`
+
 error: incompatible link kind for `char`
   --> $DIR/prim-conflict.rs:19:6
    |
@@ -49,5 +58,5 @@ LL |     //! [struct@char]
    |
    = note: this link resolved to a builtin type, which is not a struct
 
-error: aborting due to 4 previous errors
+error: aborting due to 4 previous errors; 1 warning emitted
 

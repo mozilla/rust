@@ -21,6 +21,7 @@ use rustc_target::spec::abi::Abi;
 use crate::clean::{
     self, utils::find_nearest_parent_module, ExternalCrate, FakeDefId, GetDefId, PrimitiveType,
 };
+use crate::formats::cache::Cache;
 use crate::formats::item_type::ItemType;
 use crate::html::escape::Escape;
 use crate::html::render::cache::ExternalLocation;
@@ -473,12 +474,15 @@ impl clean::GenericArgs {
 }
 
 crate fn href(did: DefId, cx: &Context<'_>) -> Option<(String, ItemType, Vec<String>)> {
-    let cache = &cx.cache();
-    let relative_to = &cx.current;
+    href_inner(did, cx.cache(), &cx.current)
+}
+
+crate fn href_inner(did: DefId, cache: &Cache, relative_to: &[String]) -> Option<(String, ItemType, Vec<String>)> {
     fn to_module_fqp(shortty: ItemType, fqp: &[String]) -> &[String] {
         if shortty == ItemType::Module { &fqp[..] } else { &fqp[..fqp.len() - 1] }
     }
 
+    trace!("calculating href for {:?}", did);
     if !did.is_local() && !cache.access_levels.is_public(did) && !cache.document_private {
         return None;
     }
@@ -494,7 +498,7 @@ crate fn href(did: DefId, cx: &Context<'_>) -> Option<(String, ItemType, Vec<Str
             (
                 fqp,
                 shortty,
-                match cache.extern_locations[&did.krate] {
+                match cache.extern_locations.get(&did.krate)? {
                     ExternalLocation::Remote(ref s) => {
                         let s = s.trim_end_matches('/');
                         let mut s = vec![&s[..]];
