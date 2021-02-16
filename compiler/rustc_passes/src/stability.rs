@@ -777,34 +777,42 @@ impl Visitor<'tcx> for Checker<'tcx> {
             hir::ItemKind::Union(..) if !self.tcx.features().untagged_unions => {
                 let def_id = self.tcx.hir().local_def_id(item.hir_id);
                 let ty = self.tcx.type_of(def_id);
-                let (adt_def, substs) = match ty.kind() {
-                    ty::Adt(adt_def, substs) => (adt_def, substs),
-                    _ => bug!(),
-                };
-
-                // Non-`Copy` fields are unstable, except for `ManuallyDrop`.
-                let param_env = self.tcx.param_env(def_id);
-                for field in &adt_def.non_enum_variant().fields {
-                    let field_ty = field.ty(self.tcx, substs);
-                    if !field_ty.ty_adt_def().map_or(false, |adt_def| adt_def.is_manually_drop())
-                        && !field_ty.is_copy_modulo_regions(self.tcx.at(DUMMY_SP), param_env)
-                    {
-                        if field_ty.needs_drop(self.tcx, param_env) {
-                            // Avoid duplicate error: This will error later anyway because fields
-                            // that need drop are not allowed.
-                            self.tcx.sess.delay_span_bug(
-                                item.span,
-                                "union should have been rejected due to potentially dropping field",
-                            );
-                        } else {
-                            feature_err(
-                                &self.tcx.sess.parse_sess,
-                                sym::untagged_unions,
-                                self.tcx.def_span(field.did),
-                                "unions with non-`Copy` fields other than `ManuallyDrop<T>` are unstable",
-                            )
-                            .emit();
+                match ty.kind() {
+                    ty::Adt(adt_def, substs) => {
+                        // Non-`Copy` fields are unstable, except for `ManuallyDrop`.
+                        let param_env = self.tcx.param_env(def_id);
+                        for field in &adt_def.non_enum_variant().fields {
+                            let field_ty = field.ty(self.tcx, substs);
+                            if !field_ty
+                                .ty_adt_def()
+                                .map_or(false, |adt_def| adt_def.is_manually_drop())
+                                && !field_ty
+                                    .is_copy_modulo_regions(self.tcx.at(DUMMY_SP), param_env)
+                            {
+                                if field_ty.needs_drop(self.tcx, param_env) {
+                                    // Avoid duplicate error: This will error later anyway because fields
+                                    // that need drop are not allowed.
+                                    self.tcx.sess.delay_span_bug(
+                                        item.span,
+                                        "union should have been rejected due to potentially dropping field",
+                                    );
+                                } else {
+                                    feature_err(
+                                        &self.tcx.sess.parse_sess,
+                                        sym::untagged_unions,
+                                        self.tcx.def_span(field.did),
+                                        "unions with non-`Copy` fields other than `ManuallyDrop<T>` are unstable",
+                                    )
+                                    .emit();
+                                }
+                            }
                         }
+                    }
+                    _ => {
+                        self.tcx.sess.delay_span_bug(
+                            item.span,
+                            &format!("unexpected type kind {:?} (`{:?}`)", ty, ty.kind()),
+                        );
                     }
                 }
             }
