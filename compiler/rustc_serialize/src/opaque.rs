@@ -31,6 +31,15 @@ impl Encoder {
     pub fn position(&self) -> usize {
         self.data.len()
     }
+
+    #[inline]
+    pub fn emit_raw_bytes_with(&mut self, byte_count: usize, w: impl FnOnce(&mut [u8])) {
+        let start = self.data.len();
+        self.data.resize(self.data.len() + byte_count, 0);
+        let output_slice = &mut self.data[start..];
+        assert!(output_slice.len() == byte_count);
+        w(output_slice);
+    }
 }
 
 macro_rules! write_leb128 {

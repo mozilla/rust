@@ -1,6 +1,9 @@
 use crate::rmeta::DecodeContext;
 use crate::rmeta::EncodeContext;
+use crate::rmeta::MetadataBlob;
 use rustc_data_structures::fingerprint::Fingerprint;
+use rustc_data_structures::owning_ref::OwningRef;
+use rustc_hir::definitions::DefPathTable;
 use rustc_serialize::{opaque, Decodable, Decoder, Encodable, Encoder};
 use rustc_span::def_id::{DefIndex, DefPathHash};
 
@@ -36,39 +39,72 @@ impl odht::Config for HashMapConfig {
     }
 }
 
-crate struct DefPathHashMap(odht::HashTableOwned<HashMapConfig>);
+crate enum DefPathHashMap<'tcx> {
+    OwnedFromMetadata(odht::HashTable<HashMapConfig, OwningRef<MetadataBlob, [u8]>>),
+    BorrowedFromTcx(&'tcx DefPathTable),
+}
 
-impl DefPathHashMap {
-    pub fn build(def_path_hashes: impl Iterator<Item = (DefPathHash, DefIndex)>) -> DefPathHashMap {
-        let builder = odht::HashTableOwned::<HashMapConfig>::from_iterator(def_path_hashes, 85);
-        DefPathHashMap(builder)
-    }
-
+impl DefPathHashMap<'tcx> {
     #[inline]
     pub fn def_path_hash_to_def_index(&self, def_path_hash: &DefPathHash) -> Option<DefIndex> {
-        self.0.get(def_path_hash)
+        match *self {
+            DefPathHashMap::OwnedFromMetadata(ref map) => map.get(def_path_hash),
+            DefPathHashMap::BorrowedFromTcx(_) => {
+                panic!("DefPathHashMap::BorrowedFromTcx variant only exists for serialization")
+            }
+        }
     }
 }
 
-impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for DefPathHashMap {
+impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for DefPathHashMap<'tcx> {
     fn encode(&self, e: &mut EncodeContext<'a, 'tcx>) -> opaque::EncodeResult {
-        let bytes = self.0.raw_bytes();
+        match *self {
+            DefPathHashMap::BorrowedFromTcx(def_path_table) => {
+                let item_count = def_path_table.num_def_ids();
+                let bytes_needed = odht::bytes_needed::<HashMapConfig>(item_count, 87);
 
-        e.emit_usize(bytes.len())?;
-        e.emit_raw_bytes(&bytes[..])?;
+                e.emit_usize(bytes_needed)?;
 
-        Ok(())
+                // We allocate the space for the table inside the output stream and then
+                // write directly to it. This way we don't have to create another allocation
+                // just for building the table.
+                e.emit_raw_bytes_with(bytes_needed, |bytes| {
+                    assert!(bytes.len() == bytes_needed);
+                    let mut table =
+                        odht::HashTable::<HashMapConfig, _>::init_in_place(bytes, item_count, 87)
+                            .unwrap();
+
+                    for (def_index, _, def_path_hash) in
+                        def_path_table.enumerated_keys_and_path_hashes()
+                    {
+                        table.insert(def_path_hash, &def_index);
+                    }
+                });
+
+                Ok(())
+            }
+            DefPathHashMap::OwnedFromMetadata(_) => {
+                panic!("DefPathHashMap::OwnedFromMetadata variant only exists for deserialization")
+            }
+        }
     }
 }
 
-impl<'a, 'tcx> Decodable<DecodeContext<'a, 'tcx>> for DefPathHashMap {
-    fn decode(d: &mut DecodeContext<'a, 'tcx>) -> Result<DefPathHashMap, String> {
+impl<'a, 'tcx> Decodable<DecodeContext<'a, 'tcx>> for DefPathHashMap<'tcx> {
+    fn decode(d: &mut DecodeContext<'a, 'tcx>) -> Result<DefPathHashMap<'tcx>, String> {
+        // Import TyDecoder so we can access the DecodeContext::position() method
+        use crate::rustc_middle::ty::codec::TyDecoder;
+
         let len = d.read_usize()?;
-        let bytes = d.read_raw_bytes(len);
+        let pos = d.position();
+        let o = OwningRef::new(d.blob().clone()).map(|x| &x[pos..pos + len]);
 
-        let inner = odht::HashTableOwned::<HashMapConfig>::from_raw_bytes(&bytes[..])
-            .map_err(|e| format!("{}", e))?;
+        // Although we already have the data we need via the OwningRef, we still need
+        // to advance the DecodeContext's position so it's in a valid state after
+        // the method. We use read_raw_bytes() for that.
+        let _ = d.read_raw_bytes(len);
 
-        Ok(DefPathHashMap(inner))
+        let inner = odht::HashTable::from_raw_bytes(o).map_err(|e| format!("{}", e))?;
+        Ok(DefPathHashMap::OwnedFromMetadata(inner))
     }
 }

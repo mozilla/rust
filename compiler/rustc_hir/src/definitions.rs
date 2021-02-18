@@ -93,19 +93,10 @@ impl DefPathTable {
 
     pub fn enumerated_keys_and_path_hashes(
         &self,
-    ) -> impl Iterator<Item = (DefIndex, &DefKey, &DefPathHash)> + '_ {
+    ) -> impl Iterator<Item = (DefIndex, &DefKey, &DefPathHash)> + ExactSizeIterator + '_ {
         self.index_to_key
             .iter_enumerated()
             .map(move |(index, key)| (index, key, &self.def_path_hashes[index]))
-    }
-
-    pub fn all_def_path_hashes_and_def_ids(
-        &self,
-        krate: CrateNum,
-    ) -> impl Iterator<Item = (DefPathHash, DefId)> + '_ {
-        self.def_path_hashes
-            .iter_enumerated()
-            .map(move |(index, hash)| (*hash, DefId { krate, index }))
     }
 }
 

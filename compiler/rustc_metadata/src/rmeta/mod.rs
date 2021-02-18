@@ -232,7 +232,7 @@ crate struct CrateRoot<'tcx> {
     syntax_contexts: SyntaxContextTable,
     expn_data: ExpnDataTable,
 
-    def_path_hash_map: Lazy<DefPathHashMap>,
+    def_path_hash_map: Lazy<DefPathHashMap<'tcx>>,
 
     source_map: Lazy<[rustc_span::SourceFile]>,
 
