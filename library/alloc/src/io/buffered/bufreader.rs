@@ -1,6 +1,7 @@
-use crate::cmp;
+use core::cmp;
 use crate::fmt;
 use crate::io::{self, BufRead, Initializer, IoSliceMut, Read, Seek, SeekFrom, DEFAULT_BUF_SIZE};
+use crate::{boxed::Box, vec::Vec};
 
 /// The `BufReader<R>` struct adds buffering to any reader.
 ///
@@ -305,7 +306,7 @@ impl<R: Read> Read for BufReader<R> {
 
     // we can't skip unconditionally because of the large buffer case in read.
     unsafe fn initializer(&self) -> Initializer {
-        self.inner.initializer()
+        unsafe { self.inner.initializer() }
     }
 }
 

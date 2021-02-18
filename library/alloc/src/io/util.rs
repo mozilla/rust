@@ -3,8 +3,9 @@
 #[cfg(test)]
 mod tests;
 
-use crate::fmt;
-use crate::io::{self, BufRead, Initializer, IoSlice, IoSliceMut, Read, Seek, SeekFrom, Write};
+use core::fmt;
+use crate::io::{self, BufRead, ErrorKind, Initializer, IoSlice, IoSliceMut, Read, Seek, SeekFrom, Write};
+use core::mem::MaybeUninit;
 
 /// A reader which is always at EOF.
 ///
@@ -45,7 +46,7 @@ impl Read for Empty {
 
     #[inline]
     unsafe fn initializer(&self) -> Initializer {
-        Initializer::nop()
+        unsafe { Initializer::nop() }
     }
 }
 #[stable(feature = "rust1", since = "1.0.0")]
@@ -135,7 +136,7 @@ impl Read for Repeat {
 
     #[inline]
     unsafe fn initializer(&self) -> Initializer {
-        Initializer::nop()
+        unsafe { Initializer::nop() }
     }
 }
 

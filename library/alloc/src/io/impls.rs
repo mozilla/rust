@@ -1,12 +1,13 @@
 #[cfg(test)]
 mod tests;
 
-use crate::cmp;
-use crate::fmt;
+use core::cmp;
+use core::fmt;
 use crate::io::{
     self, BufRead, Error, ErrorKind, Initializer, IoSlice, IoSliceMut, Read, Seek, SeekFrom, Write,
 };
-use crate::mem;
+use core::mem;
+use crate::{vec::Vec, boxed::Box, string::String};
 
 // =============================================================================
 // Forwarding implementations
@@ -30,7 +31,7 @@ impl<R: Read + ?Sized> Read for &mut R {
 
     #[inline]
     unsafe fn initializer(&self) -> Initializer {
-        (**self).initializer()
+        unsafe { (**self).initializer() }
     }
 
     #[inline]
@@ -129,7 +130,7 @@ impl<R: Read + ?Sized> Read for Box<R> {
 
     #[inline]
     unsafe fn initializer(&self) -> Initializer {
-        (**self).initializer()
+        unsafe { (**self).initializer() }
     }
 
     #[inline]
@@ -256,7 +257,7 @@ impl Read for &[u8] {
 
     #[inline]
     unsafe fn initializer(&self) -> Initializer {
-        Initializer::nop()
+        unsafe { Initializer::nop() }
     }
 
     #[inline]
