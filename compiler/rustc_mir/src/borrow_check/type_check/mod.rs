@@ -1115,7 +1115,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
             b,
             locations,
             category,
-            Some(self.borrowck_context),
+            self.borrowck_context,
         )
     }
 
