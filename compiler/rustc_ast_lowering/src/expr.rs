@@ -442,17 +442,20 @@ impl<'hir> LoweringContext<'_, 'hir> {
         then: &Block,
         else_opt: Option<&Expr>,
     ) -> hir::ExprKind<'hir> {
-        macro_rules! make_if {
-            ($opt:expr) => {{
-                let cond = self.lower_expr(cond);
-                let then_expr = self.lower_block_expr(then);
-                hir::ExprKind::If(cond, self.arena.alloc(then_expr), $opt)
-            }};
-        }
+        let cond = self.lower_expr(cond);
+        let wrapped_cond = match cond.kind {
+            hir::ExprKind::Let(..) => cond,
+            _ => self.expr_drop_temps(cond.span, cond, AttrVec::new()),
+        };
+        let then_expr = self.lower_block_expr(then);
         if let Some(rslt) = else_opt {
-            make_if!(Some(self.lower_expr(rslt)))
+            hir::ExprKind::If(
+                wrapped_cond,
+                self.arena.alloc(then_expr),
+                Some(self.lower_expr(rslt)),
+            )
         } else {
-            make_if!(None)
+            hir::ExprKind::If(wrapped_cond, self.arena.alloc(then_expr), None)
         }
     }
 
