@@ -39,17 +39,9 @@ crate fn extern_location(
         return Local;
     }
 
-    if let Some(url) = extern_url {
-        let mut url = url.to_string();
-        if !url.ends_with('/') {
-            url.push('/');
-        }
-        return Remote(url);
-    }
-
-    // Failing that, see if there's an attribute specifying where to find this
-    // external crate
-    e.attrs
+    // See if there's an attribute specifying where to find this external crate
+    if let Some(attr_url) = e
+        .attrs
         .lists(sym::doc)
         .filter(|a| a.has_name(sym::html_root_url))
         .filter_map(|a| a.value_str())
@@ -61,7 +53,18 @@ crate fn extern_location(
             Remote(url)
         })
         .next()
-        .unwrap_or(Unknown) // Well, at least we tried.
+    {
+        return attr_url;
+    }
+
+    // Finally, fall back to the `--extern-html-root-url`, if present
+    extern_url.map_or(Unknown, |url| {
+        let mut url = url.to_string();
+        if !url.ends_with('/') {
+            url.push('/');
+        }
+        Remote(url)
+    })
 }
 
 /// Builds the search index from the collected metadata
