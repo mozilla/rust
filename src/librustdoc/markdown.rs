@@ -119,7 +119,7 @@ crate fn test(mut options: Options) -> Result<(), String> {
         .map_err(|err| format!("{}: {}", options.input.display(), err))?;
     let mut opts = TestOptions::default();
     opts.no_crate_inject = true;
-    opts.display_warnings = options.display_warnings;
+    opts.display_doctest_warnings = options.display_doctest_warnings;
     let mut collector = Collector::new(
         options.input.display().to_string(),
         options.clone(),
@@ -138,7 +138,7 @@ crate fn test(mut options: Options) -> Result<(), String> {
     testing::test_main(
         &options.test_args,
         collector.tests,
-        Some(testing::Options::new().display_output(options.display_warnings)),
+        Some(testing::Options::new().display_output(options.display_doctest_warnings)),
     );
     Ok(())
 }

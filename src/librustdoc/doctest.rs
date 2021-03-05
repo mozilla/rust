@@ -38,7 +38,7 @@ crate struct TestOptions {
     crate no_crate_inject: bool,
     /// Whether to emit compilation warnings when compiling doctests. Setting this will suppress
     /// the default `#![allow(unused)]`.
-    crate display_warnings: bool,
+    crate display_doctest_warnings: bool,
     /// Additional crate-level attributes to add to doctests.
     crate attrs: Vec<String>,
 }
@@ -70,7 +70,7 @@ crate fn run(options: Options) -> Result<(), ErrorReported> {
         maybe_sysroot: options.maybe_sysroot.clone(),
         search_paths: options.libs.clone(),
         crate_types,
-        lint_opts: if !options.display_warnings { lint_opts } else { vec![] },
+        lint_opts: if !options.display_doctest_warnings { lint_opts } else { vec![] },
         lint_cap: Some(options.lint_cap.clone().unwrap_or_else(|| lint::Forbid)),
         cg: options.codegen_options.clone(),
         externs: options.externs.clone(),
@@ -104,7 +104,7 @@ crate fn run(options: Options) -> Result<(), ErrorReported> {
     };
 
     let mut test_args = options.test_args.clone();
-    let display_warnings = options.display_warnings;
+    let display_doctest_warnings = options.display_doctest_warnings;
     let externs = options.externs.clone();
     let json_unused_externs = options.json_unused_externs;
 
@@ -120,7 +120,7 @@ crate fn run(options: Options) -> Result<(), ErrorReported> {
                 let crate_attrs = tcx.hir().attrs(CRATE_HIR_ID);
 
                 let mut opts = scrape_test_config(crate_attrs);
-                opts.display_warnings |= options.display_warnings;
+                opts.display_doctest_warnings |= options.display_doctest_warnings;
                 let enable_per_target_ignores = options.enable_per_target_ignores;
                 let mut collector = Collector::new(
                     crate_name,
@@ -171,7 +171,7 @@ crate fn run(options: Options) -> Result<(), ErrorReported> {
     testing::test_main(
         &test_args,
         tests,
-        Some(testing::Options::new().display_output(display_warnings)),
+        Some(testing::Options::new().display_output(display_doctest_warnings)),
     );
 
     // Collect and warn about unused externs, but only if we've gotten
@@ -220,7 +220,7 @@ fn scrape_test_config(attrs: &[ast::Attribute]) -> TestOptions {
     use rustc_ast_pretty::pprust;
 
     let mut opts =
-        TestOptions { no_crate_inject: false, display_warnings: false, attrs: Vec::new() };
+        TestOptions { no_crate_inject: false, display_doctest_warnings: false, attrs: Vec::new() };
 
     let test_attrs: Vec<_> = attrs
         .iter()
@@ -491,7 +491,7 @@ crate fn make_test(
     let mut prog = String::new();
     let mut supports_color = false;
 
-    if opts.attrs.is_empty() && !opts.display_warnings {
+    if opts.attrs.is_empty() && !opts.display_doctest_warnings {
         // If there aren't any attributes supplied by #![doc(test(attr(...)))], then allow some
         // lints that are commonly triggered in doctests. The crate-level test attributes are
         // commonly used to make tests fail in case they trigger warnings, so having this there in

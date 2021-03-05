@@ -417,3 +417,14 @@ This flag is **deprecated** and **has no effect**.
 Rustdoc only supports Rust source code and Markdown input formats. If the
 file ends in `.md` or `.markdown`, `rustdoc` treats it as a Markdown file.
 Otherwise, it assumes that the input file is Rust.
+
+## `--display-doctest-warnings`: display compiler warnings and test output when running documentation tests
+
+Using this flag looks like this:
+
+```bash
+$ rustdoc --test src/lib.rs --display-doctest-warnings
+```
+
+This flag displays the compiler output (warnings and errors) in documentation tests, which is
+usually suppressed.
