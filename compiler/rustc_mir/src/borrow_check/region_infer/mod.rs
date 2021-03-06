@@ -1656,7 +1656,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         errors_buffer.push(RegionErrorKind::BoundUniversalRegionError {
             longer_fr,
             error_element,
-            fr_origin: NllRegionVariableOrigin::Placeholder(placeholder),
+            placeholder,
         });
     }
 
