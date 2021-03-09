@@ -115,20 +115,6 @@ pub(super) fn collect(
         return None;
     };
 
-    // Register macro defs.
-    for macro_def in krate.exported_macros() {
-        // Exported macros are visited directly from the crate root,
-        // so they do not have `parent_node` set.
-        // Find the correct enclosing module from their DefKey.
-        let def_key = definitions.def_key(macro_def.def_id);
-        let parent = def_key.parent.map_or(hir::CRATE_HIR_ID, |local_def_index| {
-            definitions.local_def_id_to_hir_id(LocalDefId { local_def_index })
-        });
-        if parent.owner == owner {
-            collector.with_parent(parent, |this| this.insert_nested(macro_def.def_id));
-        }
-    }
-
     // Insert bodies into the map
     for (local_id, body) in subtree(&krate.bodies, owner) {
         let bodies = &mut collector.nodes.bodies;

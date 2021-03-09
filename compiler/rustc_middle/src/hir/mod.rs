@@ -146,9 +146,11 @@ pub fn provide(providers: &mut Providers) {
         let parent = tcx.definitions.def_key(id).parent;
         let parent = parent.map_or(CRATE_HIR_ID, |local_def_index| {
             let def_id = LocalDefId { local_def_index };
-            let owner = tcx.definitions.local_def_id_to_hir_id(def_id).owner;
-            let local_id = tcx.index_hir(owner).unwrap().parenting[&id];
-            HirId { owner, local_id }
+            let mut parent_hir_id = tcx.definitions.local_def_id_to_hir_id(def_id);
+            if let Some(local_id) = tcx.index_hir(parent_hir_id.owner).unwrap().parenting.get(&id) {
+                parent_hir_id.local_id = *local_id;
+            }
+            parent_hir_id
         });
         parent
     };
