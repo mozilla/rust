@@ -1211,7 +1211,7 @@ pub struct Arm<'hir> {
 #[derive(Debug, HashStable_Generic)]
 pub enum Guard<'hir> {
     If(&'hir Expr<'hir>),
-    IfLet(&'hir Pat<'hir>, &'hir Expr<'hir>),
+    IfLet(&'hir Pat<'hir>, &'hir Expr<'hir>, Span),
 }
 
 #[derive(Debug, HashStable_Generic)]
@@ -1880,14 +1880,14 @@ pub enum MatchSource {
     /// A `match _ { .. }`.
     Normal,
     /// An `if let _ = _ { .. }` (optionally with `else { .. }`).
-    IfLetDesugar { contains_else_clause: bool },
+    IfLetDesugar { contains_else_clause: bool, let_span: Span },
     /// An `if let _ = _ => { .. }` match guard.
-    IfLetGuardDesugar,
+    IfLetGuardDesugar { let_span: Span },
     /// A `while _ { .. }` (which was desugared to a `loop { match _ { .. } }`).
     WhileDesugar,
     /// A `while let _ = _ { .. }` (which was desugared to a
     /// `loop { match _ { .. } }`).
-    WhileLetDesugar,
+    WhileLetDesugar { let_span: Span },
     /// A desugared `for _ in _ { .. }` loop.
     ForLoopDesugar,
     /// A desugared `?` operator.
@@ -1897,12 +1897,32 @@ pub enum MatchSource {
 }
 
 impl MatchSource {
+    pub fn equivalent(&self, other: &Self) -> bool {
+        use MatchSource::*;
+        match (self, other) {
+            (Normal, Normal)
+            | (IfLetGuardDesugar { .. }, IfLetGuardDesugar { .. })
+            | (WhileDesugar, WhileDesugar)
+            | (WhileLetDesugar { .. }, WhileLetDesugar { .. })
+            | (ForLoopDesugar, ForLoopDesugar)
+            | (TryDesugar, TryDesugar)
+            | (AwaitDesugar, AwaitDesugar) => true,
+            (
+                IfLetDesugar { contains_else_clause: l, .. },
+                IfLetDesugar { contains_else_clause: r, .. },
+            ) => l == r,
+            _ => false,
+        }
+    }
+}
+
+impl MatchSource {
     pub fn name(self) -> &'static str {
         use MatchSource::*;
         match self {
             Normal => "match",
-            IfLetDesugar { .. } | IfLetGuardDesugar => "if",
-            WhileDesugar | WhileLetDesugar => "while",
+            IfLetDesugar { .. } | IfLetGuardDesugar { .. } => "if",
+            WhileDesugar | WhileLetDesugar { .. } => "while",
             ForLoopDesugar => "for",
             TryDesugar => "?",
             AwaitDesugar => ".await",

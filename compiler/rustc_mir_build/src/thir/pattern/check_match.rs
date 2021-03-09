@@ -164,7 +164,7 @@ impl<'tcx> MatchVisitor<'_, 'tcx> {
         for arm in arms {
             // Check the arm for some things unrelated to exhaustiveness.
             self.check_patterns(&arm.pat);
-            if let Some(hir::Guard::IfLet(ref pat, _)) = arm.guard {
+            if let Some(hir::Guard::IfLet(ref pat, _, _)) = arm.guard {
                 self.check_patterns(pat);
             }
         }
@@ -172,9 +172,9 @@ impl<'tcx> MatchVisitor<'_, 'tcx> {
         let mut cx = self.new_cx(scrut.hir_id);
 
         for arm in arms {
-            if let Some(hir::Guard::IfLet(ref pat, _)) = arm.guard {
+            if let Some(hir::Guard::IfLet(ref pat, _, span)) = arm.guard {
                 let tpat = self.lower_pattern(&mut cx, pat, &mut false).0;
-                check_if_let_guard(&mut cx, &tpat, pat.hir_id);
+                check_if_let_guard(&mut cx, &tpat, pat.hir_id, span);
             }
         }
 
@@ -366,31 +366,38 @@ fn unreachable_pattern(tcx: TyCtxt<'_>, span: Span, id: HirId, catchall: Option<
 }
 
 fn irrefutable_let_pattern(tcx: TyCtxt<'_>, span: Span, id: HirId, source: hir::MatchSource) {
-    tcx.struct_span_lint_hir(IRREFUTABLE_LET_PATTERNS, id, span, |lint| match source {
-        hir::MatchSource::IfLetDesugar { .. } => {
-            let mut diag = lint.build("irrefutable `if let` pattern");
-            diag.note("this pattern will always match, so the `if let` is useless");
-            diag.help("consider replacing the `if let` with a `let`");
-            diag.emit()
-        }
-        hir::MatchSource::WhileLetDesugar => {
-            let mut diag = lint.build("irrefutable `while let` pattern");
-            diag.note("this pattern will always match, so the loop will never exit");
-            diag.help("consider instead using a `loop { ... }` with a `let` inside it");
-            diag.emit()
-        }
-        hir::MatchSource::IfLetGuardDesugar => {
-            let mut diag = lint.build("irrefutable `if let` guard pattern");
-            diag.note("this pattern will always match, so the guard is useless");
-            diag.help("consider removing the guard and adding a `let` inside the match arm");
-            diag.emit()
-        }
-        _ => {
-            bug!(
-                "expected `if let`, `while let`, or `if let` guard HIR match source, found {:?}",
-                source,
-            )
-        }
+    tcx.struct_span_lint_hir(IRREFUTABLE_LET_PATTERNS, id, span, |lint| {
+        let mut diag = match source {
+            hir::MatchSource::IfLetDesugar { .. } => {
+                let mut diag = lint.build("irrefutable `if let` pattern");
+                diag.span_label(span, "this pattern will always match, so the `if let` is useless");
+                diag.help("consider replacing the `if let` with a `let`");
+                diag
+            }
+            hir::MatchSource::WhileLetDesugar { .. } => {
+                let mut diag = lint.build("irrefutable `while let` pattern");
+                diag.span_label(span, "this pattern will always match, so the loop will never exit");
+                diag.help("consider instead using a `loop { ... }` with a `let` inside it");
+                diag
+            }
+            hir::MatchSource::IfLetGuardDesugar { .. }=> {
+                let mut diag = lint.build("irrefutable `if let` guard pattern");
+                diag.span_label(span, "this pattern will always match, so the guard is useless");
+                diag.help("consider removing the guard and adding a `let` inside the match arm");
+                diag
+            }
+            _ => {
+                bug!(
+                    "expected `if let`, `while let`, or `if let` guard HIR match source, found {:?}",
+                    source,
+                )
+            }
+        };
+        diag.help(
+            "for more information, visit \
+             <https://doc.rust-lang.org/book/ch18-02-refutability.html>",
+        );
+        diag.emit();
     });
 }
 
@@ -398,14 +405,20 @@ fn check_if_let_guard<'p, 'tcx>(
     cx: &mut MatchCheckCtxt<'p, 'tcx>,
     pat: &'p super::Pat<'tcx>,
     pat_id: HirId,
+    let_span: Span,
 ) {
     let arms = [MatchArm { pat, hir_id: pat_id, has_guard: false }];
     let report = compute_match_usefulness(&cx, &arms, pat_id, pat.ty);
-    report_arm_reachability(&cx, &report, hir::MatchSource::IfLetGuardDesugar);
+    report_arm_reachability(&cx, &report, hir::MatchSource::IfLetGuardDesugar { let_span });
 
     if report.non_exhaustiveness_witnesses.is_empty() {
-        // The match is exhaustive, i.e. the `if let` pattern is irrefutable.
-        irrefutable_let_pattern(cx.tcx, pat.span, pat_id, hir::MatchSource::IfLetGuardDesugar)
+        // The match is exhaustive, i.e. the if let pattern is irrefutable.
+        irrefutable_let_pattern(
+            cx.tcx,
+            let_span,
+            pat_id,
+            hir::MatchSource::IfLetGuardDesugar { let_span },
+        )
     }
 }
 
@@ -423,20 +436,21 @@ fn report_arm_reachability<'p, 'tcx>(
                 match source {
                     hir::MatchSource::WhileDesugar => bug!(),
 
-                    hir::MatchSource::IfLetDesugar { .. } | hir::MatchSource::WhileLetDesugar => {
+                    hir::MatchSource::IfLetDesugar { let_span, .. }
+                    | hir::MatchSource::WhileLetDesugar { let_span } => {
                         // Check which arm we're on.
                         match arm_index {
                             // The arm with the user-specified pattern.
-                            0 => unreachable_pattern(cx.tcx, arm.pat.span, arm.hir_id, None),
+                            0 => unreachable_pattern(cx.tcx, let_span, arm.hir_id, None),
                             // The arm with the wildcard pattern.
-                            1 => irrefutable_let_pattern(cx.tcx, arm.pat.span, arm.hir_id, source),
+                            1 => irrefutable_let_pattern(cx.tcx, let_span, arm.hir_id, source),
                             _ => bug!(),
                         }
                     }
 
-                    hir::MatchSource::IfLetGuardDesugar => {
+                    hir::MatchSource::IfLetGuardDesugar { let_span } => {
                         assert_eq!(arm_index, 0);
-                        unreachable_pattern(cx.tcx, arm.pat.span, arm.hir_id, None);
+                        unreachable_pattern(cx.tcx, let_span, arm.hir_id, None);
                     }
 
                     hir::MatchSource::ForLoopDesugar | hir::MatchSource::Normal => {
