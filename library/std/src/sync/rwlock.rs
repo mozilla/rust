@@ -5,6 +5,7 @@ use crate::cell::UnsafeCell;
 use crate::fmt;
 use crate::mem;
 use crate::ops::{Deref, DerefMut};
+use crate::pin::Pin;
 use crate::ptr;
 use crate::sys_common::poison::{self, LockResult, TryLockError, TryLockResult};
 use crate::sys_common::rwlock as sys;
@@ -66,7 +67,7 @@ use crate::sys_common::rwlock as sys;
 /// [`Mutex`]: super::Mutex
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct RwLock<T: ?Sized> {
-    inner: Box<sys::RWLock>,
+    inner: Pin<Box<sys::RWLock>>,
     poison: poison::Flag,
     data: UnsafeCell<T>,
 }
@@ -130,7 +131,7 @@ impl<T> RwLock<T> {
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn new(t: T) -> RwLock<T> {
         RwLock {
-            inner: box sys::RWLock::new(),
+            inner: Box::pin(sys::RWLock::new()),
             poison: poison::Flag::new(),
             data: UnsafeCell::new(t),
         }
@@ -180,10 +181,9 @@ impl<T: ?Sized> RwLock<T> {
     #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn read(&self) -> LockResult<RwLockReadGuard<'_, T>> {
-        unsafe {
-            self.inner.read();
-            RwLockReadGuard::new(self)
-        }
+        self.inner.as_ref().read();
+        // SAFETY: We've gotten a read-lock on the rwlock.
+        unsafe { RwLockReadGuard::new(self) }
     }
 
     /// Attempts to acquire this rwlock with shared read access.
@@ -219,12 +219,11 @@ impl<T: ?Sized> RwLock<T> {
     #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn try_read(&self) -> TryLockResult<RwLockReadGuard<'_, T>> {
-        unsafe {
-            if self.inner.try_read() {
-                Ok(RwLockReadGuard::new(self)?)
-            } else {
-                Err(TryLockError::WouldBlock)
-            }
+        if self.inner.as_ref().try_read() {
+            // SAFETY: We've gotten a read-lock on the rwlock.
+            unsafe { Ok(RwLockReadGuard::new(self)?) }
+        } else {
+            Err(TryLockError::WouldBlock)
         }
     }
 
@@ -262,10 +261,9 @@ impl<T: ?Sized> RwLock<T> {
     #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn write(&self) -> LockResult<RwLockWriteGuard<'_, T>> {
-        unsafe {
-            self.inner.write();
-            RwLockWriteGuard::new(self)
-        }
+        self.inner.as_ref().write();
+        // SAFETY: We've gotten a write-lock on the rwlock.
+        unsafe { RwLockWriteGuard::new(self) }
     }
 
     /// Attempts to lock this rwlock with exclusive write access.
@@ -301,12 +299,11 @@ impl<T: ?Sized> RwLock<T> {
     #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn try_write(&self) -> TryLockResult<RwLockWriteGuard<'_, T>> {
-        unsafe {
-            if self.inner.try_write() {
-                Ok(RwLockWriteGuard::new(self)?)
-            } else {
-                Err(TryLockError::WouldBlock)
-            }
+        if self.inner.as_ref().try_write() {
+            // SAFETY: We've gotten a write-lock on the rwlock.
+            unsafe { Ok(RwLockWriteGuard::new(self)?) }
+        } else {
+            Err(TryLockError::WouldBlock)
         }
     }
 
@@ -376,7 +373,6 @@ impl<T: ?Sized> RwLock<T> {
                 (ptr::read(inner), ptr::read(poison), ptr::read(data))
             };
             mem::forget(self);
-            inner.destroy(); // Keep in sync with the `Drop` impl.
             drop(inner);
 
             poison::map_result(poison.borrow(), |_| data.into_inner())
@@ -408,14 +404,6 @@ impl<T: ?Sized> RwLock<T> {
     pub fn get_mut(&mut self) -> LockResult<&mut T> {
         let data = self.data.get_mut();
         poison::map_result(self.poison.borrow(), |_| data)
-    }
-}
-
-#[stable(feature = "rust1", since = "1.0.0")]
-unsafe impl<#[may_dangle] T: ?Sized> Drop for RwLock<T> {
-    fn drop(&mut self) {
-        // IMPORTANT: This code needs to be kept in sync with `RwLock::into_inner`.
-        unsafe { self.inner.destroy() }
     }
 }
 
@@ -526,8 +514,10 @@ impl<T: ?Sized> DerefMut for RwLockWriteGuard<'_, T> {
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<T: ?Sized> Drop for RwLockReadGuard<'_, T> {
     fn drop(&mut self) {
+        // SAFETY: The fact that we have a RwLockReadGuard proves this thread
+        // has this rwlock read-locked.
         unsafe {
-            self.lock.inner.read_unlock();
+            self.lock.inner.as_ref().read_unlock();
         }
     }
 }
@@ -536,8 +526,10 @@ impl<T: ?Sized> Drop for RwLockReadGuard<'_, T> {
 impl<T: ?Sized> Drop for RwLockWriteGuard<'_, T> {
     fn drop(&mut self) {
         self.lock.poison.done(&self.poison);
+        // SAFETY: The fact that we have a RwLockWriteGuard proves this thread
+        // has this rwlock write-locked.
         unsafe {
-            self.lock.inner.write_unlock();
+            self.lock.inner.as_ref().write_unlock();
         }
     }
 }
