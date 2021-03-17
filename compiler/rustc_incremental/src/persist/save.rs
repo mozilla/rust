@@ -42,6 +42,26 @@ pub fn save_dep_graph(tcx: TyCtxt<'_>) {
         join(
             move || {
                 sess.time("incr_comp_persist_result_cache", || {
+                    // Register any dep nodes that we reused from the previous session,
+                    // but didn't `DepNode::construct` in this session. This ensures
+                    // that their `DefPathHash` to `RawDefId` mappings are registered
+                    // in 'latest_foreign_def_path_hashes' if necessary, since that
+                    // normally happens in `DepNode::construct`.
+                    tcx.dep_graph.register_reused_dep_nodes(tcx);
+
+                    // Load everything into memory so we can write it out to the on-disk
+                    // cache. The vast majority of cacheable query results should already
+                    // be in memory, so this should be a cheap operation.
+                    // Do this *before* we clone 'latest_foreign_def_path_hashes', since
+                    // loading existing queries may cause us to create new DepNodes, which
+                    // may in turn end up invoking `store_foreign_def_id_hash`
+                    tcx.queries.exec_cache_promotions(tcx);
+
+                    // Drop the memory map so that we can remove the file and write to it.
+                    if let Some(odc) = &tcx.on_disk_cache {
+                        odc.drop_serialized_data();
+                    }
+
                     file_format::save_in(sess, query_cache_path, "query cache", |e| {
                         encode_query_cache(tcx, e)
                     });
