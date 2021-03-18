@@ -14,10 +14,12 @@ error[E0596]: cannot borrow `self` as mutable, as it is not declared as mutable
   --> $DIR/issue-51191.rs:6:9
    |
 LL |         (&mut self).bar();
-   |         ^^^^^^^^^^^
-   |         |
-   |         cannot borrow as mutable
-   |         try removing `&mut` here
+   |         ^^^^^^^^^^^ cannot borrow as mutable
+   |
+help: consider making the binding mutable
+   |
+LL |     fn bar(mut self: &mut Self) {
+   |            ^^^
 
 error[E0596]: cannot borrow `self` as mutable, as it is not declared as mutable
   --> $DIR/issue-51191.rs:11:9

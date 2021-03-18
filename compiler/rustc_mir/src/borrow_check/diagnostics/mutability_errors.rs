@@ -6,7 +6,9 @@ use rustc_middle::mir::{Mutability, Place, PlaceRef, ProjectionElem};
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_middle::{
     hir::place::PlaceBase,
-    mir::{self, ClearCrossCrate, Local, LocalDecl, LocalInfo, Location},
+    mir::{
+        self, BindingForm, ClearCrossCrate, ImplicitSelfKind, Local, LocalDecl, LocalInfo, Location,
+    },
 };
 use rustc_span::source_map::DesugaringKind;
 use rustc_span::symbol::{kw, Symbol};
@@ -240,7 +242,25 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
                     .unwrap_or(false) =>
             {
                 err.span_label(span, format!("cannot {ACT}", ACT = act));
-                err.span_label(span, "try removing `&mut` here");
+                let decl = &self.body.local_decls[local];
+                debug!(?decl);
+                if decl.mutability == Mutability::Not
+                    && !matches!(
+                        decl.local_info,
+                        Some(box LocalInfo::User(ClearCrossCrate::Set(BindingForm::ImplicitSelf(
+                            ImplicitSelfKind::MutRef
+                        ))))
+                    )
+                {
+                    err.span_suggestion_verbose(
+                        decl.source_info.span.shrink_to_lo(),
+                        "consider making the binding mutable",
+                        "mut ".to_string(),
+                        Applicability::MachineApplicable,
+                    );
+                } else {
+                    err.span_label(span, "try removing `&mut` here");
+                }
             }
 
             // We want to suggest users use `let mut` for local (user
