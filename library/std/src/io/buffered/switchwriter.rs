@@ -7,9 +7,9 @@ use crate::io::{self, buffered::LineWriterShim, BufWriter, IoSlice, Write};
 pub enum BufferMode {
     /// Immediate: forward writes directly to the underlying writer. In some
     /// cases, a writer may buffer temporarily to reduce the number of
-    /// underlying writes (for instance, when processing a formatted write),
-    /// but even in this case the formatted buffer will always be forwarded
-    /// immediately.
+    /// underlying writes (for instance, when processing a formatted write!(),
+    /// which makes several tiny writes), but even in this case the formatted
+    /// buffer will always be forwarded immediately.
     Immediate,
 
     /// Block buffering: buffer writes until the buffer is full, then forward

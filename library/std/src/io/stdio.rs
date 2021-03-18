@@ -490,9 +490,6 @@ impl fmt::Debug for StdinLock<'_> {
 /// [`io::stdout`]: stdout
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct Stdout {
-    // FIXME: this should be LineWriter or BufWriter depending on the state of
-    //        stdout (tty or not). Note that if this is not line buffered it
-    //        should also flush-on-panic or some form of flush-on-abort.
     inner: Pin<&'static ReentrantMutex<RefCell<SwitchWriter<StdoutRaw>>>>,
 }
 
@@ -556,14 +553,12 @@ pub fn stdout() -> Stdout {
 
     fn cleanup() {
         if let Some(instance) = INSTANCE.get() {
-            // Flush the data and disable buffering during shutdown
-            // by replacing the line writer by one with zero
-            // buffering capacity.
+            // Disable buffering during shutdown
             // We use try_lock() instead of lock(), because someone
             // might have leaked a StdoutLock, which would
             // otherwise cause a deadlock here.
             if let Some(lock) = Pin::static_ref(instance).try_lock() {
-                *lock.borrow_mut() = SwitchWriter::with_capacity(0, stdout_raw());
+                lock.set_buffer_mode(BufferMode::Immediate)
             }
         }
     }
