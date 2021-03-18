@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use crate::cache::{Interned, INTERNER};
-use crate::flags::Flags;
 pub use crate::flags::Subcommand;
+use crate::flags::{Color, Flags};
 use crate::util::exe;
 use build_helper::t;
 use merge::Merge;
@@ -51,6 +51,7 @@ pub struct Config {
     pub submodules: bool,
     pub fast_submodules: bool,
     pub compiler_docs: bool,
+    pub docs_minification: bool,
     pub docs: bool,
     pub locked_deps: bool,
     pub vendor: bool,
@@ -67,6 +68,7 @@ pub struct Config {
     pub json_output: bool,
     pub test_compare_mode: bool,
     pub llvm_libunwind: Option<LlvmLibunwind>,
+    pub color: Color,
 
     pub on_fail: Option<String>,
     pub stage: u32,
@@ -79,6 +81,7 @@ pub struct Config {
     pub cmd: Subcommand,
     pub incremental: bool,
     pub dry_run: bool,
+    pub download_rustc: bool,
 
     pub deny_warnings: bool,
     pub backtrace_on_ice: bool,
@@ -99,6 +102,7 @@ pub struct Config {
     pub llvm_version_suffix: Option<String>,
     pub llvm_use_linker: Option<String>,
     pub llvm_allow_old_toolchain: Option<bool>,
+    pub llvm_polly: Option<bool>,
     pub llvm_from_ci: bool,
 
     pub use_lld: bool,
@@ -121,6 +125,7 @@ pub struct Config {
     pub rust_debuginfo_level_std: u32,
     pub rust_debuginfo_level_tools: u32,
     pub rust_debuginfo_level_tests: u32,
+    pub rust_run_dsymutil: bool,
     pub rust_rpath: bool,
     pub rustc_parallel: bool,
     pub rustc_default_linker: Option<String>,
@@ -131,6 +136,8 @@ pub struct Config {
     pub rust_thin_lto_import_instr_limit: Option<u32>,
     pub rust_remap_debuginfo: bool,
     pub rust_new_symbol_mangling: bool,
+    pub rust_profile_use: Option<String>,
+    pub rust_profile_generate: Option<String>,
 
     pub build: TargetSelection,
     pub hosts: Vec<TargetSelection>,
@@ -143,6 +150,7 @@ pub struct Config {
     pub dist_sign_folder: Option<PathBuf>,
     pub dist_upload_addr: Option<String>,
     pub dist_gpg_password_file: Option<PathBuf>,
+    pub dist_compression_formats: Option<Vec<String>>,
 
     // libstd features
     pub backtrace: bool, // support for RUST_BACKTRACE
@@ -150,9 +158,11 @@ pub struct Config {
     // misc
     pub low_priority: bool,
     pub channel: String,
+    pub description: Option<String>,
     pub verbose_tests: bool,
     pub save_toolstates: Option<PathBuf>,
     pub print_step_timings: bool,
+    pub print_step_rusage: bool,
     pub missing_tools: bool,
 
     // Fallback musl-root for all targets
@@ -166,6 +176,7 @@ pub struct Config {
     pub mandir: Option<PathBuf>,
     pub codegen_tests: bool,
     pub nodejs: Option<PathBuf>,
+    pub npm: Option<PathBuf>,
     pub gdb: Option<PathBuf>,
     pub python: Option<PathBuf>,
     pub cargo_native_static: bool,
@@ -278,6 +289,8 @@ pub struct Target {
     pub ranlib: Option<PathBuf>,
     pub linker: Option<PathBuf>,
     pub ndk: Option<PathBuf>,
+    pub sanitizers: Option<bool>,
+    pub profiler: Option<bool>,
     pub crt_static: Option<bool>,
     pub musl_root: Option<PathBuf>,
     pub musl_libdir: Option<PathBuf>,
@@ -326,7 +339,7 @@ impl Merge for TomlConfig {
                     *x = Some(new);
                 }
             }
-        };
+        }
         do_merge(&mut self.build, build);
         do_merge(&mut self.install, install);
         do_merge(&mut self.llvm, llvm);
@@ -350,10 +363,12 @@ struct Build {
     rustfmt: Option<PathBuf>,
     docs: Option<bool>,
     compiler_docs: Option<bool>,
+    docs_minification: Option<bool>,
     submodules: Option<bool>,
     fast_submodules: Option<bool>,
     gdb: Option<String>,
     nodejs: Option<String>,
+    npm: Option<String>,
     python: Option<String>,
     locked_deps: Option<bool>,
     vendor: Option<bool>,
@@ -368,6 +383,8 @@ struct Build {
     configure_args: Option<Vec<String>>,
     local_rebuild: Option<bool>,
     print_step_timings: Option<bool>,
+    print_step_rusage: Option<bool>,
+    check_stage: Option<u32>,
     doc_stage: Option<u32>,
     build_stage: Option<u32>,
     test_stage: Option<u32>,
@@ -418,6 +435,7 @@ struct Llvm {
     use_libcxx: Option<bool>,
     use_linker: Option<String>,
     allow_old_toolchain: Option<bool>,
+    polly: Option<bool>,
     download_ci_llvm: Option<StringOrBool>,
 }
 
@@ -429,6 +447,7 @@ struct Dist {
     upload_addr: Option<String>,
     src_tarball: Option<bool>,
     missing_tools: Option<bool>,
+    compression_formats: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -460,11 +479,13 @@ struct Rust {
     debuginfo_level_std: Option<u32>,
     debuginfo_level_tools: Option<u32>,
     debuginfo_level_tests: Option<u32>,
+    run_dsymutil: Option<bool>,
     backtrace: Option<bool>,
     incremental: Option<bool>,
     parallel_compiler: Option<bool>,
     default_linker: Option<String>,
     channel: Option<String>,
+    description: Option<String>,
     musl_root: Option<String>,
     rpath: Option<bool>,
     verbose_tests: Option<bool>,
@@ -487,6 +508,9 @@ struct Rust {
     llvm_libunwind: Option<String>,
     control_flow_guard: Option<bool>,
     new_symbol_mangling: Option<bool>,
+    profile_generate: Option<String>,
+    profile_use: Option<String>,
+    download_rustc: Option<bool>,
 }
 
 /// TOML representation of how each build target is configured.
@@ -501,6 +525,8 @@ struct TomlTarget {
     llvm_config: Option<String>,
     llvm_filecheck: Option<String>,
     android_ndk: Option<String>,
+    sanitizers: Option<bool>,
+    profiler: Option<bool>,
     crt_static: Option<bool>,
     musl_root: Option<String>,
     musl_libdir: Option<String>,
@@ -533,6 +559,7 @@ impl Config {
         config.submodules = true;
         config.fast_submodules = true;
         config.docs = true;
+        config.docs_minification = true;
         config.rust_rpath = true;
         config.channel = "dev".to_string();
         config.codegen_tests = true;
@@ -542,7 +569,7 @@ impl Config {
         config.deny_warnings = true;
         config.missing_tools = false;
 
-        // set by bootstrap.py
+        // set by build.rs
         config.build = TargetSelection::from_user(&env!("BUILD_TRIPLE"));
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         // Undo `src/bootstrap`
@@ -571,6 +598,7 @@ impl Config {
         config.keep_stage = flags.keep_stage;
         config.keep_stage_std = flags.keep_stage_std;
         config.bindir = "bin".into(); // default
+        config.color = flags.color;
         if let Some(value) = flags.deny_warnings {
             config.deny_warnings = value;
         }
@@ -633,10 +661,12 @@ impl Config {
         };
 
         config.nodejs = build.nodejs.map(PathBuf::from);
+        config.npm = build.npm.map(PathBuf::from);
         config.gdb = build.gdb.map(PathBuf::from);
         config.python = build.python.map(PathBuf::from);
         set(&mut config.low_priority, build.low_priority);
         set(&mut config.compiler_docs, build.compiler_docs);
+        set(&mut config.docs_minification, build.docs_minification);
         set(&mut config.docs, build.docs);
         set(&mut config.submodules, build.submodules);
         set(&mut config.fast_submodules, build.fast_submodules);
@@ -655,9 +685,11 @@ impl Config {
         set(&mut config.configure_args, build.configure_args);
         set(&mut config.local_rebuild, build.local_rebuild);
         set(&mut config.print_step_timings, build.print_step_timings);
+        set(&mut config.print_step_rusage, build.print_step_rusage);
 
         // See https://github.com/rust-lang/compiler-team/issues/326
         config.stage = match config.cmd {
+            Subcommand::Check { .. } => flags.stage.or(build.check_stage).unwrap_or(0),
             Subcommand::Doc { .. } => flags.stage.or(build.doc_stage).unwrap_or(0),
             Subcommand::Build { .. } => flags.stage.or(build.build_stage).unwrap_or(1),
             Subcommand::Test { .. } => flags.stage.or(build.test_stage).unwrap_or(1),
@@ -667,7 +699,6 @@ impl Config {
             // These are all bootstrap tools, which don't depend on the compiler.
             // The stage we pass shouldn't matter, but use 0 just in case.
             Subcommand::Clean { .. }
-            | Subcommand::Check { .. }
             | Subcommand::Clippy { .. }
             | Subcommand::Fix { .. }
             | Subcommand::Run { .. }
@@ -762,6 +793,7 @@ impl Config {
             set(&mut config.llvm_use_libcxx, llvm.use_libcxx);
             config.llvm_use_linker = llvm.use_linker.clone();
             config.llvm_allow_old_toolchain = llvm.allow_old_toolchain;
+            config.llvm_polly = llvm.polly;
             config.llvm_from_ci = match llvm.download_ci_llvm {
                 Some(StringOrBool::String(s)) => {
                     assert!(s == "if-available", "unknown option `{}` for download-ci-llvm", s);
@@ -795,9 +827,12 @@ impl Config {
                 check_ci_llvm!(llvm.use_libcxx);
                 check_ci_llvm!(llvm.use_linker);
                 check_ci_llvm!(llvm.allow_old_toolchain);
+                check_ci_llvm!(llvm.polly);
 
-                // CI-built LLVM is shared
-                config.llvm_link_shared = true;
+                // CI-built LLVM can be either dynamic or static.
+                let ci_llvm = config.out.join(&*config.build.triple).join("ci-llvm");
+                let link_type = t!(std::fs::read_to_string(ci_llvm.join("link-type.txt")));
+                config.llvm_link_shared = link_type == "dynamic";
             }
 
             if config.llvm_thin_lto {
@@ -818,6 +853,7 @@ impl Config {
             debuginfo_level_std = rust.debuginfo_level_std;
             debuginfo_level_tools = rust.debuginfo_level_tools;
             debuginfo_level_tests = rust.debuginfo_level_tests;
+            config.rust_run_dsymutil = rust.run_dsymutil.unwrap_or(false);
             optimize = rust.optimize;
             ignore_git = rust.ignore_git;
             set(&mut config.rust_new_symbol_mangling, rust.new_symbol_mangling);
@@ -831,6 +867,7 @@ impl Config {
                 .map(|v| v.parse().expect("failed to parse rust.llvm-libunwind"));
             set(&mut config.backtrace, rust.backtrace);
             set(&mut config.channel, rust.channel);
+            config.description = rust.description;
             set(&mut config.rust_dist_src, rust.dist_src);
             set(&mut config.verbose_tests, rust.verbose_tests);
             // in the case "false" is set explicitly, do not overwrite the command line args
@@ -858,6 +895,12 @@ impl Config {
 
             config.rust_codegen_units = rust.codegen_units.map(threads_from_config);
             config.rust_codegen_units_std = rust.codegen_units_std.map(threads_from_config);
+            config.rust_profile_use = flags.rust_profile_use.or(rust.profile_use);
+            config.rust_profile_generate = flags.rust_profile_generate.or(rust.profile_generate);
+            config.download_rustc = rust.download_rustc.unwrap_or(false);
+        } else {
+            config.rust_profile_use = flags.rust_profile_use;
+            config.rust_profile_generate = flags.rust_profile_generate;
         }
 
         if let Some(t) = toml.target {
@@ -886,6 +929,8 @@ impl Config {
                 target.musl_libdir = cfg.musl_libdir.map(PathBuf::from);
                 target.wasi_root = cfg.wasi_root.map(PathBuf::from);
                 target.qemu_rootfs = cfg.qemu_rootfs.map(PathBuf::from);
+                target.sanitizers = cfg.sanitizers;
+                target.profiler = cfg.profiler;
 
                 config.target_config.insert(TargetSelection::from_user(&triple), target);
             }
@@ -909,15 +954,23 @@ impl Config {
             config.dist_sign_folder = t.sign_folder.map(PathBuf::from);
             config.dist_gpg_password_file = t.gpg_password_file.map(PathBuf::from);
             config.dist_upload_addr = t.upload_addr;
+            config.dist_compression_formats = t.compression_formats;
             set(&mut config.rust_dist_src, t.src_tarball);
             set(&mut config.missing_tools, t.missing_tools);
         }
 
-        // Cargo does not provide a RUSTFMT environment variable, so we
-        // synthesize it manually. Note that we also later check the config.toml
-        // and set this to that path if necessary.
-        let rustfmt = config.initial_rustc.with_file_name(exe("rustfmt", config.build));
-        config.initial_rustfmt = if rustfmt.exists() { Some(rustfmt) } else { None };
+        config.initial_rustfmt = config.initial_rustfmt.or_else({
+            let build = config.build;
+            let initial_rustc = &config.initial_rustc;
+
+            move || {
+                // Cargo does not provide a RUSTFMT environment variable, so we
+                // synthesize it manually.
+                let rustfmt = initial_rustc.with_file_name(exe("rustfmt", build));
+
+                if rustfmt.exists() { Some(rustfmt) } else { None }
+            }
+        });
 
         // Now that we've reached the end of our configuration, infer the
         // default values for all options that we haven't otherwise stored yet.
@@ -986,6 +1039,22 @@ impl Config {
 
     pub fn very_verbose(&self) -> bool {
         self.verbose > 1
+    }
+
+    pub fn sanitizers_enabled(&self, target: TargetSelection) -> bool {
+        self.target_config.get(&target).map(|t| t.sanitizers).flatten().unwrap_or(self.sanitizers)
+    }
+
+    pub fn any_sanitizers_enabled(&self) -> bool {
+        self.target_config.values().any(|t| t.sanitizers == Some(true)) || self.sanitizers
+    }
+
+    pub fn profiler_enabled(&self, target: TargetSelection) -> bool {
+        self.target_config.get(&target).map(|t| t.profiler).flatten().unwrap_or(self.profiler)
+    }
+
+    pub fn any_profiler_enabled(&self) -> bool {
+        self.target_config.values().any(|t| t.profiler == Some(true)) || self.profiler
     }
 
     pub fn llvm_enabled(&self) -> bool {

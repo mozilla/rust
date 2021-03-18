@@ -401,9 +401,7 @@ impl<'a> Arguments<'a> {
     /// # Examples
     ///
     /// ```rust
-    /// #![feature(fmt_as_str)]
-    ///
-    /// use core::fmt::Arguments;
+    /// use std::fmt::Arguments;
     ///
     /// fn write_str(_: &str) { /* ... */ }
     ///
@@ -417,13 +415,11 @@ impl<'a> Arguments<'a> {
     /// ```
     ///
     /// ```rust
-    /// #![feature(fmt_as_str)]
-    ///
     /// assert_eq!(format_args!("hello").as_str(), Some("hello"));
     /// assert_eq!(format_args!("").as_str(), Some(""));
     /// assert_eq!(format_args!("{}", 1).as_str(), None);
     /// ```
-    #[unstable(feature = "fmt_as_str", issue = "74442")]
+    #[stable(feature = "fmt_as_str", since = "1.52.0")]
     #[inline]
     pub fn as_str(&self) -> Option<&'static str> {
         match (self.pieces, self.args) {
@@ -456,7 +452,9 @@ impl Display for Arguments<'_> {
 ///
 /// When used with the alternate format specifier `#?`, the output is pretty-printed.
 ///
-/// For more information on formatters, see [the module-level documentation][self].
+/// For more information on formatters, see [the module-level documentation][module].
+///
+/// [module]: ../../std/fmt/index.html
 ///
 /// This trait can be used with `#[derive]` if all fields implement `Debug`. When
 /// `derive`d for structs, it will use the name of the `struct`, then `{`, then a
@@ -602,7 +600,9 @@ pub use macros::Debug;
 /// `Display` is similar to [`Debug`], but `Display` is for user-facing
 /// output, and so cannot be derived.
 ///
-/// For more information on formatters, see [the module-level documentation][self].
+/// For more information on formatters, see [the module-level documentation][module].
+///
+/// [module]: ../../std/fmt/index.html
 ///
 /// # Examples
 ///
@@ -674,7 +674,9 @@ pub trait Display {
 ///
 /// The alternate flag, `#`, adds a `0o` in front of the output.
 ///
-/// For more information on formatters, see [the module-level documentation][self].
+/// For more information on formatters, see [the module-level documentation][module].
+///
+/// [module]: ../../std/fmt/index.html
 ///
 /// # Examples
 ///
@@ -726,7 +728,9 @@ pub trait Octal {
 ///
 /// The alternate flag, `#`, adds a `0b` in front of the output.
 ///
-/// For more information on formatters, see [the module-level documentation][self].
+/// For more information on formatters, see [the module-level documentation][module].
+///
+/// [module]: ../../std/fmt/index.html
 ///
 /// # Examples
 ///
@@ -782,7 +786,9 @@ pub trait Binary {
 ///
 /// The alternate flag, `#`, adds a `0x` in front of the output.
 ///
-/// For more information on formatters, see [the module-level documentation][self].
+/// For more information on formatters, see [the module-level documentation][module].
+///
+/// [module]: ../../std/fmt/index.html
 ///
 /// # Examples
 ///
@@ -835,7 +841,9 @@ pub trait LowerHex {
 ///
 /// The alternate flag, `#`, adds a `0x` in front of the output.
 ///
-/// For more information on formatters, see [the module-level documentation][self].
+/// For more information on formatters, see [the module-level documentation][module].
+///
+/// [module]: ../../std/fmt/index.html
 ///
 /// # Examples
 ///
@@ -883,7 +891,9 @@ pub trait UpperHex {
 /// The `Pointer` trait should format its output as a memory location. This is commonly presented
 /// as hexadecimal.
 ///
-/// For more information on formatters, see [the module-level documentation][self].
+/// For more information on formatters, see [the module-level documentation][module].
+///
+/// [module]: ../../std/fmt/index.html
 ///
 /// # Examples
 ///
@@ -932,7 +942,9 @@ pub trait Pointer {
 ///
 /// The `LowerExp` trait should format its output in scientific notation with a lower-case `e`.
 ///
-/// For more information on formatters, see [the module-level documentation][self].
+/// For more information on formatters, see [the module-level documentation][module].
+///
+/// [module]: ../../std/fmt/index.html
 ///
 /// # Examples
 ///
@@ -981,7 +993,9 @@ pub trait LowerExp {
 ///
 /// The `UpperExp` trait should format its output in scientific notation with an upper-case `E`.
 ///
-/// For more information on formatters, see [the module-level documentation][self].
+/// For more information on formatters, see [the module-level documentation][module].
+///
+/// [module]: ../../std/fmt/index.html
 ///
 /// # Examples
 ///
@@ -1084,7 +1098,9 @@ pub fn write(output: &mut dyn Write, args: Arguments<'_>) -> Result {
             // a string piece.
             for (arg, piece) in fmt.iter().zip(args.pieces.iter()) {
                 formatter.buf.write_str(*piece)?;
-                run(&mut formatter, arg, &args.args)?;
+                // SAFETY: arg and args.args come from the same Arguments,
+                // which guarantees the indexes are always within bounds.
+                unsafe { run(&mut formatter, arg, &args.args) }?;
                 idx += 1;
             }
         }
@@ -1098,25 +1114,37 @@ pub fn write(output: &mut dyn Write, args: Arguments<'_>) -> Result {
     Ok(())
 }
 
-fn run(fmt: &mut Formatter<'_>, arg: &rt::v1::Argument, args: &[ArgumentV1<'_>]) -> Result {
+unsafe fn run(fmt: &mut Formatter<'_>, arg: &rt::v1::Argument, args: &[ArgumentV1<'_>]) -> Result {
     fmt.fill = arg.format.fill;
     fmt.align = arg.format.align;
     fmt.flags = arg.format.flags;
-    fmt.width = getcount(args, &arg.format.width);
-    fmt.precision = getcount(args, &arg.format.precision);
+    // SAFETY: arg and args come from the same Arguments,
+    // which guarantees the indexes are always within bounds.
+    unsafe {
+        fmt.width = getcount(args, &arg.format.width);
+        fmt.precision = getcount(args, &arg.format.precision);
+    }
 
     // Extract the correct argument
-    let value = args[arg.position];
+    debug_assert!(arg.position < args.len());
+    // SAFETY: arg and args come from the same Arguments,
+    // which guarantees its index is always within bounds.
+    let value = unsafe { args.get_unchecked(arg.position) };
 
     // Then actually do some printing
     (value.formatter)(value.value, fmt)
 }
 
-fn getcount(args: &[ArgumentV1<'_>], cnt: &rt::v1::Count) -> Option<usize> {
+unsafe fn getcount(args: &[ArgumentV1<'_>], cnt: &rt::v1::Count) -> Option<usize> {
     match *cnt {
         rt::v1::Count::Is(n) => Some(n),
         rt::v1::Count::Implied => None,
-        rt::v1::Count::Param(i) => args[i].as_usize(),
+        rt::v1::Count::Param(i) => {
+            debug_assert!(i < args.len());
+            // SAFETY: cnt and args come from the same Arguments,
+            // which guarantees this index is always within bounds.
+            unsafe { args.get_unchecked(i).as_usize() }
+        }
     }
 }
 
@@ -1182,7 +1210,7 @@ impl<'a> Formatter<'a> {
     /// ```
     /// use std::fmt;
     ///
-    /// struct Foo { nb: i32 };
+    /// struct Foo { nb: i32 }
     ///
     /// impl Foo {
     ///     fn new(nb: i32) -> Foo {
@@ -1541,7 +1569,7 @@ impl<'a> Formatter<'a> {
     ///     }
     /// }
     ///
-    /// // We set alignment to the left with ">".
+    /// // We set alignment to the right with ">".
     /// assert_eq!(&format!("{:G>3}", Foo), "GGG");
     /// assert_eq!(&format!("{:t>6}", Foo), "tttttt");
     /// ```

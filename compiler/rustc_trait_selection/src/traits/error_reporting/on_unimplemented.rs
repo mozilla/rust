@@ -36,7 +36,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
     ) -> Option<DefId> {
         let tcx = self.tcx;
         let param_env = obligation.param_env;
-        let trait_ref = tcx.erase_late_bound_regions(&trait_ref);
+        let trait_ref = tcx.erase_late_bound_regions(trait_ref);
         let trait_self_ty = trait_ref.self_ty();
 
         let mut self_match_impls = vec![];
@@ -200,27 +200,20 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             if let Some(def) = aty.ty_adt_def() {
                 // We also want to be able to select the array's type's original
                 // signature with no type arguments resolved
-                flags.push((
-                    sym::_Self,
-                    Some(format!("[{}]", self.tcx.type_of(def.did).to_string())),
-                ));
-                let tcx = self.tcx;
-                if let Some(len) = len.try_eval_usize(tcx, ty::ParamEnv::empty()) {
-                    flags.push((
-                        sym::_Self,
-                        Some(format!("[{}; {}]", self.tcx.type_of(def.did).to_string(), len)),
-                    ));
-                } else {
-                    flags.push((
-                        sym::_Self,
-                        Some(format!("[{}; _]", self.tcx.type_of(def.did).to_string())),
-                    ));
-                }
+                let type_string = self.tcx.type_of(def.did).to_string();
+                flags.push((sym::_Self, Some(format!("[{}]", type_string))));
+
+                let len = len.val.try_to_value().and_then(|v| v.try_to_machine_usize(self.tcx));
+                let string = match len {
+                    Some(n) => format!("[{}; {}]", type_string, n),
+                    None => format!("[{}; _]", type_string),
+                };
+                flags.push((sym::_Self, Some(string)));
             }
         }
         if let ty::Dynamic(traits, _) = self_ty.kind() {
-            for t in traits.skip_binder() {
-                if let ty::ExistentialPredicate::Trait(trait_ref) = t {
+            for t in traits.iter() {
+                if let ty::ExistentialPredicate::Trait(trait_ref) = t.skip_binder() {
                     flags.push((sym::_Self, Some(self.tcx.def_path_str(trait_ref.def_id))))
                 }
             }

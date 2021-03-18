@@ -165,7 +165,7 @@ pub(in crate::borrow_check) fn compute_regions<'cx, 'tcx>(
     flow_inits: &mut ResultsCursor<'cx, 'tcx, MaybeInitializedPlaces<'cx, 'tcx>>,
     move_data: &MoveData<'tcx>,
     borrow_set: &BorrowSet<'tcx>,
-    upvars: &[Upvar],
+    upvars: &[Upvar<'tcx>],
 ) -> NllOutput<'tcx> {
     let mut all_facts = AllFacts::enabled(infcx.tcx).then_some(AllFacts::default());
 
@@ -275,8 +275,8 @@ pub(in crate::borrow_check) fn compute_regions<'cx, 'tcx>(
     let polonius_output = all_facts.and_then(|all_facts| {
         if infcx.tcx.sess.opts.debugging_opts.nll_facts {
             let def_path = infcx.tcx.def_path(def_id);
-            let dir_path =
-                PathBuf::from("nll-facts").join(def_path.to_filename_friendly_no_crate());
+            let dir_path = PathBuf::from(&infcx.tcx.sess.opts.debugging_opts.nll_facts_dir)
+                .join(def_path.to_filename_friendly_no_crate());
             all_facts.write_to_dir(dir_path, location_table).unwrap();
         }
 

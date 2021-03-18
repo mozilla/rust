@@ -1,5 +1,6 @@
 //! impl char {}
 
+use crate::intrinsics::likely;
 use crate::slice;
 use crate::str::from_utf8_unchecked_mut;
 use crate::unicode::printable::is_printable;
@@ -109,8 +110,6 @@ impl char {
     /// `char`s. `from_u32()` will return `None` if the input is not a valid value
     /// for a `char`.
     ///
-    /// [`u32`]: primitive.u32.html
-    ///
     /// For an unsafe version of this function which ignores these checks, see
     /// [`from_u32_unchecked`].
     ///
@@ -158,8 +157,6 @@ impl char {
     /// However, the reverse is not true: not all valid [`u32`]s are valid
     /// `char`s. `from_u32_unchecked()` will ignore this, and blindly cast to
     /// `char`, possibly creating an invalid one.
-    ///
-    /// [`u32`]: primitive.u32.html
     ///
     /// # Safety
     ///
@@ -249,7 +246,7 @@ impl char {
     /// sixteen, hexadecimal, to give some common values. Arbitrary
     /// radices are supported.
     ///
-    /// Compared to `is_numeric()`, this function only recognizes the characters
+    /// Compared to [`is_numeric()`], this function only recognizes the characters
     /// `0-9`, `a-z` and `A-Z`.
     ///
     /// 'Digit' is defined to be only the following characters:
@@ -258,9 +255,9 @@ impl char {
     /// * `a-z`
     /// * `A-Z`
     ///
-    /// For a more comprehensive understanding of 'digit', see [`is_numeric`][is_numeric].
+    /// For a more comprehensive understanding of 'digit', see [`is_numeric()`].
     ///
-    /// [is_numeric]: #method.is_numeric
+    /// [`is_numeric()`]: #method.is_numeric
     ///
     /// # Panics
     ///
@@ -335,14 +332,11 @@ impl char {
     #[inline]
     pub fn to_digit(self, radix: u32) -> Option<u32> {
         assert!(radix <= 36, "to_digit: radix is too high (maximum 36)");
-
         // the code is split up here to improve execution speed for cases where
         // the `radix` is constant and 10 or smaller
-        let val = if radix <= 10 {
-            match self {
-                '0'..='9' => self as u32 - '0' as u32,
-                _ => return None,
-            }
+        let val = if likely(radix <= 10) {
+            // If not a digit, a number greater than radix will be created.
+            (self as u32).wrapping_sub('0' as u32)
         } else {
             match self {
                 '0'..='9' => self as u32 - '0' as u32,
@@ -483,9 +477,9 @@ impl char {
     /// * Any character in the 'printable ASCII' range `0x20` .. `0x7e`
     ///   inclusive is not escaped.
     /// * All other characters are given hexadecimal Unicode escapes; see
-    ///   [`escape_unicode`][escape_unicode].
+    ///   [`escape_unicode`].
     ///
-    /// [escape_unicode]: #method.escape_unicode
+    /// [`escape_unicode`]: #method.escape_unicode
     ///
     /// # Examples
     ///
@@ -503,7 +497,6 @@ impl char {
     /// ```
     /// println!("{}", '"'.escape_default());
     /// ```
-    ///
     ///
     /// Both are equivalent to:
     ///
@@ -576,18 +569,19 @@ impl char {
     /// assert_eq!(len, tokyo.len());
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[rustc_const_stable(feature = "const_char_len_utf", since = "1.52.0")]
     #[inline]
-    pub fn len_utf8(self) -> usize {
+    pub const fn len_utf8(self) -> usize {
         len_utf8(self as u32)
     }
 
     /// Returns the number of 16-bit code units this `char` would need if
     /// encoded in UTF-16.
     ///
-    /// See the documentation for [`len_utf8`] for more explanation of this
+    /// See the documentation for [`len_utf8()`] for more explanation of this
     /// concept. This function is a mirror, but for UTF-16 instead of UTF-8.
     ///
-    /// [`len_utf8`]: #method.len_utf8
+    /// [`len_utf8()`]: #method.len_utf8
     ///
     /// # Examples
     ///
@@ -601,8 +595,9 @@ impl char {
     /// assert_eq!(len, 2);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[rustc_const_stable(feature = "const_char_len_utf", since = "1.52.0")]
     #[inline]
-    pub fn len_utf16(self) -> usize {
+    pub const fn len_utf16(self) -> usize {
         let ch = self as u32;
         if (ch & 0xFFFF) == ch { 1 } else { 2 }
     }
@@ -1075,10 +1070,10 @@ impl char {
     /// ASCII letters 'a' to 'z' are mapped to 'A' to 'Z',
     /// but non-ASCII letters are unchanged.
     ///
-    /// To uppercase the value in-place, use [`make_ascii_uppercase`].
+    /// To uppercase the value in-place, use [`make_ascii_uppercase()`].
     ///
     /// To uppercase ASCII characters in addition to non-ASCII characters, use
-    /// [`to_uppercase`].
+    /// [`to_uppercase()`].
     ///
     /// # Examples
     ///
@@ -1090,12 +1085,17 @@ impl char {
     /// assert_eq!('❤', non_ascii.to_ascii_uppercase());
     /// ```
     ///
-    /// [`make_ascii_uppercase`]: #method.make_ascii_uppercase
-    /// [`to_uppercase`]: #method.to_uppercase
+    /// [`make_ascii_uppercase()`]: #method.make_ascii_uppercase
+    /// [`to_uppercase()`]: #method.to_uppercase
     #[stable(feature = "ascii_methods_on_intrinsics", since = "1.23.0")]
+    #[rustc_const_stable(feature = "const_ascii_methods_on_intrinsics", since = "1.52.0")]
     #[inline]
-    pub fn to_ascii_uppercase(&self) -> char {
-        if self.is_ascii() { (*self as u8).to_ascii_uppercase() as char } else { *self }
+    pub const fn to_ascii_uppercase(&self) -> char {
+        if self.is_ascii_lowercase() {
+            (*self as u8).ascii_change_case_unchecked() as char
+        } else {
+            *self
+        }
     }
 
     /// Makes a copy of the value in its ASCII lower case equivalent.
@@ -1103,10 +1103,10 @@ impl char {
     /// ASCII letters 'A' to 'Z' are mapped to 'a' to 'z',
     /// but non-ASCII letters are unchanged.
     ///
-    /// To lowercase the value in-place, use [`make_ascii_lowercase`].
+    /// To lowercase the value in-place, use [`make_ascii_lowercase()`].
     ///
     /// To lowercase ASCII characters in addition to non-ASCII characters, use
-    /// [`to_lowercase`].
+    /// [`to_lowercase()`].
     ///
     /// # Examples
     ///
@@ -1118,12 +1118,17 @@ impl char {
     /// assert_eq!('❤', non_ascii.to_ascii_lowercase());
     /// ```
     ///
-    /// [`make_ascii_lowercase`]: #method.make_ascii_lowercase
-    /// [`to_lowercase`]: #method.to_lowercase
+    /// [`make_ascii_lowercase()`]: #method.make_ascii_lowercase
+    /// [`to_lowercase()`]: #method.to_lowercase
     #[stable(feature = "ascii_methods_on_intrinsics", since = "1.23.0")]
+    #[rustc_const_stable(feature = "const_ascii_methods_on_intrinsics", since = "1.52.0")]
     #[inline]
-    pub fn to_ascii_lowercase(&self) -> char {
-        if self.is_ascii() { (*self as u8).to_ascii_lowercase() as char } else { *self }
+    pub const fn to_ascii_lowercase(&self) -> char {
+        if self.is_ascii_uppercase() {
+            (*self as u8).ascii_change_case_unchecked() as char
+        } else {
+            *self
+        }
     }
 
     /// Checks that two values are an ASCII case-insensitive match.
@@ -1142,8 +1147,9 @@ impl char {
     /// assert!(!upper_a.eq_ignore_ascii_case(&lower_z));
     /// ```
     #[stable(feature = "ascii_methods_on_intrinsics", since = "1.23.0")]
+    #[rustc_const_stable(feature = "const_ascii_methods_on_intrinsics", since = "1.52.0")]
     #[inline]
-    pub fn eq_ignore_ascii_case(&self, other: &char) -> bool {
+    pub const fn eq_ignore_ascii_case(&self, other: &char) -> bool {
         self.to_ascii_lowercase() == other.to_ascii_lowercase()
     }
 
@@ -1153,7 +1159,7 @@ impl char {
     /// but non-ASCII letters are unchanged.
     ///
     /// To return a new uppercased value without modifying the existing one, use
-    /// [`to_ascii_uppercase`].
+    /// [`to_ascii_uppercase()`].
     ///
     /// # Examples
     ///
@@ -1165,7 +1171,7 @@ impl char {
     /// assert_eq!('A', ascii);
     /// ```
     ///
-    /// [`to_ascii_uppercase`]: #method.to_ascii_uppercase
+    /// [`to_ascii_uppercase()`]: #method.to_ascii_uppercase
     #[stable(feature = "ascii_methods_on_intrinsics", since = "1.23.0")]
     #[inline]
     pub fn make_ascii_uppercase(&mut self) {
@@ -1178,7 +1184,7 @@ impl char {
     /// but non-ASCII letters are unchanged.
     ///
     /// To return a new lowercased value without modifying the existing one, use
-    /// [`to_ascii_lowercase`].
+    /// [`to_ascii_lowercase()`].
     ///
     /// # Examples
     ///
@@ -1190,7 +1196,7 @@ impl char {
     /// assert_eq!('a', ascii);
     /// ```
     ///
-    /// [`to_ascii_lowercase`]: #method.to_ascii_lowercase
+    /// [`to_ascii_lowercase()`]: #method.to_ascii_lowercase
     #[stable(feature = "ascii_methods_on_intrinsics", since = "1.23.0")]
     #[inline]
     pub fn make_ascii_lowercase(&mut self) {
@@ -1560,7 +1566,7 @@ impl char {
 }
 
 #[inline]
-fn len_utf8(code: u32) -> usize {
+const fn len_utf8(code: u32) -> usize {
     if code < MAX_ONE_B {
         1
     } else if code < MAX_TWO_B {

@@ -1,8 +1,8 @@
 use std::env;
 
-use crate::spec::{LinkArgs, TargetOptions};
+use crate::spec::{LinkArgs, SplitDebuginfo, TargetOptions};
 
-pub fn opts() -> TargetOptions {
+pub fn opts(os: &str) -> TargetOptions {
     // ELF TLS is only available in macOS 10.7+. If you try to compile for 10.6
     // either the linker will complain if it is used or the binary will end up
     // segfaulting at runtime when run on 10.6. Rust by default supports macOS
@@ -17,11 +17,13 @@ pub fn opts() -> TargetOptions {
     let version = macos_deployment_target();
 
     TargetOptions {
+        os: os.to_string(),
+        vendor: "apple".to_string(),
         // macOS has -dead_strip, which doesn't rely on function_sections
         function_sections: false,
         dynamic_linking: true,
         executables: true,
-        target_family: Some("unix".to_string()),
+        os_family: Some("unix".to_string()),
         is_like_osx: true,
         dwarf_version: Some(2),
         has_rpath: true,
@@ -33,6 +35,10 @@ pub fn opts() -> TargetOptions {
         abi_return_struct_as_int: true,
         emit_debug_gdb_scripts: false,
         eh_frame_header: false,
+
+        // The historical default for macOS targets is to run `dsymutil` which
+        // generates a packed version of debuginfo split from the main file.
+        split_debuginfo: SplitDebuginfo::Packed,
 
         // This environment variable is pretty magical but is intended for
         // producing deterministic builds. This was first discovered to be used
@@ -48,17 +54,16 @@ pub fn opts() -> TargetOptions {
     }
 }
 
-fn macos_deployment_target() -> (u32, u32) {
-    let deployment_target = env::var("MACOSX_DEPLOYMENT_TARGET").ok();
-    let version = deployment_target
+fn deployment_target(var_name: &str) -> Option<(u32, u32)> {
+    let deployment_target = env::var(var_name).ok();
+    deployment_target
         .as_ref()
-        .and_then(|s| {
-            let mut i = s.splitn(2, '.');
-            i.next().and_then(|a| i.next().map(|b| (a, b)))
-        })
-        .and_then(|(a, b)| a.parse::<u32>().and_then(|a| b.parse::<u32>().map(|b| (a, b))).ok());
+        .and_then(|s| s.split_once('.'))
+        .and_then(|(a, b)| a.parse::<u32>().and_then(|a| b.parse::<u32>().map(|b| (a, b))).ok())
+}
 
-    version.unwrap_or((10, 7))
+fn macos_deployment_target() -> (u32, u32) {
+    deployment_target("MACOSX_DEPLOYMENT_TARGET").unwrap_or((10, 7))
 }
 
 pub fn macos_llvm_target(arch: &str) -> String {
@@ -80,4 +85,13 @@ pub fn macos_link_env_remove() -> Vec<String> {
     // although this is apparently ignored when using the linker at "/usr/bin/ld".
     env_remove.push("IPHONEOS_DEPLOYMENT_TARGET".to_string());
     env_remove
+}
+
+fn ios_deployment_target() -> (u32, u32) {
+    deployment_target("IPHONEOS_DEPLOYMENT_TARGET").unwrap_or((7, 0))
+}
+
+pub fn ios_sim_llvm_target(arch: &str) -> String {
+    let (major, minor) = ios_deployment_target();
+    format!("{}-apple-ios{}.{}.0-simulator", arch, major, minor)
 }

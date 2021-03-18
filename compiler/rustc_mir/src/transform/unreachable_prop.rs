@@ -12,8 +12,8 @@ pub struct UnreachablePropagation;
 
 impl MirPass<'_> for UnreachablePropagation {
     fn run_pass<'tcx>(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
-        if tcx.sess.opts.debugging_opts.mir_opt_level < 3 {
-            // Enable only under -Zmir-opt-level=3 as in some cases (check the deeply-nested-opt
+        if tcx.sess.mir_opt_level() < 4 {
+            // Enable only under -Zmir-opt-level=4 as in some cases (check the deeply-nested-opt
             // perf benchmark) LLVM may spend quite a lot of time optimizing the generated code.
             return;
         }
@@ -50,6 +50,12 @@ impl MirPass<'_> for UnreachablePropagation {
 
         let replaced = !replacements.is_empty();
         for (bb, terminator_kind) in replacements {
+            if !tcx.consider_optimizing(|| {
+                format!("UnreachablePropagation {:?} ", body.source.def_id())
+            }) {
+                break;
+            }
+
             body.basic_blocks_mut()[bb].terminator_mut().kind = terminator_kind;
         }
 

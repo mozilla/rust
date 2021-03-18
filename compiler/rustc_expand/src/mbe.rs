@@ -84,7 +84,7 @@ enum TokenTree {
     /// e.g., `$var`
     MetaVar(Span, Ident),
     /// e.g., `$var:expr`. This is only used in the left hand side of MBE macros.
-    MetaVarDecl(Span, Ident /* name to bind */, NonterminalKind),
+    MetaVarDecl(Span, Ident /* name to bind */, Option<NonterminalKind>),
 }
 
 impl TokenTree {
@@ -102,10 +102,7 @@ impl TokenTree {
 
     /// Returns `true` if the given token tree is delimited.
     fn is_delimited(&self) -> bool {
-        match *self {
-            TokenTree::Delimited(..) => true,
-            _ => false,
-        }
+        matches!(*self, TokenTree::Delimited(..))
     }
 
     /// Returns `true` if the given token tree is a token of the given kind.

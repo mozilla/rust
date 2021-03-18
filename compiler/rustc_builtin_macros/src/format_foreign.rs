@@ -312,7 +312,7 @@ pub mod printf {
                 return Some((Substitution::Escape, &s[start + 2..]));
             }
 
-            Cur::new_at(&s[..], start)
+            Cur::new_at(s, start)
         };
 
         // This is meant to be a translation of the following regex:
@@ -580,10 +580,7 @@ pub mod printf {
     }
 
     fn is_flag(c: &char) -> bool {
-        match c {
-            '0' | '-' | '+' | ' ' | '#' | '\'' => true,
-            _ => false,
-        }
+        matches!(c, '0' | '-' | '+' | ' ' | '#' | '\'')
     }
 
     #[cfg(test)]
@@ -649,17 +646,13 @@ pub mod shell {
     impl<'a> Iterator for Substitutions<'a> {
         type Item = Substitution<'a>;
         fn next(&mut self) -> Option<Self::Item> {
-            match parse_next_substitution(self.s) {
-                Some((mut sub, tail)) => {
-                    self.s = tail;
-                    if let Some(InnerSpan { start, end }) = sub.position() {
-                        sub.set_position(start + self.pos, end + self.pos);
-                        self.pos += end;
-                    }
-                    Some(sub)
-                }
-                None => None,
+            let (mut sub, tail) = parse_next_substitution(self.s)?;
+            self.s = tail;
+            if let Some(InnerSpan { start, end }) = sub.position() {
+                sub.set_position(start + self.pos, end + self.pos);
+                self.pos += end;
             }
+            Some(sub)
         }
 
         fn size_hint(&self) -> (usize, Option<usize>) {
@@ -680,7 +673,7 @@ pub mod shell {
                 _ => { /* fall-through */ }
             }
 
-            Cur::new_at(&s[..], start)
+            Cur::new_at(s, start)
         };
 
         let at = at.at_next_cp()?;

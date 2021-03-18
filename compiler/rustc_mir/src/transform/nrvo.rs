@@ -1,3 +1,5 @@
+//! See the docs for [`RenameReturnPlace`].
+
 use rustc_hir::Mutability;
 use rustc_index::bit_set::HybridBitSet;
 use rustc_middle::mir::visit::{MutVisitor, NonUseContext, PlaceContext, Visitor};
@@ -32,22 +34,26 @@ pub struct RenameReturnPlace;
 
 impl<'tcx> MirPass<'tcx> for RenameReturnPlace {
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut mir::Body<'tcx>) {
-        if tcx.sess.opts.debugging_opts.mir_opt_level == 0 {
+        if tcx.sess.mir_opt_level() == 0 {
             return;
         }
 
+        let def_id = body.source.def_id();
         let returned_local = match local_eligible_for_nrvo(body) {
             Some(l) => l,
             None => {
-                debug!("`{:?}` was ineligible for NRVO", body.source.def_id());
+                debug!("`{:?}` was ineligible for NRVO", def_id);
                 return;
             }
         };
 
+        if !tcx.consider_optimizing(|| format!("RenameReturnPlace {:?}", def_id)) {
+            return;
+        }
+
         debug!(
             "`{:?}` was eligible for NRVO, making {:?} the return place",
-            body.source.def_id(),
-            returned_local
+            def_id, returned_local
         );
 
         RenameToReturnPlace { tcx, to_rename: returned_local }.visit_body(body);

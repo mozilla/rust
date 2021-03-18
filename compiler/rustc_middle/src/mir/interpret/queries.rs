@@ -31,6 +31,7 @@ impl<'tcx> TyCtxt<'tcx> {
     /// constant `bar::<T>()` requires a substitution for `T`, if the substitution for `T` is still
     /// too generic for the constant to be evaluated then `Err(ErrorHandled::TooGeneric)` is
     /// returned.
+    #[instrument(level = "debug", skip(self))]
     pub fn const_eval_resolve(
         self,
         param_env: ty::ParamEnv<'tcx>,
@@ -67,7 +68,7 @@ impl<'tcx> TyCtxt<'tcx> {
     ) -> EvalToConstValueResult<'tcx> {
         // Const-eval shouldn't depend on lifetimes at all, so we can erase them, which should
         // improve caching of queries.
-        let inputs = self.erase_regions(&param_env.and(cid));
+        let inputs = self.erase_regions(param_env.and(cid));
         if let Some(span) = span {
             self.at(span).eval_to_const_value_raw(inputs)
         } else {

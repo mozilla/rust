@@ -304,7 +304,7 @@ fn characteristic_def_id_of_mono_item<'tcx>(
                 let impl_self_ty = tcx.subst_and_normalize_erasing_regions(
                     instance.substs,
                     ty::ParamEnv::reveal_all(),
-                    &tcx.type_of(impl_def_id),
+                    tcx.type_of(impl_def_id),
                 );
                 if let Some(def_id) = characteristic_def_id_of_type(impl_self_ty) {
                     return Some(def_id);
@@ -314,7 +314,7 @@ fn characteristic_def_id_of_mono_item<'tcx>(
             Some(def_id)
         }
         MonoItem::Static(def_id) => Some(def_id),
-        MonoItem::GlobalAsm(hir_id) => Some(tcx.hir().local_def_id(hir_id).to_def_id()),
+        MonoItem::GlobalAsm(item_id) => Some(item_id.def_id.to_def_id()),
     }
 }
 
@@ -405,11 +405,10 @@ fn mono_item_visibility(
                 Visibility::Hidden
             };
         }
-        MonoItem::GlobalAsm(hir_id) => {
-            let def_id = tcx.hir().local_def_id(*hir_id);
-            return if tcx.is_reachable_non_generic(def_id) {
+        MonoItem::GlobalAsm(item_id) => {
+            return if tcx.is_reachable_non_generic(item_id.def_id) {
                 *can_be_internalized = false;
-                default_visibility(tcx, def_id.to_def_id(), false)
+                default_visibility(tcx, item_id.def_id.to_def_id(), false)
             } else {
                 Visibility::Hidden
             };
@@ -532,7 +531,7 @@ fn mono_item_visibility(
 }
 
 fn default_visibility(tcx: TyCtxt<'_>, id: DefId, is_generic: bool) -> Visibility {
-    if !tcx.sess.target.options.default_hidden_visibility {
+    if !tcx.sess.target.default_hidden_visibility {
         return Visibility::Default;
     }
 

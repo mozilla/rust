@@ -14,12 +14,9 @@ pub fn check_crate(tcx: TyCtxt<'_>) {
     let errors = Lock::new(Vec::new());
     let hir_map = tcx.hir();
 
-    par_iter(&hir_map.krate().modules).for_each(|(module_id, _)| {
-        let local_def_id = hir_map.local_def_id(*module_id);
-        hir_map.visit_item_likes_in_module(
-            local_def_id,
-            &mut OuterVisitor { hir_map, errors: &errors },
-        );
+    par_iter(&hir_map.krate().modules).for_each(|(&module_id, _)| {
+        hir_map
+            .visit_item_likes_in_module(module_id, &mut OuterVisitor { hir_map, errors: &errors });
     });
 
     let errors = errors.into_inner();
@@ -56,17 +53,22 @@ impl<'a, 'hir> OuterVisitor<'a, 'hir> {
 impl<'a, 'hir> ItemLikeVisitor<'hir> for OuterVisitor<'a, 'hir> {
     fn visit_item(&mut self, i: &'hir hir::Item<'hir>) {
         let mut inner_visitor = self.new_inner_visitor(self.hir_map);
-        inner_visitor.check(i.hir_id, |this| intravisit::walk_item(this, i));
+        inner_visitor.check(i.hir_id(), |this| intravisit::walk_item(this, i));
     }
 
     fn visit_trait_item(&mut self, i: &'hir hir::TraitItem<'hir>) {
         let mut inner_visitor = self.new_inner_visitor(self.hir_map);
-        inner_visitor.check(i.hir_id, |this| intravisit::walk_trait_item(this, i));
+        inner_visitor.check(i.hir_id(), |this| intravisit::walk_trait_item(this, i));
     }
 
     fn visit_impl_item(&mut self, i: &'hir hir::ImplItem<'hir>) {
         let mut inner_visitor = self.new_inner_visitor(self.hir_map);
-        inner_visitor.check(i.hir_id, |this| intravisit::walk_impl_item(this, i));
+        inner_visitor.check(i.hir_id(), |this| intravisit::walk_impl_item(this, i));
+    }
+
+    fn visit_foreign_item(&mut self, i: &'hir hir::ForeignItem<'hir>) {
+        let mut inner_visitor = self.new_inner_visitor(self.hir_map);
+        inner_visitor.check(i.hir_id(), |this| intravisit::walk_foreign_item(this, i));
     }
 }
 
@@ -160,6 +162,13 @@ impl<'a, 'hir> intravisit::Visitor<'hir> for HirIdValidator<'a, 'hir> {
     fn visit_impl_item_ref(&mut self, _: &'hir hir::ImplItemRef<'hir>) {
         // Explicitly do nothing here. ImplItemRefs contain hir::Visibility
         // values that actually belong to an ImplItem instead of the ItemKind::Impl
+        // we are currently in. So for those it's correct that they have a
+        // different owner.
+    }
+
+    fn visit_foreign_item_ref(&mut self, _: &'hir hir::ForeignItemRef<'hir>) {
+        // Explicitly do nothing here. ForeignItemRefs contain hir::Visibility
+        // values that actually belong to an ForeignItem instead of the ItemKind::ForeignMod
         // we are currently in. So for those it's correct that they have a
         // different owner.
     }

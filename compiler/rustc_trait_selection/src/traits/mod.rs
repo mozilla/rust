@@ -6,7 +6,7 @@ pub mod auto_trait;
 mod chalk_fulfill;
 pub mod codegen;
 mod coherence;
-mod const_evaluatable;
+pub mod const_evaluatable;
 mod engine;
 pub mod error_reporting;
 mod fulfill;
@@ -65,7 +65,8 @@ pub use self::util::{
     get_vtable_index_of_object_method, impl_item_is_final, predicate_for_trait_def, upcast_choices,
 };
 pub use self::util::{
-    supertrait_def_ids, supertraits, transitive_bounds, SupertraitDefIds, Supertraits,
+    supertrait_def_ids, supertraits, transitive_bounds, transitive_bounds_that_define_assoc_type,
+    SupertraitDefIds, Supertraits,
 };
 
 pub use self::chalk_fulfill::FulfillmentContext as ChalkFulfillmentContext;
@@ -97,13 +98,13 @@ impl Default for SkipLeakCheck {
 /// The mode that trait queries run in.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TraitQueryMode {
-    // Standard/un-canonicalized queries get accurate
-    // spans etc. passed in and hence can do reasonable
-    // error reporting on their own.
+    /// Standard/un-canonicalized queries get accurate
+    /// spans etc. passed in and hence can do reasonable
+    /// error reporting on their own.
     Standard,
-    // Canonicalized queries get dummy spans and hence
-    // must generally propagate errors to
-    // pre-canonicalization callsites.
+    /// Canonicalized queries get dummy spans and hence
+    /// must generally propagate errors to
+    /// pre-canonicalization callsites.
     Canonical,
 }
 
@@ -223,7 +224,7 @@ fn do_normalize_predicates<'tcx>(
         // we move over to lazy normalization *anyway*.
         let fulfill_cx = FulfillmentContext::new_ignoring_regions();
         let predicates =
-            match fully_normalize(&infcx, fulfill_cx, cause, elaborated_env, &predicates) {
+            match fully_normalize(&infcx, fulfill_cx, cause, elaborated_env, predicates) {
                 Ok(predicates) => predicates,
                 Err(errors) => {
                     infcx.report_fulfillment_errors(&errors, None, false);
@@ -243,7 +244,7 @@ fn do_normalize_predicates<'tcx>(
             RegionckMode::default(),
         );
 
-        let predicates = match infcx.fully_resolve(&predicates) {
+        let predicates = match infcx.fully_resolve(predicates) {
             Ok(predicates) => predicates,
             Err(fixup_err) => {
                 // If we encounter a fixup error, it means that some type
@@ -323,9 +324,8 @@ pub fn normalize_param_env_or_error<'tcx>(
     // This works fairly well because trait matching  does not actually care about param-env
     // TypeOutlives predicates - these are normally used by regionck.
     let outlives_predicates: Vec<_> = predicates
-        .drain_filter(|predicate| match predicate.skip_binders() {
-            ty::PredicateAtom::TypeOutlives(..) => true,
-            _ => false,
+        .drain_filter(|predicate| {
+            matches!(predicate.kind().skip_binder(), ty::PredicateKind::TypeOutlives(..))
         })
         .collect();
 
@@ -384,7 +384,7 @@ pub fn fully_normalize<'a, 'tcx, T>(
     mut fulfill_cx: FulfillmentContext<'tcx>,
     cause: ObligationCause<'tcx>,
     param_env: ty::ParamEnv<'tcx>,
-    value: &T,
+    value: T,
 ) -> Result<T, Vec<FulfillmentError<'tcx>>>
 where
     T: TypeFoldable<'tcx>,
@@ -404,7 +404,7 @@ where
     debug!("fully_normalize: select_all_or_error start");
     fulfill_cx.select_all_or_error(infcx)?;
     debug!("fully_normalize: select_all_or_error complete");
-    let resolved_value = infcx.resolve_vars_if_possible(&normalized_value);
+    let resolved_value = infcx.resolve_vars_if_possible(normalized_value);
     debug!("fully_normalize: resolved_value={:?}", resolved_value);
     Ok(resolved_value)
 }
@@ -424,7 +424,7 @@ pub fn impossible_predicates<'tcx>(
         let mut fulfill_cx = FulfillmentContext::new();
         let cause = ObligationCause::dummy();
         let Normalized { value: predicates, obligations } =
-            normalize(&mut selcx, param_env, cause.clone(), &predicates);
+            normalize(&mut selcx, param_env, cause.clone(), predicates);
         for obligation in obligations {
             fulfill_cx.register_predicate_obligation(&infcx, obligation);
         }
@@ -435,7 +435,7 @@ pub fn impossible_predicates<'tcx>(
 
         fulfill_cx.select_all_or_error(&infcx).is_err()
     });
-    debug!("impossible_predicates(predicates={:?}) = {:?}", predicates, result);
+    debug!("impossible_predicates = {:?}", result);
     result
 }
 
@@ -455,7 +455,6 @@ fn subst_and_check_impossible_predicates<'tcx>(
 
 /// Given a trait `trait_ref`, iterates the vtable entries
 /// that come from `trait_ref`, including its supertraits.
-#[inline] // FIXME(#35870): avoid closures being unexported due to `impl Trait`.
 fn vtable_methods<'tcx>(
     tcx: TyCtxt<'tcx>,
     trait_ref: ty::PolyTraitRef<'tcx>,
@@ -494,7 +493,7 @@ fn vtable_methods<'tcx>(
             // erase them if they appear, so that we get the type
             // at some particular call site.
             let substs =
-                tcx.normalize_erasing_late_bound_regions(ty::ParamEnv::reveal_all(), &substs);
+                tcx.normalize_erasing_late_bound_regions(ty::ParamEnv::reveal_all(), substs);
 
             // It's possible that the method relies on where-clauses that
             // do not hold for this particular set of type parameters.

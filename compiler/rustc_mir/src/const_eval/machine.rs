@@ -1,65 +1,28 @@
 use rustc_middle::mir;
-use rustc_middle::ty::layout::HasTyCtxt;
 use rustc_middle::ty::{self, Ty};
 use std::borrow::Borrow;
 use std::collections::hash_map::Entry;
 use std::hash::Hash;
 
 use rustc_data_structures::fx::FxHashMap;
+use std::fmt;
 
 use rustc_ast::Mutability;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::AssertMessage;
 use rustc_session::Limit;
 use rustc_span::symbol::{sym, Symbol};
+use rustc_target::abi::{Align, Size};
+use rustc_target::spec::abi::Abi;
 
 use crate::interpret::{
-    self, compile_time_machine, AllocId, Allocation, Frame, GlobalId, ImmTy, InterpCx,
-    InterpResult, Memory, OpTy, PlaceTy, Pointer, Scalar,
+    self, compile_time_machine, AllocId, Allocation, Frame, ImmTy, InterpCx, InterpResult, Memory,
+    OpTy, PlaceTy, Pointer, Scalar,
 };
 
 use super::error::*;
 
 impl<'mir, 'tcx> InterpCx<'mir, 'tcx, CompileTimeInterpreter<'mir, 'tcx>> {
-    /// Evaluate a const function where all arguments (if any) are zero-sized types.
-    /// The evaluation is memoized thanks to the query system.
-    ///
-    /// Returns `true` if the call has been evaluated.
-    fn try_eval_const_fn_call(
-        &mut self,
-        instance: ty::Instance<'tcx>,
-        ret: Option<(PlaceTy<'tcx>, mir::BasicBlock)>,
-        args: &[OpTy<'tcx>],
-    ) -> InterpResult<'tcx, bool> {
-        trace!("try_eval_const_fn_call: {:?}", instance);
-        // Because `#[track_caller]` adds an implicit non-ZST argument, we also cannot
-        // perform this optimization on items tagged with it.
-        if instance.def.requires_caller_location(self.tcx()) {
-            return Ok(false);
-        }
-        // For the moment we only do this for functions which take no arguments
-        // (or all arguments are ZSTs) so that we don't memoize too much.
-        if args.iter().any(|a| !a.layout.is_zst()) {
-            return Ok(false);
-        }
-
-        let dest = match ret {
-            Some((dest, _)) => dest,
-            // Don't memoize diverging function calls.
-            None => return Ok(false),
-        };
-
-        let gid = GlobalId { instance, promoted: None };
-
-        let place = self.eval_to_allocation(gid)?;
-
-        self.copy_op(place.into(), dest)?;
-
-        self.return_to_block(ret.map(|r| r.1))?;
-        trace!("{:?}", self.dump_place(*dest));
-        Ok(true)
-    }
-
     /// "Intercept" a function call to a panic-related function
     /// because we have something special to do for it.
     /// If this returns successfully (`Ok`), the function should just be evaluated normally.
@@ -76,8 +39,8 @@ impl<'mir, 'tcx> InterpCx<'mir, 'tcx, CompileTimeInterpreter<'mir, 'tcx>> {
             // &str
             assert!(args.len() == 1);
 
-            let msg_place = self.deref_operand(args[0])?;
-            let msg = Symbol::intern(self.read_str(msg_place)?);
+            let msg_place = self.deref_operand(&args[0])?;
+            let msg = Symbol::intern(self.read_str(&msg_place)?);
             let span = self.find_closest_untracked_caller_location();
             let (file, line, col) = self.location_triple_for_span(span);
             Err(ConstEvalErrKind::Panic { msg, file, line, col }.into())
@@ -169,6 +132,28 @@ impl<K: Hash + Eq, V> interpret::AllocMap<K, V> for FxHashMap<K, V> {
 crate type CompileTimeEvalContext<'mir, 'tcx> =
     InterpCx<'mir, 'tcx, CompileTimeInterpreter<'mir, 'tcx>>;
 
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+pub enum MemoryKind {
+    Heap,
+}
+
+impl fmt::Display for MemoryKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MemoryKind::Heap => write!(f, "heap allocation"),
+        }
+    }
+}
+
+impl interpret::MayLeak for MemoryKind {
+    #[inline(always)]
+    fn may_leak(self) -> bool {
+        match self {
+            MemoryKind::Heap => false,
+        }
+    }
+}
+
 impl interpret::MayLeak for ! {
     #[inline(always)]
     fn may_leak(self) -> bool {
@@ -181,9 +166,9 @@ impl<'mir, 'tcx: 'mir> CompileTimeEvalContext<'mir, 'tcx> {
     fn guaranteed_eq(&mut self, a: Scalar, b: Scalar) -> bool {
         match (a, b) {
             // Comparisons between integers are always known.
-            (Scalar::Raw { .. }, Scalar::Raw { .. }) => a == b,
+            (Scalar::Int { .. }, Scalar::Int { .. }) => a == b,
             // Equality with integers can never be known for sure.
-            (Scalar::Raw { .. }, Scalar::Ptr(_)) | (Scalar::Ptr(_), Scalar::Raw { .. }) => false,
+            (Scalar::Int { .. }, Scalar::Ptr(_)) | (Scalar::Ptr(_), Scalar::Int { .. }) => false,
             // FIXME: return `true` for when both sides are the same pointer, *except* that
             // some things (like functions and vtables) do not have stable addresses
             // so we need to be careful around them (see e.g. #73722).
@@ -194,13 +179,13 @@ impl<'mir, 'tcx: 'mir> CompileTimeEvalContext<'mir, 'tcx> {
     fn guaranteed_ne(&mut self, a: Scalar, b: Scalar) -> bool {
         match (a, b) {
             // Comparisons between integers are always known.
-            (Scalar::Raw { .. }, Scalar::Raw { .. }) => a != b,
+            (Scalar::Int(_), Scalar::Int(_)) => a != b,
             // Comparisons of abstract pointers with null pointers are known if the pointer
             // is in bounds, because if they are in bounds, the pointer can't be null.
-            (Scalar::Raw { data: 0, .. }, Scalar::Ptr(ptr))
-            | (Scalar::Ptr(ptr), Scalar::Raw { data: 0, .. }) => !self.memory.ptr_may_be_null(ptr),
             // Inequality with integers other than null can never be known for sure.
-            (Scalar::Raw { .. }, Scalar::Ptr(_)) | (Scalar::Ptr(_), Scalar::Raw { .. }) => false,
+            (Scalar::Int(int), Scalar::Ptr(ptr)) | (Scalar::Ptr(ptr), Scalar::Int(int)) => {
+                int.is_null() && !self.memory.ptr_may_be_null(ptr)
+            }
             // FIXME: return `true` for at least some comparisons where we can reliably
             // determine the result of runtime inequality tests at compile-time.
             // Examples include comparison of addresses in different static items.
@@ -212,13 +197,32 @@ impl<'mir, 'tcx: 'mir> CompileTimeEvalContext<'mir, 'tcx> {
 impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir, 'tcx> {
     compile_time_machine!(<'mir, 'tcx>);
 
+    type MemoryKind = MemoryKind;
+
     type MemoryExtra = MemoryExtra;
+
+    fn load_mir(
+        ecx: &InterpCx<'mir, 'tcx, Self>,
+        instance: ty::InstanceDef<'tcx>,
+    ) -> InterpResult<'tcx, &'tcx mir::Body<'tcx>> {
+        match instance {
+            ty::InstanceDef::Item(def) => {
+                if ecx.tcx.is_ctfe_mir_available(def.did) {
+                    Ok(ecx.tcx.mir_for_ctfe_opt_const_arg(def))
+                } else {
+                    throw_unsup!(NoMirFor(def.did))
+                }
+            }
+            _ => Ok(ecx.tcx.instance_mir(instance)),
+        }
+    }
 
     fn find_mir_or_eval_fn(
         ecx: &mut InterpCx<'mir, 'tcx, Self>,
         instance: ty::Instance<'tcx>,
+        _abi: Abi,
         args: &[OpTy<'tcx>],
-        ret: Option<(PlaceTy<'tcx>, mir::BasicBlock)>,
+        _ret: Option<(&PlaceTy<'tcx>, mir::BasicBlock)>,
         _unwind: Option<mir::BasicBlock>, // unwinding is not supported in consts
     ) -> InterpResult<'tcx, Option<&'mir mir::Body<'tcx>>> {
         debug!("find_mir_or_eval_fn: {:?}", instance);
@@ -228,13 +232,7 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
             // Execution might have wandered off into other crates, so we cannot do a stability-
             // sensitive check here.  But we can at least rule out functions that are not const
             // at all.
-            if ecx.tcx.is_const_fn_raw(def.did) {
-                // If this function is a `const fn` then under certain circumstances we
-                // can evaluate call via the query system, thus memoizing all future calls.
-                if ecx.try_eval_const_fn_call(instance, ret, args)? {
-                    return Ok(None);
-                }
-            } else {
+            if !ecx.tcx.is_const_fn_raw(def.did) {
                 // Some functions we support even if they are non-const -- but avoid testing
                 // that for const fn!
                 ecx.hook_panic_fn(instance, args)?;
@@ -247,8 +245,8 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
         Ok(Some(match ecx.load_mir(instance.def, None) {
             Ok(body) => body,
             Err(err) => {
-                if let err_unsup!(NoMirFor(did)) = err.kind {
-                    let path = ecx.tcx.def_path_str(did);
+                if let err_unsup!(NoMirFor(did)) = err.kind() {
+                    let path = ecx.tcx.def_path_str(*did);
                     return Err(ConstEvalErrKind::NeedsRfc(format!(
                         "calling extern function `{}`",
                         path
@@ -264,7 +262,7 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
         ecx: &mut InterpCx<'mir, 'tcx, Self>,
         instance: ty::Instance<'tcx>,
         args: &[OpTy<'tcx>],
-        ret: Option<(PlaceTy<'tcx>, mir::BasicBlock)>,
+        ret: Option<(&PlaceTy<'tcx>, mir::BasicBlock)>,
         _unwind: Option<mir::BasicBlock>,
     ) -> InterpResult<'tcx> {
         // Shared intrinsics.
@@ -286,14 +284,30 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
         };
         match intrinsic_name {
             sym::ptr_guaranteed_eq | sym::ptr_guaranteed_ne => {
-                let a = ecx.read_immediate(args[0])?.to_scalar()?;
-                let b = ecx.read_immediate(args[1])?.to_scalar()?;
+                let a = ecx.read_immediate(&args[0])?.to_scalar()?;
+                let b = ecx.read_immediate(&args[1])?.to_scalar()?;
                 let cmp = if intrinsic_name == sym::ptr_guaranteed_eq {
                     ecx.guaranteed_eq(a, b)
                 } else {
                     ecx.guaranteed_ne(a, b)
                 };
                 ecx.write_scalar(Scalar::from_bool(cmp), dest)?;
+            }
+            sym::const_allocate => {
+                let size = ecx.read_scalar(&args[0])?.to_machine_usize(ecx)?;
+                let align = ecx.read_scalar(&args[1])?.to_machine_usize(ecx)?;
+
+                let align = match Align::from_bytes(align) {
+                    Ok(a) => a,
+                    Err(err) => throw_ub_format!("align has to be a power of 2, {}", err),
+                };
+
+                let ptr = ecx.memory.allocate(
+                    Size::from_bytes(size as u64),
+                    align,
+                    interpret::MemoryKind::Machine(MemoryKind::Heap),
+                );
+                ecx.write_scalar(Scalar::Ptr(ptr), dest)?;
             }
             _ => {
                 return Err(ConstEvalErrKind::NeedsRfc(format!(
@@ -316,7 +330,7 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
         use rustc_middle::mir::AssertKind::*;
         // Convert `AssertKind<Operand>` to `AssertKind<Scalar>`.
         let eval_to_int =
-            |op| ecx.read_immediate(ecx.eval_operand(op, None)?).map(|x| x.to_const_int());
+            |op| ecx.read_immediate(&ecx.eval_operand(op, None)?).map(|x| x.to_const_int());
         let err = match msg {
             BoundsCheck { ref len, ref index } => {
                 let len = eval_to_int(len)?;
@@ -333,22 +347,26 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
         Err(ConstEvalErrKind::AssertFailure(err).into())
     }
 
+    fn abort(_ecx: &mut InterpCx<'mir, 'tcx, Self>, msg: String) -> InterpResult<'tcx, !> {
+        Err(ConstEvalErrKind::Abort(msg).into())
+    }
+
     fn ptr_to_int(_mem: &Memory<'mir, 'tcx, Self>, _ptr: Pointer) -> InterpResult<'tcx, u64> {
-        Err(ConstEvalErrKind::NeedsRfc("pointer-to-integer cast".to_string()).into())
+        Err(ConstEvalErrKind::PtrToIntCast.into())
     }
 
     fn binary_ptr_op(
         _ecx: &InterpCx<'mir, 'tcx, Self>,
         _bin_op: mir::BinOp,
-        _left: ImmTy<'tcx>,
-        _right: ImmTy<'tcx>,
+        _left: &ImmTy<'tcx>,
+        _right: &ImmTy<'tcx>,
     ) -> InterpResult<'tcx, (Scalar, bool, Ty<'tcx>)> {
         Err(ConstEvalErrKind::NeedsRfc("pointer arithmetic or comparison".to_string()).into())
     }
 
     fn box_alloc(
         _ecx: &mut InterpCx<'mir, 'tcx, Self>,
-        _dest: PlaceTy<'tcx>,
+        _dest: &PlaceTy<'tcx>,
     ) -> InterpResult<'tcx> {
         Err(ConstEvalErrKind::NeedsRfc("heap allocations via `box` keyword".to_string()).into())
     }

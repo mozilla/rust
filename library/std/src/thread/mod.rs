@@ -137,7 +137,6 @@
 //! [`thread::current`]: current
 //! [`thread::Result`]: Result
 //! [`unpark`]: Thread::unpark
-//! [`Thread::name`]: Thread::name
 //! [`thread::park_timeout`]: park_timeout
 //! [`Cell`]: crate::cell::Cell
 //! [`RefCell`]: crate::cell::RefCell
@@ -457,15 +456,15 @@ impl Builder {
         let my_packet: Arc<UnsafeCell<Option<Result<T>>>> = Arc::new(UnsafeCell::new(None));
         let their_packet = my_packet.clone();
 
-        let (stdout, stderr) = crate::io::clone_io();
+        let output_capture = crate::io::set_output_capture(None);
+        crate::io::set_output_capture(output_capture.clone());
 
         let main = move || {
             if let Some(name) = their_thread.cname() {
                 imp::Thread::set_name(name);
             }
 
-            crate::io::set_print(stdout);
-            crate::io::set_panic(stderr);
+            crate::io::set_output_capture(output_capture);
 
             // SAFETY: the stack guard passed is the one for the current thread.
             // This means the current thread's stack and the new thread's stack
@@ -775,6 +774,15 @@ pub fn sleep_ms(ms: u32) {
 /// times.
 /// Platforms which do not support nanosecond precision for sleeping will
 /// have `dur` rounded up to the nearest granularity of time they can sleep for.
+///
+/// Currently, specifying a zero duration on Unix platforms returns immediately
+/// without invoking the underlying [`nanosleep`] syscall, whereas on Windows
+/// platforms the underlying [`Sleep`] syscall is always invoked.
+/// If the intention is to yield the current time-slice you may want to use
+/// [`yield_now`] instead.
+///
+/// [`nanosleep`]: https://linux.die.net/man/2/nanosleep
+/// [`Sleep`]: https://docs.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-sleep
 ///
 /// # Examples
 ///
@@ -1187,32 +1195,37 @@ impl fmt::Debug for Thread {
 /// the [`Error`](crate::error::Error) trait.
 ///
 /// Thus, a sensible way to handle a thread panic is to either:
-/// 1. `unwrap` the `Result<T>`, propagating the panic
+///
+/// 1. propagate the panic with [`std::panic::resume_unwind`]
 /// 2. or in case the thread is intended to be a subsystem boundary
 /// that is supposed to isolate system-level failures,
-/// match on the `Err` variant and handle the panic in an appropriate way.
+/// match on the `Err` variant and handle the panic in an appropriate way
 ///
 /// A thread that completes without panicking is considered to exit successfully.
 ///
 /// # Examples
 ///
+/// Matching on the result of a joined thread:
+///
 /// ```no_run
-/// use std::thread;
-/// use std::fs;
+/// use std::{fs, thread, panic};
 ///
 /// fn copy_in_thread() -> thread::Result<()> {
-///     thread::spawn(move || { fs::copy("foo.txt", "bar.txt").unwrap(); }).join()
+///     thread::spawn(|| {
+///         fs::copy("foo.txt", "bar.txt").unwrap();
+///     }).join()
 /// }
 ///
 /// fn main() {
 ///     match copy_in_thread() {
-///         Ok(_) => println!("this is fine"),
-///         Err(_) => println!("thread panicked"),
+///         Ok(_) => println!("copy succeeded"),
+///         Err(e) => panic::resume_unwind(e),
 ///     }
 /// }
 /// ```
 ///
 /// [`Result`]: crate::result::Result
+/// [`std::panic::resume_unwind`]: crate::panic::resume_unwind
 #[stable(feature = "rust1", since = "1.0.0")]
 pub type Result<T> = crate::result::Result<T, Box<dyn Any + Send + 'static>>;
 

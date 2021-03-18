@@ -224,6 +224,7 @@ use rustc_middle::middle::cstore::{CrateSource, MetadataLoader};
 use rustc_session::config::{self, CrateType};
 use rustc_session::filesearch::{FileDoesntMatch, FileMatches, FileSearch};
 use rustc_session::search_paths::PathKind;
+use rustc_session::utils::CanonicalizedPath;
 use rustc_session::{CrateDisambiguator, Session};
 use rustc_span::symbol::{sym, Symbol};
 use rustc_span::Span;
@@ -244,7 +245,7 @@ crate struct CrateLocator<'a> {
 
     // Immutable per-search configuration.
     crate_name: Symbol,
-    exact_paths: Vec<PathBuf>,
+    exact_paths: Vec<CanonicalizedPath>,
     pub hash: Option<Svh>,
     pub host_hash: Option<Svh>,
     extra_filename: Option<&'a str>,
@@ -315,7 +316,7 @@ impl<'a> CrateLocator<'a> {
                     .into_iter()
                     .filter_map(|entry| entry.files())
                     .flatten()
-                    .map(PathBuf::from)
+                    .cloned()
                     .collect()
             } else {
                 // SVH being specified means this is a transitive dependency,
@@ -373,11 +374,10 @@ impl<'a> CrateLocator<'a> {
         seen_paths: &mut FxHashSet<PathBuf>,
     ) -> Result<Option<Library>, CrateError> {
         // want: crate_name.dir_part() + prefix + crate_name.file_part + "-"
-        let dylib_prefix =
-            format!("{}{}{}", self.target.options.dll_prefix, self.crate_name, extra_prefix);
+        let dylib_prefix = format!("{}{}{}", self.target.dll_prefix, self.crate_name, extra_prefix);
         let rlib_prefix = format!("lib{}{}", self.crate_name, extra_prefix);
         let staticlib_prefix =
-            format!("{}{}{}", self.target.options.staticlib_prefix, self.crate_name, extra_prefix);
+            format!("{}{}{}", self.target.staticlib_prefix, self.crate_name, extra_prefix);
 
         let mut candidates: FxHashMap<_, (FxHashMap<_, _>, FxHashMap<_, _>, FxHashMap<_, _>)> =
             Default::default();
@@ -405,17 +405,14 @@ impl<'a> CrateLocator<'a> {
                 (&file[(rlib_prefix.len())..(file.len() - ".rlib".len())], CrateFlavor::Rlib)
             } else if file.starts_with(&rlib_prefix) && file.ends_with(".rmeta") {
                 (&file[(rlib_prefix.len())..(file.len() - ".rmeta".len())], CrateFlavor::Rmeta)
-            } else if file.starts_with(&dylib_prefix)
-                && file.ends_with(&self.target.options.dll_suffix)
-            {
+            } else if file.starts_with(&dylib_prefix) && file.ends_with(&self.target.dll_suffix) {
                 (
-                    &file
-                        [(dylib_prefix.len())..(file.len() - self.target.options.dll_suffix.len())],
+                    &file[(dylib_prefix.len())..(file.len() - self.target.dll_suffix.len())],
                     CrateFlavor::Dylib,
                 )
             } else {
                 if file.starts_with(&staticlib_prefix)
-                    && file.ends_with(&self.target.options.staticlib_suffix)
+                    && file.ends_with(&self.target.staticlib_suffix)
                 {
                     staticlibs
                         .push(CrateMismatch { path: spf.path.clone(), got: "static".to_string() });
@@ -633,11 +630,9 @@ impl<'a> CrateLocator<'a> {
             }
         }
 
-        if self.exact_paths.is_empty() {
-            if self.crate_name != root.name() {
-                info!("Rejecting via crate name");
-                return None;
-            }
+        if self.exact_paths.is_empty() && self.crate_name != root.name() {
+            info!("Rejecting via crate name");
+            return None;
         }
 
         if root.triple() != &self.triple {
@@ -670,19 +665,25 @@ impl<'a> CrateLocator<'a> {
         let mut rmetas = FxHashMap::default();
         let mut dylibs = FxHashMap::default();
         for loc in &self.exact_paths {
-            if !loc.exists() {
-                return Err(CrateError::ExternLocationNotExist(self.crate_name, loc.clone()));
+            if !loc.canonicalized().exists() {
+                return Err(CrateError::ExternLocationNotExist(
+                    self.crate_name,
+                    loc.original().clone(),
+                ));
             }
-            let file = match loc.file_name().and_then(|s| s.to_str()) {
+            let file = match loc.original().file_name().and_then(|s| s.to_str()) {
                 Some(file) => file,
                 None => {
-                    return Err(CrateError::ExternLocationNotFile(self.crate_name, loc.clone()));
+                    return Err(CrateError::ExternLocationNotFile(
+                        self.crate_name,
+                        loc.original().clone(),
+                    ));
                 }
             };
 
             if file.starts_with("lib") && (file.ends_with(".rlib") || file.ends_with(".rmeta"))
-                || file.starts_with(&self.target.options.dll_prefix)
-                    && file.ends_with(&self.target.options.dll_suffix)
+                || file.starts_with(&self.target.dll_prefix)
+                    && file.ends_with(&self.target.dll_suffix)
             {
                 // Make sure there's at most one rlib and at most one dylib.
                 // Note to take care and match against the non-canonicalized name:
@@ -691,7 +692,8 @@ impl<'a> CrateLocator<'a> {
                 // e.g. symbolic links. If we canonicalize too early, we resolve
                 // the symlink, the file type is lost and we might treat rlibs and
                 // rmetas as dylibs.
-                let loc_canon = fs::canonicalize(&loc).unwrap_or_else(|_| loc.clone());
+                let loc_canon = loc.canonicalized().clone();
+                let loc = loc.original();
                 if loc.file_name().unwrap().to_str().unwrap().ends_with(".rlib") {
                     rlibs.insert(loc_canon, PathKind::ExternFlag);
                 } else if loc.file_name().unwrap().to_str().unwrap().ends_with(".rmeta") {
@@ -701,7 +703,7 @@ impl<'a> CrateLocator<'a> {
                 }
             } else {
                 self.rejected_via_filename
-                    .push(CrateMismatch { path: loc.clone(), got: String::new() });
+                    .push(CrateMismatch { path: loc.original().clone(), got: String::new() });
             }
         }
 
@@ -714,8 +716,8 @@ impl<'a> CrateLocator<'a> {
             crate_name: self.crate_name,
             root: self.root.cloned(),
             triple: self.triple,
-            dll_prefix: self.target.options.dll_prefix.clone(),
-            dll_suffix: self.target.options.dll_suffix.clone(),
+            dll_prefix: self.target.dll_prefix.clone(),
+            dll_suffix: self.target.dll_suffix.clone(),
             rejected_via_hash: self.rejected_via_hash,
             rejected_via_triple: self.rejected_via_triple,
             rejected_via_kind: self.rejected_via_kind,
@@ -886,6 +888,7 @@ crate enum CrateError {
     MultipleMatchingCrates(Symbol, FxHashMap<Svh, Library>),
     SymbolConflictsCurrent(Symbol),
     SymbolConflictsOthers(Symbol),
+    StableCrateIdCollision(Symbol, Symbol),
     DlOpen(String),
     DlSym(String),
     LocatorCombined(CombinedLocatorError),
@@ -968,6 +971,13 @@ impl CrateError {
                  `-C metadata`. This will result in symbol conflicts between the two.",
                 root_name,
             ),
+            CrateError::StableCrateIdCollision(crate_name0, crate_name1) => {
+                let msg = format!(
+                    "found crates (`{}` and `{}`) with colliding StableCrateId values.",
+                    crate_name0, crate_name1
+                );
+                sess.struct_span_err(span, &msg)
+            }
             CrateError::DlOpen(s) | CrateError::DlSym(s) => sess.struct_span_err(span, &s),
             CrateError::LocatorCombined(locator) => {
                 let crate_name = locator.crate_name;

@@ -47,6 +47,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     /// Calling `universal_upper_bound` for such a region gives `fr_fn_body`,
     /// which has no `external_name` in which case we use `'empty` as the
     /// region to pass to `infer_opaque_definition_from_instantiation`.
+    #[instrument(skip(self, infcx))]
     pub(in crate::borrow_check) fn infer_opaque_types(
         &self,
         infcx: &InferCtxt<'_, 'tcx>,
@@ -56,14 +57,11 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         opaque_ty_decls
             .into_iter()
             .map(|(opaque_def_id, ty::ResolvedOpaqueTy { concrete_type, substs })| {
-                debug!(
-                    "infer_opaque_types(concrete_type = {:?}, substs = {:?})",
-                    concrete_type, substs
-                );
+                debug!(?concrete_type, ?substs);
 
                 let mut subst_regions = vec![self.universal_regions.fr_static];
                 let universal_substs =
-                    infcx.tcx.fold_regions(&substs, &mut false, |region, _| match *region {
+                    infcx.tcx.fold_regions(substs, &mut false, |region, _| match *region {
                         ty::ReVar(vid) => {
                             subst_regions.push(vid);
                             self.definitions[vid].external_name.unwrap_or_else(|| {
@@ -94,7 +92,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
                 subst_regions.dedup();
 
                 let universal_concrete_type =
-                    infcx.tcx.fold_regions(&concrete_type, &mut false, |region, _| match *region {
+                    infcx.tcx.fold_regions(concrete_type, &mut false, |region, _| match *region {
                         ty::ReVar(vid) => subst_regions
                             .iter()
                             .find(|ur_vid| self.eval_equal(vid, **ur_vid))
@@ -110,10 +108,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
                         }
                     });
 
-                debug!(
-                    "infer_opaque_types(universal_concrete_type = {:?}, universal_substs = {:?})",
-                    universal_concrete_type, universal_substs
-                );
+                debug!(?universal_concrete_type, ?universal_substs);
 
                 let remapped_type = infcx.infer_opaque_definition_from_instantiation(
                     opaque_def_id,
@@ -139,7 +134,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     where
         T: TypeFoldable<'tcx>,
     {
-        tcx.fold_regions(&ty, &mut false, |region, _| match *region {
+        tcx.fold_regions(ty, &mut false, |region, _| match *region {
             ty::ReVar(vid) => {
                 // Find something that we can name
                 let upper_bound = self.approx_universal_upper_bound(vid);

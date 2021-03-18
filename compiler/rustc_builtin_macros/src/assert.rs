@@ -1,8 +1,8 @@
 use rustc_errors::{Applicability, DiagnosticBuilder};
 
 use rustc_ast::ptr::P;
-use rustc_ast::token::{self, TokenKind};
-use rustc_ast::tokenstream::{DelimSpan, TokenStream, TokenTree};
+use rustc_ast::token;
+use rustc_ast::tokenstream::{DelimSpan, TokenStream};
 use rustc_ast::{self as ast, *};
 use rustc_ast_pretty::pprust;
 use rustc_expand::base::*;
@@ -12,45 +12,69 @@ use rustc_span::{Span, DUMMY_SP};
 
 pub fn expand_assert<'cx>(
     cx: &'cx mut ExtCtxt<'_>,
-    sp: Span,
+    span: Span,
     tts: TokenStream,
 ) -> Box<dyn MacResult + 'cx> {
-    let Assert { cond_expr, custom_message } = match parse_assert(cx, sp, tts) {
+    let Assert { cond_expr, custom_message } = match parse_assert(cx, span, tts) {
         Ok(assert) => assert,
         Err(mut err) => {
             err.emit();
-            return DummyResult::any(sp);
+            return DummyResult::any(span);
         }
     };
 
     // `core::panic` and `std::panic` are different macros, so we use call-site
     // context to pick up whichever is currently in scope.
-    let sp = cx.with_call_site_ctxt(sp);
-    let tokens = custom_message.unwrap_or_else(|| {
-        TokenStream::from(TokenTree::token(
-            TokenKind::lit(
-                token::Str,
+    let sp = cx.with_call_site_ctxt(span);
+
+    let panic_call = if let Some(tokens) = custom_message {
+        let path = if span.rust_2021() {
+            // On edition 2021, we always call `$crate::panic::panic_2021!()`.
+            Path {
+                span: sp,
+                segments: cx
+                    .std_path(&[sym::panic, sym::panic_2021])
+                    .into_iter()
+                    .map(|ident| PathSegment::from_ident(ident))
+                    .collect(),
+                tokens: None,
+            }
+        } else {
+            // Before edition 2021, we call `panic!()` unqualified,
+            // such that it calls either `std::panic!()` or `core::panic!()`.
+            Path::from_ident(Ident::new(sym::panic, sp))
+        };
+        // Pass the custom message to panic!().
+        cx.expr(
+            sp,
+            ExprKind::MacCall(MacCall {
+                path,
+                args: P(MacArgs::Delimited(
+                    DelimSpan::from_single(sp),
+                    MacDelimiter::Parenthesis,
+                    tokens,
+                )),
+                prior_type_ascription: None,
+            }),
+        )
+    } else {
+        // Pass our own message directly to $crate::panicking::panic(),
+        // because it might contain `{` and `}` that should always be
+        // passed literally.
+        cx.expr_call_global(
+            sp,
+            cx.std_path(&[sym::panicking, sym::panic]),
+            vec![cx.expr_str(
+                DUMMY_SP,
                 Symbol::intern(&format!(
                     "assertion failed: {}",
                     pprust::expr_to_string(&cond_expr).escape_debug()
                 )),
-                None,
-            ),
-            DUMMY_SP,
-        ))
-    });
-    let args = P(MacArgs::Delimited(DelimSpan::from_single(sp), MacDelimiter::Parenthesis, tokens));
-    let panic_call = MacCall {
-        path: Path::from_ident(Ident::new(sym::panic, sp)),
-        args,
-        prior_type_ascription: None,
+            )],
+        )
     };
-    let if_expr = cx.expr_if(
-        sp,
-        cx.expr(sp, ExprKind::Unary(UnOp::Not, cond_expr)),
-        cx.expr(sp, ExprKind::MacCall(panic_call)),
-        None,
-    );
+    let if_expr =
+        cx.expr_if(sp, cx.expr(sp, ExprKind::Unary(UnOp::Not, cond_expr)), panic_call, None);
     MacEager::expr(if_expr)
 }
 

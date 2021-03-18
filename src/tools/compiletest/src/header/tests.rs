@@ -39,11 +39,13 @@ fn config() -> Config {
     let args = &[
         "compiletest",
         "--mode=ui",
+        "--suite=ui",
         "--compile-lib-path=",
         "--run-lib-path=",
         "--rustc-path=",
         "--lldb-python=",
         "--docck-python=",
+        "--jsondocck-path=",
         "--src-base=",
         "--build-base=",
         "--stage-id=stage2",

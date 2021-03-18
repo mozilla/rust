@@ -15,7 +15,6 @@ use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_middle::hir::map::Map;
 use rustc_middle::ty::query::Providers;
 use rustc_middle::ty::TyCtxt;
-use rustc_session::config::nightly_options;
 use rustc_session::parse::feature_err;
 use rustc_span::{sym, Span, Symbol};
 
@@ -46,11 +45,11 @@ impl NonConstExpr {
                 return None;
             }
 
+            Self::Match(IfLetGuardDesugar) => bug!("`if let` guard outside a `match` expression"),
+
             // All other expressions are allowed.
             Self::Loop(Loop | While | WhileLet)
-            | Self::Match(
-                WhileDesugar | WhileLetDesugar | Normal | IfDesugar { .. } | IfLetDesugar { .. },
-            ) => &[],
+            | Self::Match(WhileDesugar | WhileLetDesugar | Normal | IfLetDesugar { .. }) => &[],
         };
 
         Some(gates)
@@ -107,7 +106,7 @@ impl<'tcx> CheckConstVisitor<'tcx> {
             // However, we cannot allow stable `const fn`s to use unstable features without an explicit
             // opt-in via `rustc_allow_const_fn_unstable`.
             attr::rustc_allow_const_fn_unstable(&tcx.sess, &tcx.get_attrs(def_id))
-                .map_or(false, |mut features| features.any(|name| name == feature_gate))
+                .any(|name| name == feature_gate)
         };
 
         match required_gates {
@@ -145,7 +144,7 @@ impl<'tcx> CheckConstVisitor<'tcx> {
                 //
                 // FIXME(ecstaticmorse): Maybe this could be incorporated into `feature_err`? This
                 // is a pretty narrow case, however.
-                if nightly_options::is_nightly_build() {
+                if tcx.sess.is_nightly_build() {
                     for gate in missing_secondary {
                         let note = format!(
                             "add `#![feature({})]` to the crate attributes to enable",
@@ -200,7 +199,7 @@ impl<'tcx> Visitor<'tcx> for CheckConstVisitor<'tcx> {
             // Skip the following checks if we are not currently in a const context.
             _ if self.const_kind.is_none() => {}
 
-            hir::ExprKind::Loop(_, _, source) => {
+            hir::ExprKind::Loop(_, _, source, _) => {
                 self.const_check_violated(NonConstExpr::Loop(*source), e.span);
             }
 

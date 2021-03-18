@@ -7,46 +7,52 @@
 
 use crate::html::escape::Escape;
 
-use std::fmt::{Display, Write};
+use std::fmt::Display;
 use std::iter::Peekable;
 
 use rustc_lexer::{LiteralKind, TokenKind};
-use rustc_span::symbol::Ident;
+use rustc_span::edition::Edition;
+use rustc_span::symbol::Symbol;
 use rustc_span::with_default_session_globals;
 
+use super::format::Buffer;
+
 /// Highlights `src`, returning the HTML output.
-pub fn render_with_highlighting(
-    src: String,
+crate fn render_with_highlighting(
+    src: &str,
+    out: &mut Buffer,
     class: Option<&str>,
     playground_button: Option<&str>,
-    tooltip: Option<(&str, &str)>,
-) -> String {
+    tooltip: Option<(Option<Edition>, &str)>,
+    edition: Edition,
+) {
     debug!("highlighting: ================\n{}\n==============", src);
-    let mut out = String::with_capacity(src.len());
-    if let Some((tooltip, class)) = tooltip {
+    if let Some((edition_info, class)) = tooltip {
         write!(
             out,
-            "<div class='information'><div class='tooltip {}'>ⓘ<span \
-                  class='tooltiptext'>{}</span></div></div>",
-            class, tooltip
-        )
-        .unwrap();
+            "<div class='information'><div class='tooltip {}'{}>ⓘ</div></div>",
+            class,
+            if let Some(edition_info) = edition_info {
+                format!(" data-edition=\"{}\"", edition_info)
+            } else {
+                String::new()
+            },
+        );
     }
 
-    write_header(&mut out, class);
-    write_code(&mut out, &src);
-    write_footer(&mut out, playground_button);
-
-    out
+    write_header(out, class);
+    write_code(out, &src, edition);
+    write_footer(out, playground_button);
 }
 
-fn write_header(out: &mut String, class: Option<&str>) {
-    write!(out, "<div class=\"example-wrap\"><pre class=\"rust {}\">\n", class.unwrap_or_default())
-        .unwrap()
+fn write_header(out: &mut Buffer, class: Option<&str>) {
+    write!(out, "<div class=\"example-wrap\"><pre class=\"rust {}\">\n", class.unwrap_or_default());
 }
 
-fn write_code(out: &mut String, src: &str) {
-    Classifier::new(src).highlight(&mut |highlight| {
+fn write_code(out: &mut Buffer, src: &str, edition: Edition) {
+    // This replace allows to fix how the code source with DOS backline characters is displayed.
+    let src = src.replace("\r\n", "\n");
+    Classifier::new(&src, edition).highlight(&mut |highlight| {
         match highlight {
             Highlight::Token { text, class } => string(out, Escape(text), class),
             Highlight::EnterSpan { class } => enter_span(out, class),
@@ -55,14 +61,13 @@ fn write_code(out: &mut String, src: &str) {
     });
 }
 
-fn write_footer(out: &mut String, playground_button: Option<&str>) {
-    write!(out, "</pre>{}</div>\n", playground_button.unwrap_or_default()).unwrap()
+fn write_footer(out: &mut Buffer, playground_button: Option<&str>) {
+    write!(out, "</pre>{}</div>\n", playground_button.unwrap_or_default());
 }
 
 /// How a span of text is classified. Mostly corresponds to token kinds.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Class {
-    None,
     Comment,
     DocComment,
     Attribute,
@@ -87,7 +92,6 @@ impl Class {
     /// Returns the css class expected by rustdoc for each `Class`.
     fn as_html(self) -> &'static str {
         match self {
-            Class::None => "",
             Class::Comment => "comment",
             Class::DocComment => "doccomment",
             Class::Attribute => "attribute",
@@ -110,7 +114,7 @@ impl Class {
 }
 
 enum Highlight<'a> {
-    Token { text: &'a str, class: Class },
+    Token { text: &'a str, class: Option<Class> },
     EnterSpan { class: Class },
     ExitSpan,
 }
@@ -139,12 +143,19 @@ struct Classifier<'a> {
     in_attribute: bool,
     in_macro: bool,
     in_macro_nonterminal: bool,
+    edition: Edition,
 }
 
 impl<'a> Classifier<'a> {
-    fn new(src: &str) -> Classifier<'_> {
+    fn new(src: &str, edition: Edition) -> Classifier<'_> {
         let tokens = TokenIter { src }.peekable();
-        Classifier { tokens, in_attribute: false, in_macro: false, in_macro_nonterminal: false }
+        Classifier {
+            tokens,
+            in_attribute: false,
+            in_macro: false,
+            in_macro_nonterminal: false,
+            edition,
+        }
     }
 
     /// Exhausts the `Classifier` writing the output into `sink`.
@@ -164,8 +175,9 @@ impl<'a> Classifier<'a> {
     /// a couple of following ones as well.
     fn advance(&mut self, token: TokenKind, text: &'a str, sink: &mut dyn FnMut(Highlight<'a>)) {
         let lookahead = self.peek();
+        let no_highlight = |sink: &mut dyn FnMut(_)| sink(Highlight::Token { text, class: None });
         let class = match token {
-            TokenKind::Whitespace => Class::None,
+            TokenKind::Whitespace => return no_highlight(sink),
             TokenKind::LineComment { doc_style } | TokenKind::BlockComment { doc_style, .. } => {
                 if doc_style.is_some() {
                     Class::DocComment
@@ -190,12 +202,12 @@ impl<'a> Classifier<'a> {
             TokenKind::And => match lookahead {
                 Some(TokenKind::And) => {
                     let _and = self.tokens.next();
-                    sink(Highlight::Token { text: "&&", class: Class::Op });
+                    sink(Highlight::Token { text: "&&", class: Some(Class::Op) });
                     return;
                 }
                 Some(TokenKind::Eq) => {
                     let _eq = self.tokens.next();
-                    sink(Highlight::Token { text: "&=", class: Class::Op });
+                    sink(Highlight::Token { text: "&=", class: Some(Class::Op) });
                     return;
                 }
                 Some(TokenKind::Whitespace) => Class::Op,
@@ -226,7 +238,7 @@ impl<'a> Classifier<'a> {
             | TokenKind::At
             | TokenKind::Tilde
             | TokenKind::Colon
-            | TokenKind::Unknown => Class::None,
+            | TokenKind::Unknown => return no_highlight(sink),
 
             TokenKind::Question => Class::QuestionMark,
 
@@ -235,7 +247,7 @@ impl<'a> Classifier<'a> {
                     self.in_macro_nonterminal = true;
                     Class::MacroNonTerminal
                 }
-                _ => Class::None,
+                _ => return no_highlight(sink),
             },
 
             // This might be the start of an attribute. We're going to want to
@@ -251,8 +263,8 @@ impl<'a> Classifier<'a> {
                             self.in_attribute = true;
                             sink(Highlight::EnterSpan { class: Class::Attribute });
                         }
-                        sink(Highlight::Token { text: "#", class: Class::None });
-                        sink(Highlight::Token { text: "!", class: Class::None });
+                        sink(Highlight::Token { text: "#", class: None });
+                        sink(Highlight::Token { text: "!", class: None });
                         return;
                     }
                     // Case 2: #[outer_attribute]
@@ -262,16 +274,16 @@ impl<'a> Classifier<'a> {
                     }
                     _ => (),
                 }
-                Class::None
+                return no_highlight(sink);
             }
             TokenKind::CloseBracket => {
                 if self.in_attribute {
                     self.in_attribute = false;
-                    sink(Highlight::Token { text: "]", class: Class::None });
+                    sink(Highlight::Token { text: "]", class: None });
                     sink(Highlight::ExitSpan);
                     return;
                 }
-                Class::None
+                return no_highlight(sink);
             }
             TokenKind::Literal { kind, .. } => match kind {
                 // Text literals.
@@ -295,7 +307,7 @@ impl<'a> Classifier<'a> {
                 "Option" | "Result" => Class::PreludeTy,
                 "Some" | "None" | "Ok" | "Err" => Class::PreludeVal,
                 // Keywords are also included in the identifier set.
-                _ if Ident::from_str(text).is_reserved() => Class::KeyWord,
+                _ if Symbol::intern(text).is_reserved(|| self.edition) => Class::KeyWord,
                 _ if self.in_macro_nonterminal => {
                     self.in_macro_nonterminal = false;
                     Class::MacroNonTerminal
@@ -307,7 +319,7 @@ impl<'a> Classifier<'a> {
         };
         // Anything that didn't return above is the simple case where we the
         // class just spans a single token, so we can use the `string` method.
-        sink(Highlight::Token { text, class });
+        sink(Highlight::Token { text, class: Some(class) });
     }
 
     fn peek(&mut self) -> Option<TokenKind> {
@@ -317,13 +329,13 @@ impl<'a> Classifier<'a> {
 
 /// Called when we start processing a span of text that should be highlighted.
 /// The `Class` argument specifies how it should be highlighted.
-fn enter_span(out: &mut String, klass: Class) {
-    write!(out, "<span class=\"{}\">", klass.as_html()).unwrap()
+fn enter_span(out: &mut Buffer, klass: Class) {
+    write!(out, "<span class=\"{}\">", klass.as_html());
 }
 
 /// Called at the end of a span of highlighted text.
-fn exit_span(out: &mut String) {
-    write!(out, "</span>").unwrap()
+fn exit_span(out: &mut Buffer) {
+    out.write_str("</span>");
 }
 
 /// Called for a span of text. If the text should be highlighted differently
@@ -337,10 +349,10 @@ fn exit_span(out: &mut String) {
 /// ```
 /// The latter can be thought of as a shorthand for the former, which is more
 /// flexible.
-fn string<T: Display>(out: &mut String, text: T, klass: Class) {
+fn string<T: Display>(out: &mut Buffer, text: T, klass: Option<Class>) {
     match klass {
-        Class::None => write!(out, "{}", text).unwrap(),
-        klass => write!(out, "<span class=\"{}\">{}</span>", klass.as_html(), text).unwrap(),
+        None => write!(out, "{}", text),
+        Some(klass) => write!(out, "<span class=\"{}\">{}</span>", klass.as_html(), text),
     }
 }
 

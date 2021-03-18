@@ -20,10 +20,6 @@ impl<'ast> Visitor<'ast> for NodeCounter {
         self.count += 1;
         walk_ident(self, ident);
     }
-    fn visit_mod(&mut self, m: &Mod, _s: Span, _a: &[Attribute], _n: NodeId) {
-        self.count += 1;
-        walk_mod(self, m)
-    }
     fn visit_foreign_item(&mut self, i: &ForeignItem) {
         self.count += 1;
         walk_foreign_item(self, i)
@@ -68,7 +64,7 @@ impl<'ast> Visitor<'ast> for NodeCounter {
         self.count += 1;
         walk_generics(self, g)
     }
-    fn visit_fn(&mut self, fk: FnKind<'_>, s: Span, _: NodeId) {
+    fn visit_fn(&mut self, fk: visit::FnKind<'_>, s: Span, _: NodeId) {
         self.count += 1;
         walk_fn(self, fk, s)
     }
@@ -92,9 +88,9 @@ impl<'ast> Visitor<'ast> for NodeCounter {
         self.count += 1;
         walk_struct_def(self, s)
     }
-    fn visit_struct_field(&mut self, s: &StructField) {
+    fn visit_field_def(&mut self, s: &FieldDef) {
         self.count += 1;
-        walk_struct_field(self, s)
+        walk_field_def(self, s)
     }
     fn visit_enum_def(
         &mut self,
@@ -114,9 +110,9 @@ impl<'ast> Visitor<'ast> for NodeCounter {
         self.count += 1;
         walk_lifetime(self, lifetime)
     }
-    fn visit_mac(&mut self, _mac: &MacCall) {
+    fn visit_mac_call(&mut self, mac: &MacCall) {
         self.count += 1;
-        walk_mac(self, _mac)
+        walk_mac(self, mac)
     }
     fn visit_path(&mut self, path: &Path, _id: NodeId) {
         self.count += 1;

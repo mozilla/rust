@@ -131,6 +131,8 @@ pub enum Attribute {
     ReturnsTwice = 25,
     ReadNone = 26,
     InaccessibleMemOnly = 27,
+    SanitizeHWAddress = 28,
+    WillReturn = 29,
 }
 
 /// LLVMIntPredicate
@@ -238,6 +240,7 @@ pub enum TypeKind {
     Token = 16,
     ScalableVector = 17,
     BFloat = 18,
+    X86_AMX = 19,
 }
 
 impl TypeKind {
@@ -262,6 +265,7 @@ impl TypeKind {
             TypeKind::Token => rustc_codegen_ssa::common::TypeKind::Token,
             TypeKind::ScalableVector => rustc_codegen_ssa::common::TypeKind::ScalableVector,
             TypeKind::BFloat => rustc_codegen_ssa::common::TypeKind::BFloat,
+            TypeKind::X86_AMX => rustc_codegen_ssa::common::TypeKind::X86_AMX,
         }
     }
 }
@@ -439,6 +443,8 @@ pub struct SanitizerOptions {
     pub sanitize_memory_recover: bool,
     pub sanitize_memory_track_origins: c_int,
     pub sanitize_thread: bool,
+    pub sanitize_hwaddress: bool,
+    pub sanitize_hwaddress_recover: bool,
 }
 
 /// LLVMRelocMode
@@ -558,6 +564,7 @@ pub enum ChecksumKind {
     None,
     MD5,
     SHA1,
+    SHA256,
 }
 
 extern "C" {
@@ -641,7 +648,7 @@ pub type InlineAsmDiagHandler = unsafe extern "C" fn(&SMDiagnostic, *const c_voi
 pub mod coverageinfo {
     use super::coverage_map;
 
-    /// Aligns with [llvm::coverage::CounterMappingRegion::RegionKind](https://github.com/rust-lang/llvm-project/blob/rustc/10.0-2020-05-05/llvm/include/llvm/ProfileData/Coverage/CoverageMapping.h#L205-L221)
+    /// Aligns with [llvm::coverage::CounterMappingRegion::RegionKind](https://github.com/rust-lang/llvm-project/blob/rustc/11.0-2020-10-12/llvm/include/llvm/ProfileData/Coverage/CoverageMapping.h#L206-L222)
     #[derive(Copy, Clone, Debug)]
     #[repr(C)]
     pub enum RegionKind {
@@ -664,15 +671,13 @@ pub mod coverageinfo {
 
     /// This struct provides LLVM's representation of a "CoverageMappingRegion", encoded into the
     /// coverage map, in accordance with the
-    /// [LLVM Code Coverage Mapping Format](https://github.com/rust-lang/llvm-project/blob/llvmorg-8.0.0/llvm/docs/CoverageMappingFormat.rst#llvm-code-coverage-mapping-format).
+    /// [LLVM Code Coverage Mapping Format](https://github.com/rust-lang/llvm-project/blob/rustc/11.0-2020-10-12/llvm/docs/CoverageMappingFormat.rst#llvm-code-coverage-mapping-format).
     /// The struct composes fields representing the `Counter` type and value(s) (injected counter
     /// ID, or expression type and operands), the source file (an indirect index into a "filenames
     /// array", encoded separately), and source location (start and end positions of the represented
     /// code region).
     ///
-    /// Aligns with [llvm::coverage::CounterMappingRegion](https://github.com/rust-lang/llvm-project/blob/rustc/10.0-2020-05-05/llvm/include/llvm/ProfileData/Coverage/CoverageMapping.h#L223-L226)
-    /// Important: The Rust struct layout (order and types of fields) must match its C++
-    /// counterpart.
+    /// Matches LLVMRustCounterMappingRegion.
     #[derive(Copy, Clone, Debug)]
     #[repr(C)]
     pub struct CounterMappingRegion {
@@ -1069,6 +1074,7 @@ extern "C" {
     pub fn LLVMRustAddDereferenceableAttr(Fn: &Value, index: c_uint, bytes: u64);
     pub fn LLVMRustAddDereferenceableOrNullAttr(Fn: &Value, index: c_uint, bytes: u64);
     pub fn LLVMRustAddByValAttr(Fn: &Value, index: c_uint, ty: &Type);
+    pub fn LLVMRustAddStructRetAttr(Fn: &Value, index: c_uint, ty: &Type);
     pub fn LLVMRustAddFunctionAttribute(Fn: &Value, index: c_uint, attr: Attribute);
     pub fn LLVMRustAddFunctionAttrStringValue(
         Fn: &Value,
@@ -1099,10 +1105,12 @@ extern "C" {
     // Operations on call sites
     pub fn LLVMSetInstructionCallConv(Instr: &Value, CC: c_uint);
     pub fn LLVMRustAddCallSiteAttribute(Instr: &Value, index: c_uint, attr: Attribute);
+    pub fn LLVMRustAddCallSiteAttrString(Instr: &Value, index: c_uint, Name: *const c_char);
     pub fn LLVMRustAddAlignmentCallSiteAttr(Instr: &Value, index: c_uint, bytes: u32);
     pub fn LLVMRustAddDereferenceableCallSiteAttr(Instr: &Value, index: c_uint, bytes: u64);
     pub fn LLVMRustAddDereferenceableOrNullCallSiteAttr(Instr: &Value, index: c_uint, bytes: u64);
     pub fn LLVMRustAddByValCallSiteAttr(Instr: &Value, index: c_uint, ty: &Type);
+    pub fn LLVMRustAddStructRetCallSiteAttr(Instr: &Value, index: c_uint, ty: &Type);
 
     // Operations on load/store instructions (only)
     pub fn LLVMSetVolatile(MemoryAccessInst: &Value, volatile: Bool);
@@ -1707,6 +1715,10 @@ extern "C" {
         PM: &PassManager<'_>,
     );
 
+    pub fn LLVMGetHostCPUFeatures() -> *mut c_char;
+
+    pub fn LLVMDisposeMessage(message: *mut c_char);
+
     // Stuff that's in llvm-wrapper/ because it's not upstream yet.
 
     /// Opens an object file.
@@ -1783,17 +1795,21 @@ extern "C" {
         NumVirtualFileMappingIDs: c_uint,
         Expressions: *const coverage_map::CounterExpression,
         NumExpressions: c_uint,
-        MappingRegions: *mut coverageinfo::CounterMappingRegion,
+        MappingRegions: *const coverageinfo::CounterMappingRegion,
         NumMappingRegions: c_uint,
         BufferOut: &RustString,
     );
 
     pub fn LLVMRustCoverageCreatePGOFuncNameVar(F: &'a Value, FuncName: *const c_char)
     -> &'a Value;
-    pub fn LLVMRustCoverageComputeHash(Name: *const c_char) -> u64;
+    pub fn LLVMRustCoverageHashCString(StrVal: *const c_char) -> u64;
+    pub fn LLVMRustCoverageHashByteArray(Bytes: *const c_char, NumBytes: size_t) -> u64;
 
     #[allow(improper_ctypes)]
-    pub fn LLVMRustCoverageWriteSectionNameToString(M: &Module, Str: &RustString);
+    pub fn LLVMRustCoverageWriteMapSectionNameToString(M: &Module, Str: &RustString);
+
+    #[allow(improper_ctypes)]
+    pub fn LLVMRustCoverageWriteFuncSectionNameToString(M: &Module, Str: &RustString);
 
     #[allow(improper_ctypes)]
     pub fn LLVMRustCoverageWriteMappingVarNameToString(Str: &RustString);
@@ -1802,6 +1818,7 @@ extern "C" {
     pub fn LLVMRustDebugMetadataVersion() -> u32;
     pub fn LLVMRustVersionMajor() -> u32;
     pub fn LLVMRustVersionMinor() -> u32;
+    pub fn LLVMRustVersionPatch() -> u32;
 
     pub fn LLVMRustAddModuleFlag(M: &Module, name: *const c_char, value: u32);
 
@@ -1825,6 +1842,8 @@ extern "C" {
         SplitName: *const c_char,
         SplitNameLen: size_t,
         kind: DebugEmissionKind,
+        DWOId: u64,
+        SplitDebugInlining: bool,
     ) -> &'a DIDescriptor;
 
     pub fn LLVMRustDIBuilderCreateFile(
@@ -2091,7 +2110,6 @@ extern "C" {
     );
 
     pub fn LLVMRustDIBuilderCreateDebugLocation(
-        Context: &'a Context,
         Line: c_uint,
         Column: c_uint,
         Scope: &'a DIScope,
@@ -2116,6 +2134,7 @@ extern "C" {
         Recover: bool,
     ) -> &'static mut Pass;
     pub fn LLVMRustCreateThreadSanitizerPass() -> &'static mut Pass;
+    pub fn LLVMRustCreateHWAddressSanitizerPass(Recover: bool) -> &'static mut Pass;
     pub fn LLVMRustAddPass(PM: &PassManager<'_>, Pass: &'static mut Pass);
     pub fn LLVMRustAddLastExtensionPasses(
         PMB: &PassManagerBuilder,
@@ -2146,6 +2165,7 @@ extern "C" {
         EmitStackSizeSection: bool,
         RelaxELFRelocations: bool,
         UseInitArray: bool,
+        SplitDwarfFile: *const c_char,
     ) -> Option<&'static mut TargetMachine>;
     pub fn LLVMRustDisposeTargetMachine(T: &'static mut TargetMachine);
     pub fn LLVMRustAddBuilderLibraryInfo(
@@ -2174,6 +2194,7 @@ extern "C" {
         PM: &PassManager<'a>,
         M: &'a Module,
         Output: *const c_char,
+        DwoOutput: *const c_char,
         FileType: FileType,
     ) -> LLVMRustResult;
     pub fn LLVMRustOptimizeWithNewPassManager(
@@ -2305,6 +2326,7 @@ extern "C" {
     pub fn LLVMRustUnsetComdat(V: &Value);
     pub fn LLVMRustSetModulePICLevel(M: &Module);
     pub fn LLVMRustSetModulePIELevel(M: &Module);
+    pub fn LLVMRustSetModuleCodeModel(M: &Module, Model: CodeModel);
     pub fn LLVMRustModuleBufferCreate(M: &Module) -> &'static mut ModuleBuffer;
     pub fn LLVMRustModuleBufferPtr(p: &ModuleBuffer) -> *const u8;
     pub fn LLVMRustModuleBufferLen(p: &ModuleBuffer) -> usize;

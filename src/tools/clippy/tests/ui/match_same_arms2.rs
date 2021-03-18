@@ -119,6 +119,51 @@ fn match_same_arms() {
             unreachable!();
         },
     }
+
+    // False positive #1390
+    macro_rules! empty {
+        ($e:expr) => {};
+    }
+    match 0 {
+        0 => {
+            empty!(0);
+        },
+        1 => {
+            empty!(1);
+        },
+        x => {
+            empty!(x);
+        },
+    };
+
+    // still lint if the tokens are the same
+    match 0 {
+        0 => {
+            empty!(0);
+        },
+        1 => {
+            empty!(0);
+        },
+        x => {
+            empty!(x);
+        },
+    }
+
+    match_expr_like_matches_macro_priority();
+}
+
+fn match_expr_like_matches_macro_priority() {
+    enum E {
+        A,
+        B,
+        C,
+    }
+    let x = E::A;
+    let _ans = match x {
+        E::A => false,
+        E::B => false,
+        _ => true,
+    };
 }
 
 fn main() {}

@@ -2,8 +2,8 @@
 
 use std::ffi::CString;
 
+use cstr::cstr;
 use rustc_codegen_ssa::traits::*;
-use rustc_data_structures::const_cstr;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::small_c_str::SmallCStr;
 use rustc_hir::def_id::DefId;
@@ -13,6 +13,7 @@ use rustc_middle::ty::query::Providers;
 use rustc_middle::ty::{self, TyCtxt};
 use rustc_session::config::{OptLevel, SanitizerSet};
 use rustc_session::Session;
+use rustc_target::spec::StackProbeType;
 
 use crate::attributes;
 use crate::llvm::AttributePlace::Function;
@@ -35,11 +36,7 @@ fn inline(cx: &CodegenCx<'ll, '_>, val: &'ll Value, inline: InlineAttr) {
                 Attribute::NoInline.apply_llfn(Function, val);
             }
         }
-        None => {
-            Attribute::InlineHint.unapply_llfn(Function, val);
-            Attribute::AlwaysInline.unapply_llfn(Function, val);
-            Attribute::NoInline.unapply_llfn(Function, val);
-        }
+        None => {}
     };
 }
 
@@ -55,6 +52,9 @@ pub fn sanitize(cx: &CodegenCx<'ll, '_>, no_sanitize: SanitizerSet, llfn: &'ll V
     }
     if enabled.contains(SanitizerSet::THREAD) {
         llvm::Attribute::SanitizeThread.apply_llfn(Function, llfn);
+    }
+    if enabled.contains(SanitizerSet::HWADDRESS) {
+        llvm::Attribute::SanitizeHWAddress.apply_llfn(Function, llfn);
     }
 }
 
@@ -75,8 +75,8 @@ pub fn set_frame_pointer_elimination(cx: &CodegenCx<'ll, '_>, llfn: &'ll Value) 
         llvm::AddFunctionAttrStringValue(
             llfn,
             llvm::AttributePlace::Function,
-            const_cstr!("frame-pointer"),
-            const_cstr!("all"),
+            cstr!("frame-pointer"),
+            cstr!("all"),
         );
     }
 }
@@ -90,25 +90,18 @@ fn set_instrument_function(cx: &CodegenCx<'ll, '_>, llfn: &'ll Value) {
 
         // The function name varies on platforms.
         // See test/CodeGen/mcount.c in clang.
-        let mcount_name =
-            CString::new(cx.sess().target.options.target_mcount.as_str().as_bytes()).unwrap();
+        let mcount_name = CString::new(cx.sess().target.mcount.as_str().as_bytes()).unwrap();
 
         llvm::AddFunctionAttrStringValue(
             llfn,
             llvm::AttributePlace::Function,
-            const_cstr!("instrument-function-entry-inlined"),
+            cstr!("instrument-function-entry-inlined"),
             &mcount_name,
         );
     }
 }
 
 fn set_probestack(cx: &CodegenCx<'ll, '_>, llfn: &'ll Value) {
-    // Only use stack probes if the target specification indicates that we
-    // should be using stack probes
-    if !cx.sess().target.options.stack_probes {
-        return;
-    }
-
     // Currently stack probes seem somewhat incompatible with the address
     // sanitizer and thread sanitizer. With asan we're already protected from
     // stack overflow anyway so we don't really need stack probes regardless.
@@ -132,54 +125,31 @@ fn set_probestack(cx: &CodegenCx<'ll, '_>, llfn: &'ll Value) {
         return;
     }
 
-    // FIXME(richkadel): Make sure probestack plays nice with `-Z instrument-coverage`
-    // or disable it if not, similar to above early exits.
-
-    // Flag our internal `__rust_probestack` function as the stack probe symbol.
-    // This is defined in the `compiler-builtins` crate for each architecture.
-    llvm::AddFunctionAttrStringValue(
-        llfn,
-        llvm::AttributePlace::Function,
-        const_cstr!("probe-stack"),
-        const_cstr!("__rust_probestack"),
-    );
-}
-
-fn translate_obsolete_target_features(feature: &str) -> &str {
-    const LLVM9_FEATURE_CHANGES: &[(&str, &str)] =
-        &[("+fp-only-sp", "-fp64"), ("-fp-only-sp", "+fp64"), ("+d16", "-d32"), ("-d16", "+d32")];
-    if llvm_util::get_major_version() >= 9 {
-        for &(old, new) in LLVM9_FEATURE_CHANGES {
-            if feature == old {
-                return new;
+    let attr_value = match cx.sess().target.stack_probes {
+        StackProbeType::None => None,
+        // Request LLVM to generate the probes inline. If the given LLVM version does not support
+        // this, no probe is generated at all (even if the attribute is specified).
+        StackProbeType::Inline => Some(cstr!("inline-asm")),
+        // Flag our internal `__rust_probestack` function as the stack probe symbol.
+        // This is defined in the `compiler-builtins` crate for each architecture.
+        StackProbeType::Call => Some(cstr!("__rust_probestack")),
+        // Pick from the two above based on the LLVM version.
+        StackProbeType::InlineOrCall { min_llvm_version_for_inline } => {
+            if llvm_util::get_version() < min_llvm_version_for_inline {
+                Some(cstr!("__rust_probestack"))
+            } else {
+                Some(cstr!("inline-asm"))
             }
         }
-    } else {
-        for &(old, new) in LLVM9_FEATURE_CHANGES {
-            if feature == new {
-                return old;
-            }
-        }
+    };
+    if let Some(attr_value) = attr_value {
+        llvm::AddFunctionAttrStringValue(
+            llfn,
+            llvm::AttributePlace::Function,
+            cstr!("probe-stack"),
+            attr_value,
+        );
     }
-    feature
-}
-
-pub fn llvm_target_features(sess: &Session) -> impl Iterator<Item = &str> {
-    const RUSTC_SPECIFIC_FEATURES: &[&str] = &["crt-static"];
-
-    let cmdline = sess
-        .opts
-        .cg
-        .target_feature
-        .split(',')
-        .filter(|f| !RUSTC_SPECIFIC_FEATURES.iter().any(|s| f.contains(s)));
-    sess.target
-        .options
-        .features
-        .split(',')
-        .chain(cmdline)
-        .filter(|l| !l.is_empty())
-        .map(translate_obsolete_target_features)
 }
 
 pub fn apply_target_cpu_attr(cx: &CodegenCx<'ll, '_>, llfn: &'ll Value) {
@@ -187,7 +157,7 @@ pub fn apply_target_cpu_attr(cx: &CodegenCx<'ll, '_>, llfn: &'ll Value) {
     llvm::AddFunctionAttrStringValue(
         llfn,
         llvm::AttributePlace::Function,
-        const_cstr!("target-cpu"),
+        cstr!("target-cpu"),
         target_cpu.as_c_str(),
     );
 }
@@ -198,7 +168,7 @@ pub fn apply_tune_cpu_attr(cx: &CodegenCx<'ll, '_>, llfn: &'ll Value) {
         llvm::AddFunctionAttrStringValue(
             llfn,
             llvm::AttributePlace::Function,
-            const_cstr!("tune-cpu"),
+            cstr!("tune-cpu"),
             tune_cpu.as_c_str(),
         );
     }
@@ -255,12 +225,14 @@ pub fn from_fn_attrs(cx: &CodegenCx<'ll, 'tcx>, llfn: &'ll Value, instance: ty::
         }
     }
 
-    // FIXME(eddyb) consolidate these two `inline` calls (and avoid overwrites).
-    if instance.def.requires_inline(cx.tcx) {
-        inline(cx, llfn, attributes::InlineAttr::Hint);
-    }
-
-    inline(cx, llfn, codegen_fn_attrs.inline.clone());
+    let inline_attr = if codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::NAKED) {
+        InlineAttr::Never
+    } else if codegen_fn_attrs.inline == InlineAttr::None && instance.def.requires_inline(cx.tcx) {
+        InlineAttr::Hint
+    } else {
+        codegen_fn_attrs.inline
+    };
+    inline(cx, llfn, inline_attr);
 
     // The `uwtable` attribute according to LLVM is:
     //
@@ -305,7 +277,7 @@ pub fn from_fn_attrs(cx: &CodegenCx<'ll, 'tcx>, llfn: &'ll Value, instance: ty::
         Attribute::NoAlias.apply_llfn(llvm::AttributePlace::ReturnValue, llfn);
     }
     if codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::CMSE_NONSECURE_ENTRY) {
-        llvm::AddFunctionAttrString(llfn, Function, const_cstr!("cmse_nonsecure_entry"));
+        llvm::AddFunctionAttrString(llfn, Function, cstr!("cmse_nonsecure_entry"));
     }
     sanitize(cx, codegen_fn_attrs.no_sanitize, llfn);
 
@@ -317,25 +289,27 @@ pub fn from_fn_attrs(cx: &CodegenCx<'ll, 'tcx>, llfn: &'ll Value, instance: ty::
     // The target doesn't care; the subtarget reads our attribute.
     apply_tune_cpu_attr(cx, llfn);
 
-    let features = llvm_target_features(cx.tcx.sess)
-        .map(|s| s.to_string())
-        .chain(codegen_fn_attrs.target_features.iter().map(|f| {
+    let function_features = codegen_fn_attrs
+        .target_features
+        .iter()
+        .map(|f| {
             let feature = &f.as_str();
             format!("+{}", llvm_util::to_llvm_feature(cx.tcx.sess, feature))
-        }))
+        })
         .chain(codegen_fn_attrs.instruction_set.iter().map(|x| match x {
             InstructionSetAttr::ArmA32 => "-thumb-mode".to_string(),
             InstructionSetAttr::ArmT32 => "+thumb-mode".to_string(),
         }))
-        .collect::<Vec<String>>()
-        .join(",");
-
-    if !features.is_empty() {
+        .collect::<Vec<String>>();
+    if !function_features.is_empty() {
+        let mut global_features = llvm_util::llvm_global_features(cx.tcx.sess);
+        global_features.extend(function_features.into_iter());
+        let features = global_features.join(",");
         let val = CString::new(features).unwrap();
         llvm::AddFunctionAttrStringValue(
             llfn,
             llvm::AttributePlace::Function,
-            const_cstr!("target-features"),
+            cstr!("target-features"),
             &val,
         );
     }
@@ -348,7 +322,7 @@ pub fn from_fn_attrs(cx: &CodegenCx<'ll, 'tcx>, llfn: &'ll Value, instance: ty::
             llvm::AddFunctionAttrStringValue(
                 llfn,
                 llvm::AttributePlace::Function,
-                const_cstr!("wasm-import-module"),
+                cstr!("wasm-import-module"),
                 &module,
             );
 
@@ -358,7 +332,7 @@ pub fn from_fn_attrs(cx: &CodegenCx<'ll, 'tcx>, llfn: &'ll Value, instance: ty::
             llvm::AddFunctionAttrStringValue(
                 llfn,
                 llvm::AttributePlace::Function,
-                const_cstr!("wasm-import-name"),
+                cstr!("wasm-import-name"),
                 &name,
             );
         }
@@ -378,8 +352,8 @@ pub fn provide_both(providers: &mut Providers) {
             .collect::<FxHashMap<_, _>>();
 
         let mut ret = FxHashMap::default();
-        for lib in tcx.foreign_modules(cnum).iter() {
-            let module = def_id_to_native_lib.get(&lib.def_id).and_then(|s| s.wasm_import_module);
+        for (def_id, lib) in tcx.foreign_modules(cnum).iter() {
+            let module = def_id_to_native_lib.get(&def_id).and_then(|s| s.wasm_import_module);
             let module = match module {
                 Some(s) => s,
                 None => continue,

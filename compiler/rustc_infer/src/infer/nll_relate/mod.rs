@@ -30,6 +30,7 @@ use rustc_middle::ty::fold::{TypeFoldable, TypeVisitor};
 use rustc_middle::ty::relate::{self, Relate, RelateResult, TypeRelation};
 use rustc_middle::ty::{self, InferConst, Ty, TyCtxt};
 use std::fmt::Debug;
+use std::ops::ControlFlow;
 
 #[derive(PartialEq)]
 pub enum NormalizationStrategy {
@@ -43,7 +44,7 @@ where
 {
     infcx: &'me InferCtxt<'me, 'tcx>,
 
-    /// Callback to use when we deduce an outlives relationship
+    /// Callback to use when we deduce an outlives relationship.
     delegate: D,
 
     /// How are we relating `a` and `b`?
@@ -71,6 +72,8 @@ where
 }
 
 pub trait TypeRelatingDelegate<'tcx> {
+    fn param_env(&self) -> ty::ParamEnv<'tcx>;
+
     /// Push a constraint `sup: sub` -- this constraint must be
     /// satisfied for the two types to be related. `sub` and `sup` may
     /// be regions from the type or new variables created through the
@@ -175,7 +178,7 @@ where
                         universe
                     });
 
-                    let placeholder = ty::PlaceholderRegion { universe, name: br };
+                    let placeholder = ty::PlaceholderRegion { universe, name: br.kind };
                     delegate.next_placeholder_region(placeholder)
                 } else {
                     delegate.next_existential_region_var(true)
@@ -472,9 +475,8 @@ where
         self.infcx.tcx
     }
 
-    // FIXME(oli-obk): not sure how to get the correct ParamEnv
     fn param_env(&self) -> ty::ParamEnv<'tcx> {
-        ty::ParamEnv::empty()
+        self.delegate.param_env()
     }
 
     fn tag(&self) -> &'static str {
@@ -740,15 +742,18 @@ struct ScopeInstantiator<'me, 'tcx> {
 }
 
 impl<'me, 'tcx> TypeVisitor<'tcx> for ScopeInstantiator<'me, 'tcx> {
-    fn visit_binder<T: TypeFoldable<'tcx>>(&mut self, t: &ty::Binder<T>) -> bool {
+    fn visit_binder<T: TypeFoldable<'tcx>>(
+        &mut self,
+        t: &ty::Binder<T>,
+    ) -> ControlFlow<Self::BreakTy> {
         self.target_index.shift_in(1);
         t.super_visit_with(self);
         self.target_index.shift_out(1);
 
-        false
+        ControlFlow::CONTINUE
     }
 
-    fn visit_region(&mut self, r: ty::Region<'tcx>) -> bool {
+    fn visit_region(&mut self, r: ty::Region<'tcx>) -> ControlFlow<Self::BreakTy> {
         let ScopeInstantiator { bound_region_scope, next_region, .. } = self;
 
         match r {
@@ -759,11 +764,11 @@ impl<'me, 'tcx> TypeVisitor<'tcx> for ScopeInstantiator<'me, 'tcx> {
             _ => {}
         }
 
-        false
+        ControlFlow::CONTINUE
     }
 }
 
-/// The "type generalize" is used when handling inference variables.
+/// The "type generalizer" is used when handling inference variables.
 ///
 /// The basic strategy for handling a constraint like `?A <: B` is to
 /// apply a "generalization strategy" to the type `B` -- this replaces
@@ -815,9 +820,8 @@ where
         self.infcx.tcx
     }
 
-    // FIXME(oli-obk): not sure how to get the correct ParamEnv
     fn param_env(&self) -> ty::ParamEnv<'tcx> {
-        ty::ParamEnv::empty()
+        self.delegate.param_env()
     }
 
     fn tag(&self) -> &'static str {
@@ -1004,6 +1008,6 @@ where
         self.first_free_index.shift_in(1);
         let result = self.relate(a.skip_binder(), a.skip_binder())?;
         self.first_free_index.shift_out(1);
-        Ok(ty::Binder::bind(result))
+        Ok(a.rebind(result))
     }
 }

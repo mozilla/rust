@@ -8,7 +8,7 @@
 //! inside a single block to shuffle a value around unnecessarily.
 //!
 //! LLVM by itself is not good enough at eliminating these redundant copies (eg. see
-//! https://github.com/rust-lang/rust/issues/32966), so this leaves some performance on the table
+//! <https://github.com/rust-lang/rust/issues/32966>), so this leaves some performance on the table
 //! that we can regain by implementing an optimization for removing these assign statements in rustc
 //! itself. When this optimization runs fast enough, it can also speed up the constant evaluation
 //! and code generation phases of rustc due to the reduced number of statements and locals.
@@ -127,9 +127,14 @@ pub struct DestinationPropagation;
 
 impl<'tcx> MirPass<'tcx> for DestinationPropagation {
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
-        // Only run at mir-opt-level=2 or higher for now (we don't fix up debuginfo and remove
+        //  FIXME(#79191, #82678)
+        if !tcx.sess.opts.debugging_opts.unsound_mir_opts {
+            return;
+        }
+
+        // Only run at mir-opt-level=3 or higher for now (we don't fix up debuginfo and remove
         // storage statements at the moment).
-        if tcx.sess.opts.debugging_opts.mir_opt_level <= 1 {
+        if tcx.sess.mir_opt_level() < 3 {
             return;
         }
 
@@ -582,6 +587,7 @@ impl Conflicts<'a> {
             | StatementKind::FakeRead(..)
             | StatementKind::AscribeUserType(..)
             | StatementKind::Coverage(..)
+            | StatementKind::CopyNonOverlapping(..)
             | StatementKind::Nop => {}
         }
     }

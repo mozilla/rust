@@ -224,11 +224,11 @@ fn compare_predicate_entailment<'tcx>(
         let (impl_m_own_bounds, _) = infcx.replace_bound_vars_with_fresh_vars(
             impl_m_span,
             infer::HigherRankedType,
-            &ty::Binder::bind(impl_m_own_bounds.predicates),
+            ty::Binder::bind(impl_m_own_bounds.predicates),
         );
         for predicate in impl_m_own_bounds {
             let traits::Normalized { value: predicate, obligations } =
-                traits::normalize(&mut selcx, param_env, normalize_cause.clone(), &predicate);
+                traits::normalize(&mut selcx, param_env, normalize_cause.clone(), predicate);
 
             inh.register_predicates(obligations);
             inh.register_predicate(traits::Obligation::new(cause.clone(), param_env, predicate));
@@ -253,17 +253,17 @@ fn compare_predicate_entailment<'tcx>(
         let (impl_sig, _) = infcx.replace_bound_vars_with_fresh_vars(
             impl_m_span,
             infer::HigherRankedType,
-            &tcx.fn_sig(impl_m.def_id),
+            tcx.fn_sig(impl_m.def_id),
         );
         let impl_sig =
-            inh.normalize_associated_types_in(impl_m_span, impl_m_hir_id, param_env, &impl_sig);
+            inh.normalize_associated_types_in(impl_m_span, impl_m_hir_id, param_env, impl_sig);
         let impl_fty = tcx.mk_fn_ptr(ty::Binder::bind(impl_sig));
         debug!("compare_impl_method: impl_fty={:?}", impl_fty);
 
-        let trait_sig = tcx.liberate_late_bound_regions(impl_m.def_id, &tcx.fn_sig(trait_m.def_id));
+        let trait_sig = tcx.liberate_late_bound_regions(impl_m.def_id, tcx.fn_sig(trait_m.def_id));
         let trait_sig = trait_sig.subst(tcx, trait_to_placeholder_substs);
         let trait_sig =
-            inh.normalize_associated_types_in(impl_m_span, impl_m_hir_id, param_env, &trait_sig);
+            inh.normalize_associated_types_in(impl_m_span, impl_m_hir_id, param_env, trait_sig);
         let trait_fty = tcx.mk_fn_ptr(ty::Binder::bind(trait_sig));
 
         debug!("compare_impl_method: trait_fty={:?}", trait_fty);
@@ -296,7 +296,7 @@ fn compare_predicate_entailment<'tcx>(
                     {
                         diag.span_suggestion(
                             impl_err_span,
-                            "consider change the type to match the mutability in trait",
+                            "consider changing the mutability to match the trait",
                             trait_err_str,
                             Applicability::MachineApplicable,
                         );
@@ -364,13 +364,12 @@ fn check_region_bounds_on_impl_item<'tcx>(
     if trait_params != impl_params {
         let item_kind = assoc_item_kind_str(impl_m);
         let def_span = tcx.sess.source_map().guess_head_span(span);
-        let span = tcx.hir().get_generics(impl_m.def_id).map(|g| g.span).unwrap_or(def_span);
-        let generics_span = if let Some(sp) = tcx.hir().span_if_local(trait_m.def_id) {
+        let span = tcx.hir().get_generics(impl_m.def_id).map_or(def_span, |g| g.span);
+        let generics_span = tcx.hir().span_if_local(trait_m.def_id).map(|sp| {
             let def_sp = tcx.sess.source_map().guess_head_span(sp);
-            Some(tcx.hir().get_generics(trait_m.def_id).map(|g| g.span).unwrap_or(def_sp))
-        } else {
-            None
-        };
+            tcx.hir().get_generics(trait_m.def_id).map_or(def_sp, |g| g.span)
+        });
+
         tcx.sess.emit_err(LifetimesOrBoundsMismatchOnTrait {
             span,
             item_kind,
@@ -494,12 +493,11 @@ fn compare_self_type<'tcx>(
             ty::ImplContainer(_) => impl_trait_ref.self_ty(),
             ty::TraitContainer(_) => tcx.types.self_param,
         };
-        let self_arg_ty = tcx.fn_sig(method.def_id).input(0).skip_binder();
+        let self_arg_ty = tcx.fn_sig(method.def_id).input(0);
         let param_env = ty::ParamEnv::reveal_all();
 
         tcx.infer_ctxt().enter(|infcx| {
-            let self_arg_ty =
-                tcx.liberate_late_bound_regions(method.def_id, &ty::Binder::bind(self_arg_ty));
+            let self_arg_ty = tcx.liberate_late_bound_regions(method.def_id, self_arg_ty);
             let can_eq_self = |ty| infcx.can_eq(param_env, untransformed_self_ty, ty).is_ok();
             match ExplicitSelf::determine(self_arg_ty, can_eq_self) {
                 ExplicitSelf::ByValue => "self".to_owned(),
@@ -825,11 +823,11 @@ fn compare_synthetic_generics<'tcx>(
                         // FIXME: this is obviously suboptimal since the name can already be used
                         // as another generic argument
                         let new_name = tcx.sess.source_map().span_to_snippet(trait_span).ok()?;
-                        let trait_m = tcx.hir().local_def_id_to_hir_id(trait_m.def_id.as_local()?);
-                        let trait_m = tcx.hir().trait_item(hir::TraitItemId { hir_id: trait_m });
+                        let trait_m = trait_m.def_id.as_local()?;
+                        let trait_m = tcx.hir().trait_item(hir::TraitItemId { def_id: trait_m });
 
-                        let impl_m = tcx.hir().local_def_id_to_hir_id(impl_m.def_id.as_local()?);
-                        let impl_m = tcx.hir().impl_item(hir::ImplItemId { hir_id: impl_m });
+                        let impl_m = impl_m.def_id.as_local()?;
+                        let impl_m = tcx.hir().impl_item(hir::ImplItemId { def_id: impl_m });
 
                         // in case there are no generics, take the spot between the function name
                         // and the opening paren of the argument list
@@ -862,8 +860,8 @@ fn compare_synthetic_generics<'tcx>(
                 (None, Some(hir::SyntheticTyParamKind::ImplTrait)) => {
                     err.span_label(impl_span, "expected `impl Trait`, found generic parameter");
                     (|| {
-                        let impl_m = tcx.hir().local_def_id_to_hir_id(impl_m.def_id.as_local()?);
-                        let impl_m = tcx.hir().impl_item(hir::ImplItemId { hir_id: impl_m });
+                        let impl_m = impl_m.def_id.as_local()?;
+                        let impl_m = tcx.hir().impl_item(hir::ImplItemId { def_id: impl_m });
                         let input_tys = match impl_m.kind {
                             hir::ImplItemKind::Fn(ref sig, _) => sig.decl.inputs,
                             _ => unreachable!(),
@@ -968,12 +966,12 @@ crate fn compare_const_impl<'tcx>(
 
         // There is no "body" here, so just pass dummy id.
         let impl_ty =
-            inh.normalize_associated_types_in(impl_c_span, impl_c_hir_id, param_env, &impl_ty);
+            inh.normalize_associated_types_in(impl_c_span, impl_c_hir_id, param_env, impl_ty);
 
         debug!("compare_const_impl: impl_ty={:?}", impl_ty);
 
         let trait_ty =
-            inh.normalize_associated_types_in(impl_c_span, impl_c_hir_id, param_env, &trait_ty);
+            inh.normalize_associated_types_in(impl_c_span, impl_c_hir_id, param_env, trait_ty);
 
         debug!("compare_const_impl: trait_ty={:?}", trait_ty);
 
@@ -1136,7 +1134,7 @@ fn compare_type_predicate_entailment<'tcx>(
 
         for predicate in impl_ty_own_bounds.predicates {
             let traits::Normalized { value: predicate, obligations } =
-                traits::normalize(&mut selcx, param_env, normalize_cause.clone(), &predicate);
+                traits::normalize(&mut selcx, param_env, normalize_cause.clone(), predicate);
 
             inh.register_predicates(obligations);
             inh.register_predicate(traits::Obligation::new(cause.clone(), param_env, predicate));
@@ -1261,7 +1259,7 @@ pub fn check_type_bounds<'tcx>(
                 &mut selcx,
                 normalize_param_env,
                 normalize_cause.clone(),
-                &obligation.predicate,
+                obligation.predicate,
             );
             debug!("compare_projection_bounds: normalized predicate = {:?}", normalized_predicate);
             obligation.predicate = normalized_predicate;

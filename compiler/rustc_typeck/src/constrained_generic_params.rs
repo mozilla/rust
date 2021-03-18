@@ -2,6 +2,7 @@ use rustc_data_structures::fx::FxHashSet;
 use rustc_middle::ty::fold::{TypeFoldable, TypeVisitor};
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::source_map::Span;
+use std::ops::ControlFlow;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Parameter(pub u32);
@@ -56,11 +57,11 @@ struct ParameterCollector {
 }
 
 impl<'tcx> TypeVisitor<'tcx> for ParameterCollector {
-    fn visit_ty(&mut self, t: Ty<'tcx>) -> bool {
+    fn visit_ty(&mut self, t: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {
         match *t.kind() {
             ty::Projection(..) | ty::Opaque(..) if !self.include_nonconstraining => {
                 // projections are not injective
-                return false;
+                return ControlFlow::CONTINUE;
             }
             ty::Param(data) => {
                 self.parameters.push(Parameter::from(data));
@@ -71,14 +72,14 @@ impl<'tcx> TypeVisitor<'tcx> for ParameterCollector {
         t.super_visit_with(self)
     }
 
-    fn visit_region(&mut self, r: ty::Region<'tcx>) -> bool {
+    fn visit_region(&mut self, r: ty::Region<'tcx>) -> ControlFlow<Self::BreakTy> {
         if let ty::ReEarlyBound(data) = *r {
             self.parameters.push(Parameter::from(data));
         }
-        false
+        ControlFlow::CONTINUE
     }
 
-    fn visit_const(&mut self, c: &'tcx ty::Const<'tcx>) -> bool {
+    fn visit_const(&mut self, c: &'tcx ty::Const<'tcx>) -> ControlFlow<Self::BreakTy> {
         match c.val {
             ty::ConstKind::Unevaluated(..) if !self.include_nonconstraining => {
                 // Constant expressions are not injective
@@ -182,7 +183,8 @@ pub fn setup_constraining_predicates<'tcx>(
         for j in i..predicates.len() {
             // Note that we don't have to care about binders here,
             // as the impl trait ref never contains any late-bound regions.
-            if let ty::PredicateAtom::Projection(projection) = predicates[j].0.skip_binders() {
+            if let ty::PredicateKind::Projection(projection) = predicates[j].0.kind().skip_binder()
+            {
                 // Special case: watch out for some kind of sneaky attempt
                 // to project out an associated type defined by this very
                 // trait.
@@ -196,7 +198,7 @@ pub fn setup_constraining_predicates<'tcx>(
                 //     `<<T as Bar>::Baz as Iterator>::Output = <U as Iterator>::Output`
                 // Then the projection only applies if `T` is known, but it still
                 // does not determine `U`.
-                let inputs = parameters_for(&projection.projection_ty.trait_ref(tcx), true);
+                let inputs = parameters_for(&projection.projection_ty, true);
                 let relies_only_on_inputs = inputs.iter().all(|p| input_parameters.contains(&p));
                 if !relies_only_on_inputs {
                     continue;

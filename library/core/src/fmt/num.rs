@@ -595,7 +595,6 @@ fn fmt_u128(n: u128, is_nonnegative: bool, f: &mut fmt::Formatter<'_>) -> fmt::R
     // 2^128 is about 3*10^38, so 39 gives an extra byte of space
     let mut buf = [MaybeUninit::<u8>::uninit(); 39];
     let mut curr = buf.len() as isize;
-    let buf_ptr = MaybeUninit::slice_as_mut_ptr(&mut buf);
 
     let (n, rem) = udiv_1e19(n);
     parse_u64_into(rem, &mut buf, &mut curr);
@@ -606,7 +605,11 @@ fn fmt_u128(n: u128, is_nonnegative: bool, f: &mut fmt::Formatter<'_>) -> fmt::R
         // SAFETY: Guaranteed that we wrote at most 19 bytes, and there must be space
         // remaining since it has length 39
         unsafe {
-            ptr::write_bytes(buf_ptr.offset(target), b'0', (curr - target) as usize);
+            ptr::write_bytes(
+                MaybeUninit::slice_as_mut_ptr(&mut buf).offset(target),
+                b'0',
+                (curr - target) as usize,
+            );
         }
         curr = target;
 
@@ -615,6 +618,9 @@ fn fmt_u128(n: u128, is_nonnegative: bool, f: &mut fmt::Formatter<'_>) -> fmt::R
         // Should this following branch be annotated with unlikely?
         if n != 0 {
             let target = (buf.len() - 38) as isize;
+            // The raw `buf_ptr` pointer is only valid until `buf` is used the next time,
+            // buf `buf` is not used in this scope so we are good.
+            let buf_ptr = MaybeUninit::slice_as_mut_ptr(&mut buf);
             // SAFETY: At this point we wrote at most 38 bytes, pad up to that point,
             // There can only be at most 1 digit remaining.
             unsafe {
@@ -629,7 +635,7 @@ fn fmt_u128(n: u128, is_nonnegative: bool, f: &mut fmt::Formatter<'_>) -> fmt::R
     // UTF-8 since `DEC_DIGITS_LUT` is
     let buf_slice = unsafe {
         str::from_utf8_unchecked(slice::from_raw_parts(
-            buf_ptr.offset(curr),
+            MaybeUninit::slice_as_mut_ptr(&mut buf).offset(curr),
             buf.len() - curr as usize,
         ))
     };
@@ -637,25 +643,42 @@ fn fmt_u128(n: u128, is_nonnegative: bool, f: &mut fmt::Formatter<'_>) -> fmt::R
 }
 
 /// Partition of `n` into n > 1e19 and rem <= 1e19
+///
+/// Integer division algorithm is based on the following paper:
+///
+///   T. Granlund and P. Montgomery, “Division by Invariant Integers Using Multiplication”
+///   in Proc. of the SIGPLAN94 Conference on Programming Language Design and
+///   Implementation, 1994, pp. 61–72
+///
 fn udiv_1e19(n: u128) -> (u128, u64) {
     const DIV: u64 = 1e19 as u64;
-    let high = (n >> 64) as u64;
-    if high == 0 {
-        let low = n as u64;
-        return ((low / DIV) as u128, low % DIV);
-    }
-    let sr = 65 - high.leading_zeros();
-    let mut q = n << (128 - sr);
-    let mut r = n >> sr;
-    let mut carry = 0;
+    const FACTOR: u128 = 156927543384667019095894735580191660403;
 
-    for _ in 0..sr {
-        r = (r << 1) | (q >> 127);
-        q = (q << 1) | carry as u128;
+    let quot = if n < 1 << 83 {
+        ((n >> 19) as u64 / (DIV >> 19)) as u128
+    } else {
+        u128_mulhi(n, FACTOR) >> 62
+    };
 
-        let s = (DIV as u128).wrapping_sub(r).wrapping_sub(1) as i128 >> 127;
-        carry = (s & 1) as u64;
-        r -= (DIV as u128) & s as u128;
-    }
-    ((q << 1) | carry as u128, r as u64)
+    let rem = (n - quot * DIV as u128) as u64;
+    (quot, rem)
+}
+
+/// Multiply unsigned 128 bit integers, return upper 128 bits of the result
+#[inline]
+fn u128_mulhi(x: u128, y: u128) -> u128 {
+    let x_lo = x as u64;
+    let x_hi = (x >> 64) as u64;
+    let y_lo = y as u64;
+    let y_hi = (y >> 64) as u64;
+
+    // handle possibility of overflow
+    let carry = (x_lo as u128 * y_lo as u128) >> 64;
+    let m = x_lo as u128 * y_hi as u128 + carry;
+    let high1 = m >> 64;
+
+    let m_lo = m as u64;
+    let high2 = (x_hi as u128 * y_lo as u128 + m_lo as u128) >> 64;
+
+    x_hi as u128 * y_hi as u128 + high1 + high2
 }

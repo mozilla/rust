@@ -12,7 +12,6 @@ use std::mem::ManuallyDrop;
 use std::ops::Generator;
 use std::panic;
 use std::pin::Pin;
-use std::usize;
 
 struct InjectedFailure;
 
@@ -46,7 +45,7 @@ impl Allocator {
         self.cur_ops.set(self.cur_ops.get() + 1);
 
         if self.cur_ops.get() == self.failing_op {
-            panic!(InjectedFailure);
+            panic::panic_any(InjectedFailure);
         }
 
         let mut data = self.data.borrow_mut();
@@ -83,7 +82,7 @@ impl<'a> Drop for Ptr<'a> {
         self.1.cur_ops.set(self.1.cur_ops.get()+1);
 
         if self.1.cur_ops.get() == self.1.failing_op {
-            panic!(InjectedFailure);
+            panic::panic_any(InjectedFailure);
         }
     }
 }

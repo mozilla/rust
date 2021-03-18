@@ -21,10 +21,16 @@ use rustc_data_structures::fx::{FxHashSet, FxIndexMap};
 use rustc_data_structures::stable_hasher::StableHasher;
 use rustc_data_structures::sync::{self, Lock, Lrc};
 use rustc_data_structures::AtomicRef;
+use rustc_lint_defs::FutureBreakage;
+pub use rustc_lint_defs::{pluralize, Applicability};
+use rustc_serialize::json::Json;
+use rustc_serialize::{Decodable, Decoder, Encodable, Encoder};
 use rustc_span::source_map::SourceMap;
 use rustc_span::{Loc, MultiSpan, Span};
 
 use std::borrow::Cow;
+use std::hash::{Hash, Hasher};
+use std::num::NonZeroUsize;
 use std::panic;
 use std::path::Path;
 use std::{error, fmt};
@@ -46,32 +52,8 @@ pub type PResult<'a, T> = Result<T, DiagnosticBuilder<'a>>;
 
 // `PResult` is used a lot. Make sure it doesn't unintentionally get bigger.
 // (See also the comment on `DiagnosticBuilderInner`.)
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
 rustc_data_structures::static_assert_size!(PResult<'_, bool>, 16);
-
-/// Indicates the confidence in the correctness of a suggestion.
-///
-/// All suggestions are marked with an `Applicability`. Tools use the applicability of a suggestion
-/// to determine whether it should be automatically applied or if the user should be consulted
-/// before applying the suggestion.
-#[derive(Copy, Clone, Debug, PartialEq, Hash, Encodable, Decodable)]
-pub enum Applicability {
-    /// The suggestion is definitely what the user intended. This suggestion should be
-    /// automatically applied.
-    MachineApplicable,
-
-    /// The suggestion may be what the user intended, but it is uncertain. The suggestion should
-    /// result in valid Rust code if it is applied.
-    MaybeIncorrect,
-
-    /// The suggestion contains placeholders like `(...)` or `{ /* fields */ }`. The suggestion
-    /// cannot be applied automatically because it will not result in valid Rust code. The user
-    /// will need to fill in the placeholders.
-    HasPlaceholders,
-
-    /// The applicability of the suggestion is unknown.
-    Unspecified,
-}
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, Encodable, Decodable)]
 pub enum SuggestionStyle {
@@ -91,9 +73,39 @@ pub enum SuggestionStyle {
 
 impl SuggestionStyle {
     fn hide_inline(&self) -> bool {
-        match *self {
-            SuggestionStyle::ShowCode => false,
-            _ => true,
+        !matches!(*self, SuggestionStyle::ShowCode)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct ToolMetadata(pub Option<Json>);
+
+impl ToolMetadata {
+    fn new(json: Json) -> Self {
+        ToolMetadata(Some(json))
+    }
+
+    fn is_set(&self) -> bool {
+        self.0.is_some()
+    }
+}
+
+impl Hash for ToolMetadata {
+    fn hash<H: Hasher>(&self, _state: &mut H) {}
+}
+
+// Doesn't really need to round-trip
+impl<D: Decoder> Decodable<D> for ToolMetadata {
+    fn decode(_d: &mut D) -> Result<Self, D::Error> {
+        Ok(ToolMetadata(None))
+    }
+}
+
+impl<S: Encoder> Encodable<S> for ToolMetadata {
+    fn encode(&self, e: &mut S) -> Result<(), S::Error> {
+        match &self.0 {
+            None => e.emit_unit(),
+            Some(json) => json.encode(e),
         }
     }
 }
@@ -131,6 +143,8 @@ pub struct CodeSuggestion {
     /// which are useful for users but not useful for
     /// tools like rustfix
     pub applicability: Applicability,
+    /// Tool-specific metadata
+    pub tool_metadata: ToolMetadata,
 }
 
 #[derive(Clone, Debug, PartialEq, Hash, Encodable, Decodable)]
@@ -324,6 +338,8 @@ struct HandlerInner {
 
     /// The warning count, used for a recap upon finishing
     deduplicated_warn_count: usize,
+
+    future_breakage_diagnostics: Vec<Diagnostic>,
 }
 
 /// A key denoting where from a diagnostic was stashed.
@@ -344,7 +360,7 @@ pub struct HandlerFlags {
     pub can_emit_warnings: bool,
     /// If true, error-level diagnostics are upgraded to bug-level.
     /// (rustc: see `-Z treat-err-as-bug`)
-    pub treat_err_as_bug: Option<usize>,
+    pub treat_err_as_bug: Option<NonZeroUsize>,
     /// If true, immediately emit diagnostics that would otherwise be buffered.
     /// (rustc: see `-Z dont-buffer-diagnostics` and `-Z treat-err-as-bug`)
     pub dont_buffer_diagnostics: bool,
@@ -381,7 +397,7 @@ impl Handler {
     pub fn with_tty_emitter(
         color_config: ColorConfig,
         can_emit_warnings: bool,
-        treat_err_as_bug: Option<usize>,
+        treat_err_as_bug: Option<NonZeroUsize>,
         sm: Option<Lrc<SourceMap>>,
     ) -> Self {
         Self::with_tty_emitter_and_flags(
@@ -409,7 +425,7 @@ impl Handler {
 
     pub fn with_emitter(
         can_emit_warnings: bool,
-        treat_err_as_bug: Option<usize>,
+        treat_err_as_bug: Option<NonZeroUsize>,
         emitter: Box<dyn Emitter + sync::Send>,
     ) -> Self {
         Handler::with_emitter_and_flags(
@@ -437,6 +453,7 @@ impl Handler {
                 emitted_diagnostic_codes: Default::default(),
                 emitted_diagnostics: Default::default(),
                 stashed_diagnostics: Default::default(),
+                future_breakage_diagnostics: Vec::new(),
             }),
         }
     }
@@ -506,6 +523,17 @@ impl Handler {
         result
     }
 
+    /// Construct a builder at the `Allow` level at the given `span` and with the `msg`.
+    pub fn struct_span_allow(
+        &self,
+        span: impl Into<MultiSpan>,
+        msg: &str,
+    ) -> DiagnosticBuilder<'_> {
+        let mut result = self.struct_allow(msg);
+        result.set_span(span);
+        result
+    }
+
     /// Construct a builder at the `Warning` level at the given `span` and with the `msg`.
     /// Also include a code.
     pub fn struct_span_warn_with_code(
@@ -526,6 +554,11 @@ impl Handler {
             result.cancel();
         }
         result
+    }
+
+    /// Construct a builder at the `Allow` level with the `msg`.
+    pub fn struct_allow(&self, msg: &str) -> DiagnosticBuilder<'_> {
+        DiagnosticBuilder::new(self, Level::Allow, msg)
     }
 
     /// Construct a builder at the `Error` level at the given `span` and with the `msg`.
@@ -696,6 +729,10 @@ impl Handler {
         self.inner.borrow_mut().print_error_count(registry)
     }
 
+    pub fn take_future_breakage_diagnostics(&self) -> Vec<Diagnostic> {
+        std::mem::take(&mut self.inner.borrow_mut().future_breakage_diagnostics)
+    }
+
     pub fn abort_if_errors(&self) {
         self.inner.borrow_mut().abort_if_errors()
     }
@@ -726,6 +763,10 @@ impl Handler {
         self.inner.borrow_mut().emit_artifact_notification(path, artifact_type)
     }
 
+    pub fn emit_future_breakage_report(&self, diags: Vec<(FutureBreakage, Diagnostic)>) {
+        self.inner.borrow_mut().emitter.emit_future_breakage_report(diags)
+    }
+
     pub fn delay_as_bug(&self, diagnostic: Diagnostic) {
         self.inner.borrow_mut().delay_as_bug(diagnostic)
     }
@@ -751,18 +792,28 @@ impl HandlerInner {
             return;
         }
 
+        if diagnostic.has_future_breakage() {
+            self.future_breakage_diagnostics.push(diagnostic.clone());
+        }
+
         if diagnostic.level == Warning && !self.flags.can_emit_warnings {
+            if diagnostic.has_future_breakage() {
+                (*TRACK_DIAGNOSTICS)(diagnostic);
+            }
             return;
         }
 
         (*TRACK_DIAGNOSTICS)(diagnostic);
+
+        if diagnostic.level == Allow {
+            return;
+        }
 
         if let Some(ref code) = diagnostic.code {
             self.emitted_diagnostic_codes.insert(code.clone());
         }
 
         let already_emitted = |this: &mut Self| {
-            use std::hash::Hash;
             let mut hasher = StableHasher::new();
             diagnostic.hash(&mut hasher);
             let diagnostic_hash = hasher.finish();
@@ -791,7 +842,7 @@ impl HandlerInner {
     }
 
     fn treat_err_as_bug(&self) -> bool {
-        self.flags.treat_err_as_bug.map(|c| self.err_count() >= c).unwrap_or(false)
+        self.flags.treat_err_as_bug.map_or(false, |c| self.err_count() >= c.get())
     }
 
     fn print_error_count(&mut self, registry: &Registry) {
@@ -888,7 +939,7 @@ impl HandlerInner {
 
     fn span_bug(&mut self, sp: impl Into<MultiSpan>, msg: &str) -> ! {
         self.emit_diag_at_span(Diagnostic::new(Bug, msg), sp);
-        panic!(ExplicitBug);
+        panic::panic_any(ExplicitBug);
     }
 
     fn emit_diag_at_span(&mut self, mut diag: Diagnostic, sp: impl Into<MultiSpan>) {
@@ -900,7 +951,7 @@ impl HandlerInner {
         // This is technically `self.treat_err_as_bug()` but `delay_span_bug` is called before
         // incrementing `err_count` by one, so we need to +1 the comparing.
         // FIXME: Would be nice to increment err_count in a more coherent way.
-        if self.flags.treat_err_as_bug.map(|c| self.err_count() + 1 >= c).unwrap_or(false) {
+        if self.flags.treat_err_as_bug.map_or(false, |c| self.err_count() + 1 >= c.get()) {
             // FIXME: don't abort here if report_delayed_bugs is off
             self.span_bug(sp, msg);
         }
@@ -942,7 +993,7 @@ impl HandlerInner {
 
     fn bug(&mut self, msg: &str) -> ! {
         self.emit_diagnostic(&Diagnostic::new(Bug, msg));
-        panic!(ExplicitBug);
+        panic::panic_any(ExplicitBug);
     }
 
     fn delay_as_bug(&mut self, diagnostic: Diagnostic) {
@@ -973,7 +1024,7 @@ impl HandlerInner {
 
     fn panic_if_treat_err_as_bug(&self) {
         if self.treat_err_as_bug() {
-            match (self.err_count(), self.flags.treat_err_as_bug.unwrap_or(0)) {
+            match (self.err_count(), self.flags.treat_err_as_bug.map(|c| c.get()).unwrap_or(0)) {
                 (1, 1) => panic!("aborting due to `-Z treat-err-as-bug=1`"),
                 (0, _) | (1, _) => {}
                 (count, as_bug) => panic!(
@@ -995,6 +1046,7 @@ pub enum Level {
     Help,
     Cancelled,
     FailureNote,
+    Allow,
 }
 
 impl fmt::Display for Level {
@@ -1020,7 +1072,7 @@ impl Level {
                 spec.set_fg(Some(Color::Cyan)).set_intense(true);
             }
             FailureNote => {}
-            Cancelled => unreachable!(),
+            Allow | Cancelled => unreachable!(),
         }
         spec
     }
@@ -1034,22 +1086,55 @@ impl Level {
             Help => "help",
             FailureNote => "failure-note",
             Cancelled => panic!("Shouldn't call on cancelled error"),
+            Allow => panic!("Shouldn't call on allowed error"),
         }
     }
 
     pub fn is_failure_note(&self) -> bool {
-        match *self {
-            FailureNote => true,
-            _ => false,
-        }
+        matches!(*self, FailureNote)
     }
 }
 
-#[macro_export]
-macro_rules! pluralize {
-    ($x:expr) => {
-        if $x != 1 { "s" } else { "" }
+pub fn add_elided_lifetime_in_path_suggestion(
+    source_map: &SourceMap,
+    db: &mut DiagnosticBuilder<'_>,
+    n: usize,
+    path_span: Span,
+    incl_angl_brckt: bool,
+    insertion_span: Span,
+    anon_lts: String,
+) {
+    let (replace_span, suggestion) = if incl_angl_brckt {
+        (insertion_span, anon_lts)
+    } else {
+        // When possible, prefer a suggestion that replaces the whole
+        // `Path<T>` expression with `Path<'_, T>`, rather than inserting `'_, `
+        // at a point (which makes for an ugly/confusing label)
+        if let Ok(snippet) = source_map.span_to_snippet(path_span) {
+            // But our spans can get out of whack due to macros; if the place we think
+            // we want to insert `'_` isn't even within the path expression's span, we
+            // should bail out of making any suggestion rather than panicking on a
+            // subtract-with-overflow or string-slice-out-out-bounds (!)
+            // FIXME: can we do better?
+            if insertion_span.lo().0 < path_span.lo().0 {
+                return;
+            }
+            let insertion_index = (insertion_span.lo().0 - path_span.lo().0) as usize;
+            if insertion_index > snippet.len() {
+                return;
+            }
+            let (before, after) = snippet.split_at(insertion_index);
+            (path_span, format!("{}{}{}", before, anon_lts, after))
+        } else {
+            (insertion_span, anon_lts)
+        }
     };
+    db.span_suggestion(
+        replace_span,
+        &format!("indicate the anonymous lifetime{}", pluralize!(n)),
+        suggestion,
+        Applicability::MachineApplicable,
+    );
 }
 
 // Useful type to use with `Result<>` indicate that an error has already

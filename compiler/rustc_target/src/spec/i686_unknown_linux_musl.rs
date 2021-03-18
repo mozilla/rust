@@ -1,4 +1,4 @@
-use crate::spec::{LinkerFlavor, Target};
+use crate::spec::{LinkerFlavor, StackProbeType, Target};
 
 pub fn target() -> Target {
     let mut base = super::linux_musl_base::opts();
@@ -6,7 +6,7 @@ pub fn target() -> Target {
     base.max_atomic_width = Some(64);
     base.pre_link_args.get_mut(&LinkerFlavor::Gcc).unwrap().push("-m32".to_string());
     base.pre_link_args.get_mut(&LinkerFlavor::Gcc).unwrap().push("-Wl,-melf_i386".to_string());
-    base.stack_probes = true;
+    base.stack_probes = StackProbeType::InlineOrCall { min_llvm_version_for_inline: (11, 0, 1) };
 
     // The unwinder used by i686-unknown-linux-musl, the LLVM libunwind
     // implementation, apparently relies on frame pointers existing... somehow.
@@ -24,17 +24,11 @@ pub fn target() -> Target {
 
     Target {
         llvm_target: "i686-unknown-linux-musl".to_string(),
-        target_endian: "little".to_string(),
         pointer_width: 32,
-        target_c_int_width: "32".to_string(),
         data_layout: "e-m:e-p:32:32-p270:32:32-p271:32:32-p272:64:64-\
             f64:32:64-f80:32-n8:16:32-S128"
             .to_string(),
         arch: "x86".to_string(),
-        target_os: "linux".to_string(),
-        target_env: "musl".to_string(),
-        target_vendor: "unknown".to_string(),
-        linker_flavor: LinkerFlavor::Gcc,
         options: base,
     }
 }

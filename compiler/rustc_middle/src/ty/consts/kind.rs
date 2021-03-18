@@ -1,3 +1,5 @@
+use std::convert::TryInto;
+
 use crate::mir::interpret::ConstValue;
 use crate::mir::interpret::Scalar;
 use crate::mir::Promoted;
@@ -8,6 +10,8 @@ use rustc_errors::ErrorReported;
 use rustc_hir::def_id::DefId;
 use rustc_macros::HashStable;
 use rustc_target::abi::Size;
+
+use super::ScalarInt;
 
 /// Represents a constant in Rust.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, TyEncodable, TyDecodable, Hash)]
@@ -23,7 +27,7 @@ pub enum ConstKind<'tcx> {
     Bound(ty::DebruijnIndex, ty::BoundVar),
 
     /// A placeholder const - universally quantified higher-ranked const.
-    Placeholder(ty::PlaceholderConst),
+    Placeholder(ty::PlaceholderConst<'tcx>),
 
     /// Used in the HIR by using `Unevaluated` everywhere and later normalizing to one of the other
     /// variants when the code is monomorphic enough for that.
@@ -37,7 +41,7 @@ pub enum ConstKind<'tcx> {
     Error(ty::DelaySpanBugEmitted),
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
 static_assert_size!(ConstKind<'_>, 40);
 
 impl<'tcx> ConstKind<'tcx> {
@@ -52,13 +56,18 @@ impl<'tcx> ConstKind<'tcx> {
     }
 
     #[inline]
+    pub fn try_to_scalar_int(self) -> Option<ScalarInt> {
+        Some(self.try_to_value()?.try_to_scalar()?.assert_int())
+    }
+
+    #[inline]
     pub fn try_to_bits(self, size: Size) -> Option<u128> {
-        self.try_to_value()?.try_to_bits(size)
+        self.try_to_scalar_int()?.to_bits(size).ok()
     }
 
     #[inline]
     pub fn try_to_bool(self) -> Option<bool> {
-        self.try_to_value()?.try_to_bool()
+        self.try_to_scalar_int()?.try_into().ok()
     }
 
     #[inline]
@@ -82,7 +91,7 @@ impl<'tcx> ConstKind<'tcx> {
     /// Tries to evaluate the constant if it is `Unevaluated`. If that doesn't succeed, return the
     /// unevaluated constant.
     pub fn eval(self, tcx: TyCtxt<'tcx>, param_env: ParamEnv<'tcx>) -> Self {
-        self.try_eval(tcx, param_env).and_then(Result::ok).map(ConstKind::Value).unwrap_or(self)
+        self.try_eval(tcx, param_env).and_then(Result::ok).map_or(self, ConstKind::Value)
     }
 
     #[inline]
@@ -103,9 +112,9 @@ impl<'tcx> ConstKind<'tcx> {
             // so that we don't try to invoke this query with
             // any region variables.
             let param_env_and_substs = tcx
-                .erase_regions(&param_env)
+                .erase_regions(param_env)
                 .with_reveal_all_normalized(tcx)
-                .and(tcx.erase_regions(&substs));
+                .and(tcx.erase_regions(substs));
 
             // HACK(eddyb) when the query key would contain inference variables,
             // attempt using identity substs and `ParamEnv` instead, that will succeed

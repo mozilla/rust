@@ -66,13 +66,9 @@ fn codegen_inner(
         let callee_name = kind.fn_name(method.name);
         //eprintln!("Codegen allocator shim {} -> {} ({:?} -> {:?})", caller_name, callee_name, sig.params, sig.returns);
 
-        let func_id = module
-            .declare_function(&caller_name, Linkage::Export, &sig)
-            .unwrap();
+        let func_id = module.declare_function(&caller_name, Linkage::Export, &sig).unwrap();
 
-        let callee_func_id = module
-            .declare_function(&callee_name, Linkage::Import, &sig)
-            .unwrap();
+        let callee_func_id = module.declare_function(&callee_name, Linkage::Import, &sig).unwrap();
 
         let mut ctx = Context::new();
         ctx.func = Function::with_name_signature(ExternalName::user(0, 0), sig.clone());
@@ -96,11 +92,7 @@ fn codegen_inner(
             bcx.finalize();
         }
         module
-            .define_function(
-                func_id,
-                &mut ctx,
-                &mut cranelift_codegen::binemit::NullTrapSink {},
-            )
+            .define_function(func_id, &mut ctx, &mut cranelift_codegen::binemit::NullTrapSink {})
             .unwrap();
         unwind_context.add_function(func_id, &ctx, module.isa());
     }
@@ -114,16 +106,13 @@ fn codegen_inner(
     let callee_name = kind.fn_name(sym::oom);
     //eprintln!("Codegen allocator shim {} -> {} ({:?} -> {:?})", caller_name, callee_name, sig.params, sig.returns);
 
-    let func_id = module
-        .declare_function("__rust_alloc_error_handler", Linkage::Export, &sig)
-        .unwrap();
+    let func_id =
+        module.declare_function("__rust_alloc_error_handler", Linkage::Export, &sig).unwrap();
 
-    let callee_func_id = module
-        .declare_function(&callee_name, Linkage::Import, &sig)
-        .unwrap();
+    let callee_func_id = module.declare_function(&callee_name, Linkage::Import, &sig).unwrap();
 
     let mut ctx = Context::new();
-    ctx.func = Function::with_name_signature(ExternalName::user(0, 0), sig.clone());
+    ctx.func = Function::with_name_signature(ExternalName::user(0, 0), sig);
     {
         let mut func_ctx = FunctionBuilderContext::new();
         let mut bcx = FunctionBuilder::new(&mut ctx.func, &mut func_ctx);
@@ -131,7 +120,7 @@ fn codegen_inner(
         let block = bcx.create_block();
         bcx.switch_to_block(block);
         let args = (&[usize_ty, usize_ty])
-            .into_iter()
+            .iter()
             .map(|&ty| bcx.append_block_param(block, ty))
             .collect::<Vec<Value>>();
 
@@ -143,11 +132,7 @@ fn codegen_inner(
         bcx.finalize();
     }
     module
-        .define_function(
-            func_id,
-            &mut ctx,
-            &mut cranelift_codegen::binemit::NullTrapSink {},
-        )
+        .define_function(func_id, &mut ctx, &mut cranelift_codegen::binemit::NullTrapSink {})
         .unwrap();
     unwind_context.add_function(func_id, &ctx, module.isa());
 }

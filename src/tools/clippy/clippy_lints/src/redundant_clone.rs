@@ -1,6 +1,6 @@
 use crate::utils::{
-    fn_has_unsatisfiable_preds, has_drop, is_copy, is_type_diagnostic_item, match_def_path, match_type, paths,
-    snippet_opt, span_lint_hir, span_lint_hir_and_then, walk_ptrs_ty_depth,
+    fn_has_unsatisfiable_preds, has_drop, is_copy, is_type_diagnostic_item, match_def_path, paths, snippet_opt,
+    span_lint_hir, span_lint_hir_and_then, walk_ptrs_ty_depth,
 };
 use if_chain::if_chain;
 use rustc_data_structures::{fx::FxHashMap, transitive_relation::TransitiveRelation};
@@ -17,7 +17,9 @@ use rustc_middle::ty::{self, fold::TypeVisitor, Ty};
 use rustc_mir::dataflow::{Analysis, AnalysisDomain, GenKill, GenKillAnalysis, ResultsCursor};
 use rustc_session::{declare_lint_pass, declare_tool_lint};
 use rustc_span::source_map::{BytePos, Span};
+use rustc_span::sym;
 use std::convert::TryFrom;
+use std::ops::ControlFlow;
 
 macro_rules! unwrap_or_continue {
     ($x:expr) => {
@@ -114,7 +116,7 @@ impl<'tcx> LateLintPass<'tcx> for RedundantClone {
             let from_borrow = match_def_path(cx, fn_def_id, &paths::CLONE_TRAIT_METHOD)
                 || match_def_path(cx, fn_def_id, &paths::TO_OWNED_METHOD)
                 || (match_def_path(cx, fn_def_id, &paths::TO_STRING_METHOD)
-                    && is_type_diagnostic_item(cx, arg_ty, sym!(string_type)));
+                    && is_type_diagnostic_item(cx, arg_ty, sym::string_type));
 
             let from_deref = !from_borrow
                 && (match_def_path(cx, fn_def_id, &paths::PATH_TO_PATH_BUF)
@@ -163,9 +165,9 @@ impl<'tcx> LateLintPass<'tcx> for RedundantClone {
                     if let Some((pred_fn_def_id, pred_arg, pred_arg_ty, res)) =
                         is_call_with_ref_arg(cx, mir, &pred_terminator.kind);
                     if res == cloned;
-                    if match_def_path(cx, pred_fn_def_id, &paths::DEREF_TRAIT_METHOD);
-                    if match_type(cx, pred_arg_ty, &paths::PATH_BUF)
-                        || match_type(cx, pred_arg_ty, &paths::OS_STRING);
+                    if cx.tcx.is_diagnostic_item(sym::deref_method, pred_fn_def_id);
+                    if is_type_diagnostic_item(cx, pred_arg_ty, sym::PathBuf)
+                        || is_type_diagnostic_item(cx, pred_arg_ty, sym::OsString);
                     then {
                         (pred_arg, res)
                     } else {
@@ -318,11 +320,11 @@ fn find_stmt_assigns_to<'tcx>(
 
     match (by_ref, &*rvalue) {
         (true, mir::Rvalue::Ref(_, _, place)) | (false, mir::Rvalue::Use(mir::Operand::Copy(place))) => {
-            base_local_and_movability(cx, mir, *place)
+            Some(base_local_and_movability(cx, mir, *place))
         },
         (false, mir::Rvalue::Ref(_, _, place)) => {
             if let [mir::ProjectionElem::Deref] = place.as_ref().projection {
-                base_local_and_movability(cx, mir, *place)
+                Some(base_local_and_movability(cx, mir, *place))
             } else {
                 None
             }
@@ -339,7 +341,7 @@ fn base_local_and_movability<'tcx>(
     cx: &LateContext<'tcx>,
     mir: &mir::Body<'tcx>,
     place: mir::Place<'tcx>,
-) -> Option<(mir::Local, CannotMoveOut)> {
+) -> (mir::Local, CannotMoveOut) {
     use rustc_middle::mir::PlaceRef;
 
     // Dereference. You cannot move things out from a borrowed value.
@@ -360,7 +362,7 @@ fn base_local_and_movability<'tcx>(
             && !is_copy(cx, mir::Place::ty_from(local, projection, &mir.local_decls, cx.tcx).ty);
     }
 
-    Some((local, deref || field || slice))
+    (local, deref || field || slice)
 }
 
 struct LocalUseVisitor {
@@ -388,7 +390,10 @@ impl<'tcx> mir::visit::Visitor<'tcx> for LocalUseVisitor {
         let local = place.local;
 
         if local == self.used.0
-            && !matches!(ctx, PlaceContext::MutatingUse(MutatingUseContext::Drop) | PlaceContext::NonUse(_))
+            && !matches!(
+                ctx,
+                PlaceContext::MutatingUse(MutatingUseContext::Drop) | PlaceContext::NonUse(_)
+            )
         {
             self.used.1 = true;
         }
@@ -517,7 +522,10 @@ impl<'a, 'tcx> mir::visit::Visitor<'tcx> for PossibleBorrowerVisitor<'a, 'tcx> {
                 self.possible_borrower.add(borrowed.local, lhs);
             },
             other => {
-                if !ContainsRegion.visit_ty(place.ty(&self.body.local_decls, self.cx.tcx).ty) {
+                if ContainsRegion
+                    .visit_ty(place.ty(&self.body.local_decls, self.cx.tcx).ty)
+                    .is_continue()
+                {
                     return;
                 }
                 rvalue_locals(other, |rhs| {
@@ -539,7 +547,7 @@ impl<'a, 'tcx> mir::visit::Visitor<'tcx> for PossibleBorrowerVisitor<'a, 'tcx> {
             // If the call returns something with lifetimes,
             // let's conservatively assume the returned value contains lifetime of all the arguments.
             // For example, given `let y: Foo<'a> = foo(x)`, `y` is considered to be a possible borrower of `x`.
-            if !ContainsRegion.visit_ty(&self.body.local_decls[*dest].ty) {
+            if ContainsRegion.visit_ty(&self.body.local_decls[*dest].ty).is_continue() {
                 return;
             }
 
@@ -558,8 +566,10 @@ impl<'a, 'tcx> mir::visit::Visitor<'tcx> for PossibleBorrowerVisitor<'a, 'tcx> {
 struct ContainsRegion;
 
 impl TypeVisitor<'_> for ContainsRegion {
-    fn visit_region(&mut self, _: ty::Region<'_>) -> bool {
-        true
+    type BreakTy = ();
+
+    fn visit_region(&mut self, _: ty::Region<'_>) -> ControlFlow<Self::BreakTy> {
+        ControlFlow::BREAK
     }
 }
 
@@ -574,10 +584,10 @@ fn rvalue_locals(rvalue: &mir::Rvalue<'_>, mut visit: impl FnMut(mir::Local)) {
     match rvalue {
         Use(op) | Repeat(op, _) | Cast(_, op, _) | UnaryOp(_, op) => visit_op(op),
         Aggregate(_, ops) => ops.iter().for_each(visit_op),
-        BinaryOp(_, lhs, rhs) | CheckedBinaryOp(_, lhs, rhs) => {
+        BinaryOp(_, box (lhs, rhs)) | CheckedBinaryOp(_, box (lhs, rhs)) => {
             visit_op(lhs);
             visit_op(rhs);
-        },
+        }
         _ => (),
     }
 }

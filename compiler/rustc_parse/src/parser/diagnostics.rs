@@ -2,14 +2,13 @@ use super::ty::AllowPlus;
 use super::TokenType;
 use super::{BlockMode, Parser, PathStyle, Restrictions, SemiColonMode, SeqSep, TokenExpectType};
 
+use rustc_ast as ast;
 use rustc_ast::ptr::P;
 use rustc_ast::token::{self, Lit, LitKind, TokenKind};
 use rustc_ast::util::parser::AssocOp;
-use rustc_ast::{
-    self as ast, AngleBracketedArg, AngleBracketedArgs, AnonConst, AttrVec, BinOpKind, BindingMode,
-    Block, BlockCheckMode, Expr, ExprKind, GenericArg, Item, ItemKind, Mutability, Param, Pat,
-    PatKind, Path, PathSegment, QSelf, Ty, TyKind,
-};
+use rustc_ast::{AngleBracketedArg, AngleBracketedArgs, AnonConst, AttrVec};
+use rustc_ast::{BinOpKind, BindingMode, Block, BlockCheckMode, Expr, ExprKind, GenericArg, Item};
+use rustc_ast::{ItemKind, Mutability, Param, Pat, PatKind, Path, PathSegment, QSelf, Ty, TyKind};
 use rustc_ast_pretty::pprust;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{pluralize, struct_span_err};
@@ -20,7 +19,8 @@ use rustc_span::{MultiSpan, Span, SpanSnippetError, DUMMY_SP};
 
 use tracing::{debug, trace};
 
-const TURBOFISH: &str = "use `::<...>` instead of `<...>` to specify type arguments";
+const TURBOFISH_SUGGESTION_STR: &str =
+    "use `::<...>` instead of `<...>` to specify type or const arguments";
 
 /// Creates a placeholder argument.
 pub(super) fn dummy_arg(ident: Ident) -> Param {
@@ -219,10 +219,11 @@ impl<'a> Parser<'a> {
         edible: &[TokenKind],
         inedible: &[TokenKind],
     ) -> PResult<'a, bool /* recovered */> {
+        debug!("expected_one_of_not_found(edible: {:?}, inedible: {:?})", edible, inedible);
         fn tokens_to_string(tokens: &[TokenType]) -> String {
             let mut i = tokens.iter();
             // This might be a sign we need a connect method on `Iterator`.
-            let b = i.next().map_or(String::new(), |t| t.to_string());
+            let b = i.next().map_or_else(String::new, |t| t.to_string());
             i.enumerate().fold(b, |mut b, (i, a)| {
                 if tokens.len() > 2 && i == tokens.len() - 2 {
                     b.push_str(", or ");
@@ -244,6 +245,7 @@ impl<'a> Parser<'a> {
             .collect::<Vec<_>>();
         expected.sort_by_cached_key(|x| x.to_string());
         expected.dedup();
+
         let expect = tokens_to_string(&expected[..]);
         let actual = super::token_descr(&self.token);
         let (msg_exp, (label_sp, label_exp)) = if expected.len() > 1 {
@@ -269,6 +271,16 @@ impl<'a> Parser<'a> {
         };
         self.last_unexpected_token_span = Some(self.token.span);
         let mut err = self.struct_span_err(self.token.span, &msg_exp);
+
+        // Add suggestion for a missing closing angle bracket if '>' is included in expected_tokens
+        // there are unclosed angle brackets
+        if self.unmatched_angle_bracket_count > 0
+            && self.token.kind == TokenKind::Eq
+            && expected.iter().any(|tok| matches!(tok, TokenType::Token(TokenKind::Gt)))
+        {
+            err.span_label(self.prev_token.span, "maybe try to close unmatched angle bracket");
+        }
+
         let sp = if self.token == token::Eof {
             // This is EOF; don't want to point at the following char, but rather the last token.
             self.prev_token.span
@@ -510,7 +522,7 @@ impl<'a> Parser<'a> {
         //
         // `x.foo::<u32>>>(3)`
         let parsed_angle_bracket_args =
-            segment.args.as_ref().map(|args| args.is_angle_bracketed()).unwrap_or(false);
+            segment.args.as_ref().map_or(false, |args| args.is_angle_bracketed());
 
         debug!(
             "check_trailing_angle_brackets: parsed_angle_bracket_args={:?}",
@@ -628,7 +640,7 @@ impl<'a> Parser<'a> {
                     }
                 }
                 Err(mut err) => {
-                    // We could't parse generic parameters, unlikely to be a turbofish. Rely on
+                    // We couldn't parse generic parameters, unlikely to be a turbofish. Rely on
                     // generic parse error instead.
                     err.cancel();
                     *self = snapshot;
@@ -650,7 +662,7 @@ impl<'a> Parser<'a> {
                     let x = self.parse_seq_to_before_end(
                         &token::Gt,
                         SeqSep::trailing_allowed(token::Comma),
-                        |p| p.parse_ty(),
+                        |p| p.parse_generic_arg(),
                     );
                     match x {
                         Ok((_, _, false)) => {
@@ -659,7 +671,7 @@ impl<'a> Parser<'a> {
                                 Ok(_) => {
                                     e.span_suggestion_verbose(
                                         binop.span.shrink_to_lo(),
-                                        "use `::<...>` instead of `<...>` to specify type arguments",
+                                        TURBOFISH_SUGGESTION_STR,
                                         "::".to_string(),
                                         Applicability::MaybeIncorrect,
                                     );
@@ -814,7 +826,7 @@ impl<'a> Parser<'a> {
                 let suggest = |err: &mut DiagnosticBuilder<'_>| {
                     err.span_suggestion_verbose(
                         op.span.shrink_to_lo(),
-                        TURBOFISH,
+                        TURBOFISH_SUGGESTION_STR,
                         "::".to_string(),
                         Applicability::MaybeIncorrect,
                     );
@@ -888,7 +900,7 @@ impl<'a> Parser<'a> {
                         {
                             // All we know is that this is `foo < bar >` and *nothing* else. Try to
                             // be helpful, but don't attempt to recover.
-                            err.help(TURBOFISH);
+                            err.help(TURBOFISH_SUGGESTION_STR);
                             err.help("or use `(...)` if you meant to specify fn arguments");
                         }
 
@@ -1092,7 +1104,7 @@ impl<'a> Parser<'a> {
         let (prev_sp, sp) = match (&self.token.kind, self.subparser_name) {
             // Point at the end of the macro call when reaching end of macro arguments.
             (token::Eof, Some(_)) => {
-                let sp = self.sess.source_map().next_point(self.token.span);
+                let sp = self.sess.source_map().next_point(self.prev_token.span);
                 (sp, sp)
             }
             // We don't want to point at the following span after DUMMY_SP.
@@ -1230,7 +1242,7 @@ impl<'a> Parser<'a> {
         let is_question = self.eat(&token::Question); // Handle `await? <expr>`.
         let expr = if self.token == token::OpenDelim(token::Brace) {
             // Handle `await { <expr> }`.
-            // This needs to be handled separatedly from the next arm to avoid
+            // This needs to be handled separately from the next arm to avoid
             // interpreting `await { <expr> }?` as `<expr>?.await`.
             self.parse_block_expr(None, self.token.span, BlockCheckMode::Default, AttrVec::new())
         } else {
@@ -1358,11 +1370,7 @@ impl<'a> Parser<'a> {
         (self.token == token::Lt && // `foo:<bar`, likely a typoed turbofish.
             self.look_ahead(1, |t| t.is_ident() && !t.is_reserved_ident()))
             || self.token.is_ident() &&
-            match node {
-                // `foo::` → `foo:` or `foo.bar::` → `foo.bar:`
-                ast::ExprKind::Path(..) | ast::ExprKind::Field(..) => true,
-                _ => false,
-            } &&
+            matches!(node, ast::ExprKind::Path(..) | ast::ExprKind::Field(..)) &&
             !self.token.is_reserved_ident() &&           // v `foo:bar(baz)`
             self.look_ahead(1, |t| t == &token::OpenDelim(token::Paren))
             || self.look_ahead(1, |t| t == &token::OpenDelim(token::Brace)) // `foo:bar {`
@@ -1605,48 +1613,88 @@ impl<'a> Parser<'a> {
                 Applicability::HasPlaceholders,
             );
             return Some(ident);
-        } else if let PatKind::Ident(_, ident, _) = pat.kind {
-            if require_name
-                && (self.token == token::Comma
-                    || self.token == token::Lt
-                    || self.token == token::CloseDelim(token::Paren))
-            {
-                // `fn foo(a, b) {}`, `fn foo(a<x>, b<y>) {}` or `fn foo(usize, usize) {}`
-                if first_param {
-                    err.span_suggestion(
-                        pat.span,
-                        "if this is a `self` type, give it a parameter name",
-                        format!("self: {}", ident),
-                        Applicability::MaybeIncorrect,
-                    );
+        } else if require_name
+            && (self.token == token::Comma
+                || self.token == token::Lt
+                || self.token == token::CloseDelim(token::Paren))
+        {
+            let rfc_note = "anonymous parameters are removed in the 2018 edition (see RFC 1685)";
+
+            let (ident, self_sugg, param_sugg, type_sugg) = match pat.kind {
+                PatKind::Ident(_, ident, _) => (
+                    ident,
+                    format!("self: {}", ident),
+                    format!("{}: TypeName", ident),
+                    format!("_: {}", ident),
+                ),
+                // Also catches `fn foo(&a)`.
+                PatKind::Ref(ref pat, mutab)
+                    if matches!(pat.clone().into_inner().kind, PatKind::Ident(..)) =>
+                {
+                    match pat.clone().into_inner().kind {
+                        PatKind::Ident(_, ident, _) => {
+                            let mutab = mutab.prefix_str();
+                            (
+                                ident,
+                                format!("self: &{}{}", mutab, ident),
+                                format!("{}: &{}TypeName", ident, mutab),
+                                format!("_: &{}{}", mutab, ident),
+                            )
+                        }
+                        _ => unreachable!(),
+                    }
                 }
-                // Avoid suggesting that `fn foo(HashMap<u32>)` is fixed with a change to
-                // `fn foo(HashMap: TypeName<u32>)`.
-                if self.token != token::Lt {
-                    err.span_suggestion(
-                        pat.span,
-                        "if this is a parameter name, give it a type",
-                        format!("{}: TypeName", ident),
-                        Applicability::HasPlaceholders,
-                    );
+                _ => {
+                    // Otherwise, try to get a type and emit a suggestion.
+                    if let Some(ty) = pat.to_ty() {
+                        err.span_suggestion_verbose(
+                            pat.span,
+                            "explicitly ignore the parameter name",
+                            format!("_: {}", pprust::ty_to_string(&ty)),
+                            Applicability::MachineApplicable,
+                        );
+                        err.note(rfc_note);
+                    }
+
+                    return None;
                 }
+            };
+
+            // `fn foo(a, b) {}`, `fn foo(a<x>, b<y>) {}` or `fn foo(usize, usize) {}`
+            if first_param {
                 err.span_suggestion(
                     pat.span,
-                    "if this is a type, explicitly ignore the parameter name",
-                    format!("_: {}", ident),
-                    Applicability::MachineApplicable,
+                    "if this is a `self` type, give it a parameter name",
+                    self_sugg,
+                    Applicability::MaybeIncorrect,
                 );
-                err.note("anonymous parameters are removed in the 2018 edition (see RFC 1685)");
-
-                // Don't attempt to recover by using the `X` in `X<Y>` as the parameter name.
-                return if self.token == token::Lt { None } else { Some(ident) };
             }
+            // Avoid suggesting that `fn foo(HashMap<u32>)` is fixed with a change to
+            // `fn foo(HashMap: TypeName<u32>)`.
+            if self.token != token::Lt {
+                err.span_suggestion(
+                    pat.span,
+                    "if this is a parameter name, give it a type",
+                    param_sugg,
+                    Applicability::HasPlaceholders,
+                );
+            }
+            err.span_suggestion(
+                pat.span,
+                "if this is a type, explicitly ignore the parameter name",
+                type_sugg,
+                Applicability::MachineApplicable,
+            );
+            err.note(rfc_note);
+
+            // Don't attempt to recover by using the `X` in `X<Y>` as the parameter name.
+            return if self.token == token::Lt { None } else { Some(ident) };
         }
         None
     }
 
     pub(super) fn recover_arg_parse(&mut self) -> PResult<'a, (P<ast::Pat>, P<ast::Ty>)> {
-        let pat = self.parse_pat(Some("argument name"))?;
+        let pat = self.parse_pat_no_top_alt(Some("argument name"))?;
         self.expect(&token::Colon)?;
         let ty = self.parse_ty()?;
 
@@ -1713,7 +1761,7 @@ impl<'a> Parser<'a> {
     pub(super) fn expected_expression_found(&self) -> DiagnosticBuilder<'a> {
         let (span, msg) = match (&self.token.kind, self.subparser_name) {
             (&token::Eof, Some(origin)) => {
-                let sp = self.sess.source_map().next_point(self.token.span);
+                let sp = self.sess.source_map().next_point(self.prev_token.span);
                 (sp, format!("expected expression, found end of {}", origin))
             }
             _ => (
@@ -1811,9 +1859,13 @@ impl<'a> Parser<'a> {
         return Ok(false); // Don't continue.
     }
 
-    /// Handle a generic const argument that had not been enclosed in braces, and suggest enclosing
-    /// it braces. In this situation, unlike in `handle_ambiguous_unbraced_const_arg`, this is
-    /// almost certainly a const argument, so we always offer a suggestion.
+    /// Attempt to parse a generic const argument that has not been enclosed in braces.
+    /// There are a limited number of expressions that are permitted without being encoded
+    /// in braces:
+    /// - Literals.
+    /// - Single-segment paths (i.e. standalone generic const parameters).
+    /// All other expressions that can be parsed will emit an error suggesting the expression be
+    /// wrapped in braces.
     pub fn handle_unambiguous_unbraced_const_arg(&mut self) -> PResult<'a, P<Expr>> {
         let start = self.token.span;
         let expr = self.parse_expr_res(Restrictions::CONST_EXPR, None).map_err(|mut err| {
@@ -1910,5 +1962,23 @@ impl<'a> Parser<'a> {
         }
         *self = snapshot;
         Err(err)
+    }
+
+    /// Get the diagnostics for the cases where `move async` is found.
+    ///
+    /// `move_async_span` starts at the 'm' of the move keyword and ends with the 'c' of the async keyword
+    pub(super) fn incorrect_move_async_order_found(
+        &self,
+        move_async_span: Span,
+    ) -> DiagnosticBuilder<'a> {
+        let mut err =
+            self.struct_span_err(move_async_span, "the order of `move` and `async` is incorrect");
+        err.span_suggestion_verbose(
+            move_async_span,
+            "try switching the order",
+            "async move".to_owned(),
+            Applicability::MaybeIncorrect,
+        );
+        err
     }
 }

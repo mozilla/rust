@@ -8,14 +8,15 @@
 
 // FIXME: switch to something more ergonomic here, once available.
 // (Currently there is no way to opt into sysroot crates without `extern crate`.)
-extern crate rustc_data_structures;
 extern crate rustc_driver;
 extern crate rustc_errors;
 extern crate rustc_interface;
-extern crate rustc_middle;
+extern crate rustc_session;
+extern crate rustc_span;
 
 use rustc_interface::interface;
-use rustc_middle::ty::TyCtxt;
+use rustc_session::parse::ParseSess;
+use rustc_span::symbol::Symbol;
 use rustc_tools_util::VersionInfo;
 
 use std::borrow::Cow;
@@ -25,8 +26,6 @@ use std::ops::Deref;
 use std::panic;
 use std::path::{Path, PathBuf};
 use std::process::{exit, Command};
-
-mod lintlist;
 
 /// If a command-line option matches `find_arg`, then apply the predicate `pred` on its value. If
 /// true, then return it. The parameter is assumed to be either `--arg=value` or `--arg value`.
@@ -64,13 +63,42 @@ fn test_arg_value() {
     assert_eq!(arg_value(args, "--foo", |_| true), None);
 }
 
+fn track_clippy_args(parse_sess: &mut ParseSess, args_env_var: &Option<String>) {
+    parse_sess.env_depinfo.get_mut().insert((
+        Symbol::intern("CLIPPY_ARGS"),
+        args_env_var.as_deref().map(Symbol::intern),
+    ));
+}
+
 struct DefaultCallbacks;
 impl rustc_driver::Callbacks for DefaultCallbacks {}
 
-struct ClippyCallbacks;
+/// This is different from `DefaultCallbacks` that it will inform Cargo to track the value of
+/// `CLIPPY_ARGS` environment variable.
+struct RustcCallbacks {
+    clippy_args_var: Option<String>,
+}
+
+impl rustc_driver::Callbacks for RustcCallbacks {
+    fn config(&mut self, config: &mut interface::Config) {
+        let clippy_args_var = self.clippy_args_var.take();
+        config.parse_sess_created = Some(Box::new(move |parse_sess| {
+            track_clippy_args(parse_sess, &clippy_args_var);
+        }));
+    }
+}
+
+struct ClippyCallbacks {
+    clippy_args_var: Option<String>,
+}
+
 impl rustc_driver::Callbacks for ClippyCallbacks {
     fn config(&mut self, config: &mut interface::Config) {
         let previous = config.register_lints.take();
+        let clippy_args_var = self.clippy_args_var.take();
+        config.parse_sess_created = Some(Box::new(move |parse_sess| {
+            track_clippy_args(parse_sess, &clippy_args_var);
+        }));
         config.register_lints = Some(Box::new(move |sess, mut lint_store| {
             // technically we're ~guaranteed that this is none but might as well call anything that
             // is there already. Certainly it can't hurt.
@@ -88,115 +116,8 @@ impl rustc_driver::Callbacks for ClippyCallbacks {
         // run on the unoptimized MIR. On the other hand this results in some false negatives. If
         // MIR passes can be enabled / disabled separately, we should figure out, what passes to
         // use for Clippy.
-        config.opts.debugging_opts.mir_opt_level = 0;
+        config.opts.debugging_opts.mir_opt_level = Some(0);
     }
-}
-
-#[allow(clippy::find_map, clippy::filter_map)]
-fn describe_lints() {
-    use lintlist::{Level, Lint, ALL_LINTS, LINT_LEVELS};
-    use rustc_data_structures::fx::FxHashSet;
-
-    println!(
-        "
-Available lint options:
-    -W <foo>           Warn about <foo>
-    -A <foo>           Allow <foo>
-    -D <foo>           Deny <foo>
-    -F <foo>           Forbid <foo> (deny <foo> and all attempts to override)
-
-"
-    );
-
-    let lint_level = |lint: &Lint| {
-        LINT_LEVELS
-            .iter()
-            .find(|level_mapping| level_mapping.0 == lint.group)
-            .map(|(_, level)| match level {
-                Level::Allow => "allow",
-                Level::Warn => "warn",
-                Level::Deny => "deny",
-            })
-            .unwrap()
-    };
-
-    let mut lints: Vec<_> = ALL_LINTS.iter().collect();
-    // The sort doesn't case-fold but it's doubtful we care.
-    lints.sort_by_cached_key(|x: &&Lint| (lint_level(x), x.name));
-
-    let max_lint_name_len = lints
-        .iter()
-        .map(|lint| lint.name.len())
-        .map(|len| len + "clippy::".len())
-        .max()
-        .unwrap_or(0);
-
-    let padded = |x: &str| {
-        let mut s = " ".repeat(max_lint_name_len - x.chars().count());
-        s.push_str(x);
-        s
-    };
-
-    let scoped = |x: &str| format!("clippy::{}", x);
-
-    let lint_groups: FxHashSet<_> = lints.iter().map(|lint| lint.group).collect();
-
-    println!("Lint checks provided by clippy:\n");
-    println!("    {}  {:7.7}  meaning", padded("name"), "default");
-    println!("    {}  {:7.7}  -------", padded("----"), "-------");
-
-    let print_lints = |lints: &[&Lint]| {
-        for lint in lints {
-            let name = lint.name.replace("_", "-");
-            println!(
-                "    {}  {:7.7}  {}",
-                padded(&scoped(&name)),
-                lint_level(lint),
-                lint.desc
-            );
-        }
-        println!("\n");
-    };
-
-    print_lints(&lints);
-
-    let max_group_name_len = std::cmp::max(
-        "clippy::all".len(),
-        lint_groups
-            .iter()
-            .map(|group| group.len())
-            .map(|len| len + "clippy::".len())
-            .max()
-            .unwrap_or(0),
-    );
-
-    let padded_group = |x: &str| {
-        let mut s = " ".repeat(max_group_name_len - x.chars().count());
-        s.push_str(x);
-        s
-    };
-
-    println!("Lint groups provided by clippy:\n");
-    println!("    {}  sub-lints", padded_group("name"));
-    println!("    {}  ---------", padded_group("----"));
-    println!("    {}  the set of all clippy lints", padded_group("clippy::all"));
-
-    let print_lint_groups = || {
-        for group in lint_groups {
-            let name = group.to_lowercase().replace("_", "-");
-            let desc = lints
-                .iter()
-                .filter(|&lint| lint.group == group)
-                .map(|lint| lint.name)
-                .map(|name| name.replace("_", "-"))
-                .collect::<Vec<String>>()
-                .join(", ");
-            println!("    {}  {}", padded_group(&scoped(&name)), desc);
-        }
-        println!("\n");
-    };
-
-    print_lint_groups();
 }
 
 fn display_help() {
@@ -278,7 +199,7 @@ fn report_clippy_ice(info: &panic::PanicInfo<'_>, bug_report_url: &str) {
 
     let num_frames = if backtrace { None } else { Some(2) };
 
-    TyCtxt::try_print_query_stack(&handler, num_frames);
+    interface::try_print_query_stack(&handler, num_frames);
 }
 
 fn toolchain_path(home: Option<String>, toolchain: Option<String>) -> Option<PathBuf> {
@@ -292,6 +213,7 @@ fn toolchain_path(home: Option<String>, toolchain: Option<String>) -> Option<Pat
     })
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn main() {
     rustc_driver::init_rustc_env_logger();
     SyncLazy::force(&ICE_HOOK);
@@ -379,17 +301,6 @@ pub fn main() {
             exit(0);
         }
 
-        let should_describe_lints = || {
-            let args: Vec<_> = env::args().collect();
-            args.windows(2)
-                .any(|args| args[1] == "help" && matches!(args[0].as_str(), "-W" | "-A" | "-D" | "-F"))
-        };
-
-        if !wrapper_mode && should_describe_lints() {
-            describe_lints();
-            exit(0);
-        }
-
         // this conditional check for the --sysroot flag is there so users can call
         // `clippy_driver` directly
         // without having to pass --sysroot or anything
@@ -398,27 +309,41 @@ pub fn main() {
             args.extend(vec!["--sysroot".into(), sys_root]);
         };
 
-        // this check ensures that dependencies are built but not linted and the final
-        // crate is linted but not built
-        let clippy_enabled = env::var("CLIPPY_TESTS").map_or(false, |val| val == "true")
-            || arg_value(&orig_args, "--cap-lints", |val| val == "allow").is_none();
+        let mut no_deps = false;
+        let clippy_args_var = env::var("CLIPPY_ARGS").ok();
+        let clippy_args = clippy_args_var
+            .as_deref()
+            .unwrap_or_default()
+            .split("__CLIPPY_HACKERY__")
+            .filter_map(|s| match s {
+                "" => None,
+                "--no-deps" => {
+                    no_deps = true;
+                    None
+                },
+                _ => Some(s.to_string()),
+            })
+            .chain(vec!["--cfg".into(), r#"feature="cargo-clippy""#.into()])
+            .collect::<Vec<String>>();
+
+        // We enable Clippy if one of the following conditions is met
+        // - IF Clippy is run on its test suite OR
+        // - IF Clippy is run on the main crate, not on deps (`!cap_lints_allow`) THEN
+        //    - IF `--no-deps` is not set (`!no_deps`) OR
+        //    - IF `--no-deps` is set and Clippy is run on the specified primary package
+        let clippy_tests_set = env::var("__CLIPPY_INTERNAL_TESTS").map_or(false, |val| val == "true");
+        let cap_lints_allow = arg_value(&orig_args, "--cap-lints", |val| val == "allow").is_some();
+        let in_primary_package = env::var("CARGO_PRIMARY_PACKAGE").is_ok();
+
+        let clippy_enabled = clippy_tests_set || (!cap_lints_allow && (!no_deps || in_primary_package));
+        if clippy_enabled {
+            args.extend(clippy_args);
+        }
 
         if clippy_enabled {
-            args.extend(vec!["--cfg".into(), r#"feature="cargo-clippy""#.into()]);
-            if let Ok(extra_args) = env::var("CLIPPY_ARGS") {
-                args.extend(extra_args.split("__CLIPPY_HACKERY__").filter_map(|s| {
-                    if s.is_empty() {
-                        None
-                    } else {
-                        Some(s.to_string())
-                    }
-                }));
-            }
+            rustc_driver::RunCompiler::new(&args, &mut ClippyCallbacks { clippy_args_var }).run()
+        } else {
+            rustc_driver::RunCompiler::new(&args, &mut RustcCallbacks { clippy_args_var }).run()
         }
-        let mut clippy = ClippyCallbacks;
-        let mut default = DefaultCallbacks;
-        let callbacks: &mut (dyn rustc_driver::Callbacks + Send) =
-            if clippy_enabled { &mut clippy } else { &mut default };
-        rustc_driver::RunCompiler::new(&args, callbacks).run()
     }))
 }

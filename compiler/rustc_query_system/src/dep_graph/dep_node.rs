@@ -44,7 +44,7 @@
 
 use super::{DepContext, DepKind};
 
-use rustc_data_structures::fingerprint::Fingerprint;
+use rustc_data_structures::fingerprint::{Fingerprint, PackedFingerprint};
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 
 use std::fmt;
@@ -53,7 +53,19 @@ use std::hash::Hash;
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encodable, Decodable)]
 pub struct DepNode<K> {
     pub kind: K,
-    pub hash: Fingerprint,
+    // Important - whenever a `DepNode` is constructed, we need to make
+    // sure to register a `DefPathHash -> DefId` mapping if needed.
+    // This is currently done in two places:
+    //
+    // * When a `DepNode::construct` is called, `arg.to_fingerprint()`
+    //   is responsible for calling `OnDiskCache::store_foreign_def_id_hash`
+    //   if needed
+    // * When we serialize the on-disk cache, `OnDiskCache::serialize` is
+    //   responsible for calling `DepGraph::register_reused_dep_nodes`.
+    //
+    // FIXME: Enforce this by preventing manual construction of `DefNode`
+    // (e.g. add a `_priv: ()` field)
+    pub hash: PackedFingerprint,
 }
 
 impl<K: DepKind> DepNode<K> {
@@ -62,20 +74,23 @@ impl<K: DepKind> DepNode<K> {
     /// does not require any parameters.
     pub fn new_no_params(kind: K) -> DepNode<K> {
         debug_assert!(!kind.has_params());
-        DepNode { kind, hash: Fingerprint::ZERO }
+        DepNode { kind, hash: Fingerprint::ZERO.into() }
     }
 
     pub fn construct<Ctxt, Key>(tcx: Ctxt, kind: K, arg: &Key) -> DepNode<K>
     where
-        Ctxt: crate::query::QueryContext<DepKind = K>,
+        Ctxt: super::DepContext<DepKind = K>,
         Key: DepNodeParams<Ctxt>,
     {
         let hash = arg.to_fingerprint(tcx);
-        let dep_node = DepNode { kind, hash };
+        let dep_node = DepNode { kind, hash: hash.into() };
 
         #[cfg(debug_assertions)]
         {
-            if !kind.can_reconstruct_query_key() && tcx.debug_dep_node() {
+            if !kind.can_reconstruct_query_key()
+                && (tcx.sess().opts.debugging_opts.incremental_info
+                    || tcx.sess().opts.debugging_opts.query_dep_graph)
+            {
                 tcx.dep_graph().register_dep_node_debug_str(dep_node, || arg.to_debug_str(tcx));
             }
         }
@@ -138,12 +153,6 @@ where
 
     default fn recover(_: Ctxt, _: &DepNode<Ctxt::DepKind>) -> Option<Self> {
         None
-    }
-}
-
-impl<Ctxt: DepContext> DepNodeParams<Ctxt> for () {
-    fn to_fingerprint(&self, _: Ctxt) -> Fingerprint {
-        Fingerprint::ZERO
     }
 }
 

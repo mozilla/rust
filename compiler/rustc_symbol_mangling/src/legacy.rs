@@ -51,12 +51,20 @@ pub(super) fn mangle(
 
     // Erase regions because they may not be deterministic when hashed
     // and should not matter anyhow.
-    let instance_ty = tcx.erase_regions(&instance_ty);
+    let instance_ty = tcx.erase_regions(instance_ty);
 
     let hash = get_symbol_hash(tcx, instance, instance_ty, instantiating_crate);
 
     let mut printer = SymbolPrinter { tcx, path: SymbolPath::new(), keep_within_component: false }
-        .print_def_path(def_id, &[])
+        .print_def_path(
+            def_id,
+            if let ty::InstanceDef::DropGlue(_, _) = instance.def {
+                // Add the name of the dropped type to the symbol name
+                &*instance.substs
+            } else {
+                &[]
+            },
+        )
         .unwrap();
 
     if let ty::InstanceDef::VtableShim(..) = instance.def {
@@ -222,7 +230,7 @@ impl Printer<'tcx> for SymbolPrinter<'tcx> {
 
     fn print_dyn_existential(
         mut self,
-        predicates: &'tcx ty::List<ty::ExistentialPredicate<'tcx>>,
+        predicates: &'tcx ty::List<ty::Binder<ty::ExistentialPredicate<'tcx>>>,
     ) -> Result<Self::DynExistential, Self::Error> {
         let mut first = true;
         for p in predicates {
@@ -237,7 +245,7 @@ impl Printer<'tcx> for SymbolPrinter<'tcx> {
 
     fn print_const(mut self, ct: &'tcx ty::Const<'tcx>) -> Result<Self::Const, Self::Error> {
         // only print integers
-        if let ty::ConstKind::Value(ConstValue::Scalar(Scalar::Raw { .. })) = ct.val {
+        if let ty::ConstKind::Value(ConstValue::Scalar(Scalar::Int { .. })) = ct.val {
             if ct.ty.is_integral() {
                 return self.pretty_print_const(ct, true);
             }
@@ -326,10 +334,8 @@ impl Printer<'tcx> for SymbolPrinter<'tcx> {
     ) -> Result<Self::Path, Self::Error> {
         self = print_prefix(self)?;
 
-        let args = args.iter().cloned().filter(|arg| match arg.unpack() {
-            GenericArgKind::Lifetime(_) => false,
-            _ => true,
-        });
+        let args =
+            args.iter().cloned().filter(|arg| !matches!(arg.unpack(), GenericArgKind::Lifetime(_)));
 
         if args.clone().next().is_some() {
             self.generic_delimiters(|cx| cx.comma_sep(args))

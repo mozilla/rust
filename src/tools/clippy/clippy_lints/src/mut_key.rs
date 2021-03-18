@@ -57,21 +57,21 @@ declare_lint_pass!(MutableKeyType => [ MUTABLE_KEY_TYPE ]);
 impl<'tcx> LateLintPass<'tcx> for MutableKeyType {
     fn check_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx hir::Item<'tcx>) {
         if let hir::ItemKind::Fn(ref sig, ..) = item.kind {
-            check_sig(cx, item.hir_id, &sig.decl);
+            check_sig(cx, item.hir_id(), &sig.decl);
         }
     }
 
     fn check_impl_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx hir::ImplItem<'tcx>) {
         if let hir::ImplItemKind::Fn(ref sig, ..) = item.kind {
-            if trait_ref_of_method(cx, item.hir_id).is_none() {
-                check_sig(cx, item.hir_id, &sig.decl);
+            if trait_ref_of_method(cx, item.hir_id()).is_none() {
+                check_sig(cx, item.hir_id(), &sig.decl);
             }
         }
     }
 
     fn check_trait_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx hir::TraitItem<'tcx>) {
         if let hir::TraitItemKind::Fn(ref sig, ..) = item.kind {
-            check_sig(cx, item.hir_id, &sig.decl);
+            check_sig(cx, item.hir_id(), &sig.decl);
         }
     }
 
@@ -89,11 +89,7 @@ fn check_sig<'tcx>(cx: &LateContext<'tcx>, item_hir_id: hir::HirId, decl: &hir::
     for (hir_ty, ty) in decl.inputs.iter().zip(fn_sig.inputs().skip_binder().iter()) {
         check_ty(cx, hir_ty.span, ty);
     }
-    check_ty(
-        cx,
-        decl.output.span(),
-        cx.tcx.erase_late_bound_regions(&fn_sig.output()),
-    );
+    check_ty(cx, decl.output.span(), cx.tcx.erase_late_bound_regions(fn_sig.output()));
 }
 
 // We want to lint 1. sets or maps with 2. not immutable key types and 3. no unerased

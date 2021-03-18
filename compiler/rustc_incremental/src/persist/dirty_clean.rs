@@ -17,7 +17,7 @@ use rustc_ast::{self as ast, Attribute, NestedMetaItem};
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_hir as hir;
-use rustc_hir::def_id::DefId;
+use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::intravisit;
 use rustc_hir::itemlikevisit::ItemLikeVisitor;
 use rustc_hir::Node as HirNode;
@@ -160,7 +160,7 @@ pub fn check_dirty_clean_annotations(tcx: TyCtxt<'_>) {
 
         let mut all_attrs = FindAllAttrs {
             tcx,
-            attr_names: vec![sym::rustc_dirty, sym::rustc_clean],
+            attr_names: &[sym::rustc_dirty, sym::rustc_clean],
             found_attrs: vec![],
         };
         intravisit::walk_crate(&mut all_attrs, krate);
@@ -168,7 +168,7 @@ pub fn check_dirty_clean_annotations(tcx: TyCtxt<'_>) {
         // Note that we cannot use the existing "unused attribute"-infrastructure
         // here, since that is running before codegen. This is also the reason why
         // all codegen-specific attributes are `AssumedUsed` in rustc_ast::feature_gate.
-        all_attrs.report_unchecked_attrs(&dirty_clean_visitor.checked_attrs);
+        all_attrs.report_unchecked_attrs(dirty_clean_visitor.checked_attrs);
     })
 }
 
@@ -179,7 +179,7 @@ pub struct DirtyCleanVisitor<'tcx> {
 
 impl DirtyCleanVisitor<'tcx> {
     /// Possibly "deserialize" the attribute into a clean/dirty assertion
-    fn assertion_maybe(&mut self, item_id: hir::HirId, attr: &Attribute) -> Option<Assertion> {
+    fn assertion_maybe(&mut self, item_id: LocalDefId, attr: &Attribute) -> Option<Assertion> {
         let is_clean = if self.tcx.sess.check_name(attr, sym::rustc_dirty) {
             false
         } else if self.tcx.sess.check_name(attr, sym::rustc_clean) {
@@ -207,7 +207,7 @@ impl DirtyCleanVisitor<'tcx> {
     /// Gets the "auto" assertion on pre-validated attr, along with the `except` labels.
     fn assertion_auto(
         &mut self,
-        item_id: hir::HirId,
+        item_id: LocalDefId,
         attr: &Attribute,
         is_clean: bool,
     ) -> Assertion {
@@ -253,8 +253,9 @@ impl DirtyCleanVisitor<'tcx> {
 
     /// Return all DepNode labels that should be asserted for this item.
     /// index=0 is the "name" used for error messages
-    fn auto_labels(&mut self, item_id: hir::HirId, attr: &Attribute) -> (&'static str, Labels) {
-        let node = self.tcx.hir().get(item_id);
+    fn auto_labels(&mut self, item_id: LocalDefId, attr: &Attribute) -> (&'static str, Labels) {
+        let hir_id = self.tcx.hir().local_def_id_to_hir_id(item_id);
+        let node = self.tcx.hir().get(hir_id);
         let (name, labels) = match node {
             HirNode::Item(item) => {
                 match item.kind {
@@ -280,7 +281,7 @@ impl DirtyCleanVisitor<'tcx> {
                     HirItem::Mod(..) => ("ItemMod", LABELS_HIR_ONLY),
 
                     // // An external module
-                    HirItem::ForeignMod(..) => ("ItemForeignMod", LABELS_HIR_ONLY),
+                    HirItem::ForeignMod { .. } => ("ItemForeignMod", LABELS_HIR_ONLY),
 
                     // Module-level inline assembly (from global_asm!)
                     HirItem::GlobalAsm(..) => ("ItemGlobalAsm", LABELS_HIR_ONLY),
@@ -299,7 +300,7 @@ impl DirtyCleanVisitor<'tcx> {
 
                     // Represents a Trait Declaration
                     // FIXME(michaelwoerister): trait declaration is buggy because sometimes some of
-                    // the depnodes don't exist (because they legitametely didn't need to be
+                    // the depnodes don't exist (because they legitimately didn't need to be
                     // calculated)
                     //
                     // michaelwoerister and vitiral came up with a possible solution,
@@ -430,18 +431,17 @@ impl DirtyCleanVisitor<'tcx> {
         }
     }
 
-    fn check_item(&mut self, item_id: hir::HirId, item_span: Span) {
-        let def_id = self.tcx.hir().local_def_id(item_id);
-        for attr in self.tcx.get_attrs(def_id.to_def_id()).iter() {
+    fn check_item(&mut self, item_id: LocalDefId, item_span: Span) {
+        for attr in self.tcx.get_attrs(item_id.to_def_id()).iter() {
             let assertion = match self.assertion_maybe(item_id, attr) {
                 Some(a) => a,
                 None => continue,
             };
             self.checked_attrs.insert(attr.id);
-            for dep_node in self.dep_nodes(&assertion.clean, def_id.to_def_id()) {
+            for dep_node in self.dep_nodes(&assertion.clean, item_id.to_def_id()) {
                 self.assert_clean(item_span, dep_node);
             }
-            for dep_node in self.dep_nodes(&assertion.dirty, def_id.to_def_id()) {
+            for dep_node in self.dep_nodes(&assertion.dirty, item_id.to_def_id()) {
                 self.assert_dirty(item_span, dep_node);
             }
         }
@@ -450,15 +450,19 @@ impl DirtyCleanVisitor<'tcx> {
 
 impl ItemLikeVisitor<'tcx> for DirtyCleanVisitor<'tcx> {
     fn visit_item(&mut self, item: &'tcx hir::Item<'tcx>) {
-        self.check_item(item.hir_id, item.span);
+        self.check_item(item.def_id, item.span);
     }
 
     fn visit_trait_item(&mut self, item: &hir::TraitItem<'_>) {
-        self.check_item(item.hir_id, item.span);
+        self.check_item(item.def_id, item.span);
     }
 
     fn visit_impl_item(&mut self, item: &hir::ImplItem<'_>) {
-        self.check_item(item.hir_id, item.span);
+        self.check_item(item.def_id, item.span);
+    }
+
+    fn visit_foreign_item(&mut self, item: &hir::ForeignItem<'_>) {
+        self.check_item(item.def_id, item.span);
     }
 }
 
@@ -512,17 +516,17 @@ fn expect_associated_value(tcx: TyCtxt<'_>, item: &NestedMetaItem) -> Symbol {
 }
 
 // A visitor that collects all #[rustc_dirty]/#[rustc_clean] attributes from
-// the HIR. It is used to verfiy that we really ran checks for all annotated
+// the HIR. It is used to verify that we really ran checks for all annotated
 // nodes.
-pub struct FindAllAttrs<'tcx> {
+pub struct FindAllAttrs<'a, 'tcx> {
     tcx: TyCtxt<'tcx>,
-    attr_names: Vec<Symbol>,
+    attr_names: &'a [Symbol],
     found_attrs: Vec<&'tcx Attribute>,
 }
 
-impl FindAllAttrs<'tcx> {
+impl FindAllAttrs<'_, 'tcx> {
     fn is_active_attr(&mut self, attr: &Attribute) -> bool {
-        for attr_name in &self.attr_names {
+        for attr_name in self.attr_names {
             if self.tcx.sess.check_name(attr, *attr_name) && check_config(self.tcx, attr) {
                 return true;
             }
@@ -531,26 +535,27 @@ impl FindAllAttrs<'tcx> {
         false
     }
 
-    fn report_unchecked_attrs(&self, checked_attrs: &FxHashSet<ast::AttrId>) {
+    fn report_unchecked_attrs(&self, mut checked_attrs: FxHashSet<ast::AttrId>) {
         for attr in &self.found_attrs {
             if !checked_attrs.contains(&attr.id) {
                 self.tcx.sess.span_err(
                     attr.span,
                     "found unchecked `#[rustc_dirty]` / `#[rustc_clean]` attribute",
                 );
+                checked_attrs.insert(attr.id);
             }
         }
     }
 }
 
-impl intravisit::Visitor<'tcx> for FindAllAttrs<'tcx> {
+impl intravisit::Visitor<'tcx> for FindAllAttrs<'_, 'tcx> {
     type Map = Map<'tcx>;
 
     fn nested_visit_map(&mut self) -> intravisit::NestedVisitorMap<Self::Map> {
         intravisit::NestedVisitorMap::All(self.tcx.hir())
     }
 
-    fn visit_attribute(&mut self, attr: &'tcx Attribute) {
+    fn visit_attribute(&mut self, _: hir::HirId, attr: &'tcx Attribute) {
         if self.is_active_attr(attr) {
             self.found_attrs.push(attr);
         }

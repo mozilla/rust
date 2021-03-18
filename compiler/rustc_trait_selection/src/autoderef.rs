@@ -6,7 +6,6 @@ use rustc_infer::infer::InferCtxt;
 use rustc_middle::ty::{self, TraitRef, Ty, TyCtxt, WithConstness};
 use rustc_middle::ty::{ToPredicate, TypeFoldable};
 use rustc_session::DiagnosticMessageId;
-use rustc_span::symbol::{sym, Ident};
 use rustc_span::Span;
 
 #[derive(Copy, Clone, Debug)]
@@ -109,7 +108,7 @@ impl<'a, 'tcx> Autoderef<'a, 'tcx> {
             param_env,
             state: AutoderefSnapshot {
                 steps: vec![],
-                cur_ty: infcx.resolve_vars_if_possible(&base_ty),
+                cur_ty: infcx.resolve_vars_if_possible(base_ty),
                 obligations: vec![],
                 at_start: true,
                 reached_recursion_limit: false,
@@ -146,11 +145,10 @@ impl<'a, 'tcx> Autoderef<'a, 'tcx> {
         let normalized_ty = fulfillcx.normalize_projection_type(
             &self.infcx,
             self.param_env,
-            ty::ProjectionTy::from_ref_and_name(
-                tcx,
-                trait_ref,
-                Ident::with_dummy_span(sym::Target),
-            ),
+            ty::ProjectionTy {
+                item_def_id: tcx.lang_items().deref_target()?,
+                substs: trait_ref.substs,
+            },
             cause,
         );
         if let Err(e) = fulfillcx.select_where_possible(&self.infcx) {
@@ -164,14 +162,14 @@ impl<'a, 'tcx> Autoderef<'a, 'tcx> {
         debug!("overloaded_deref_ty({:?}) = ({:?}, {:?})", ty, normalized_ty, obligations);
         self.state.obligations.extend(obligations);
 
-        Some(self.infcx.resolve_vars_if_possible(&normalized_ty))
+        Some(self.infcx.resolve_vars_if_possible(normalized_ty))
     }
 
     /// Returns the final type we ended up with, which may be an inference
     /// variable (we will resolve it first, if we want).
     pub fn final_ty(&self, resolve: bool) -> Ty<'tcx> {
         if resolve {
-            self.infcx.resolve_vars_if_possible(&self.state.cur_ty)
+            self.infcx.resolve_vars_if_possible(self.state.cur_ty)
         } else {
             self.state.cur_ty
         }

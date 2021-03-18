@@ -257,7 +257,10 @@ pub struct Substructure<'a> {
     pub type_ident: Ident,
     /// ident of the method
     pub method_ident: Ident,
-    /// dereferenced access to any `Self_` or `Ptr(Self_, _)` arguments
+    /// dereferenced access to any [`Self_`] or [`Ptr(Self_, _)][ptr]` arguments
+    ///
+    /// [`Self_`]: ty::Ty::Self_
+    /// [ptr]: ty::Ty::Ptr
     pub self_args: &'a [P<Expr>],
     /// verbatim access to any other arguments
     pub nonself_args: &'a [P<Expr>],
@@ -358,7 +361,7 @@ fn find_type_parameters(
             visit::walk_ty(self, ty)
         }
 
-        fn visit_mac(&mut self, mac: &ast::MacCall) {
+        fn visit_mac_call(&mut self, mac: &ast::MacCall) {
             self.cx.span_err(mac.span(), "`derive` cannot be used on items with type macros");
         }
     }
@@ -401,19 +404,11 @@ impl<'a> TraitDef<'a> {
                 let has_no_type_params = match item.kind {
                     ast::ItemKind::Struct(_, ref generics)
                     | ast::ItemKind::Enum(_, ref generics)
-                    | ast::ItemKind::Union(_, ref generics) => {
-                        !generics.params.iter().any(|param| match param.kind {
-                            ast::GenericParamKind::Type { .. } => true,
-                            _ => false,
-                        })
-                    }
-                    _ => {
-                        // Non-ADT derive is an error, but it should have been
-                        // set earlier; see
-                        // librustc_expand/expand.rs:MacroExpander::fully_expand_fragment()
-                        // librustc_expand/base.rs:Annotatable::derive_allowed()
-                        return;
-                    }
+                    | ast::ItemKind::Union(_, ref generics) => !generics
+                        .params
+                        .iter()
+                        .any(|param| matches!(param.kind, ast::GenericParamKind::Type { .. })),
+                    _ => unreachable!(),
                 };
                 let container_id = cx.current_expansion.id.expn_data().parent;
                 let always_copy = has_no_type_params && cx.resolver.has_derive_copy(container_id);
@@ -475,12 +470,7 @@ impl<'a> TraitDef<'a> {
                 );
                 push(Annotatable::Item(P(ast::Item { attrs, ..(*newitem).clone() })))
             }
-            _ => {
-                // Non-Item derive is an error, but it should have been
-                // set earlier; see
-                // librustc_expand/expand.rs:MacroExpander::fully_expand_fragment()
-                // librustc_expand/base.rs:Annotatable::derive_allowed()
-            }
+            _ => unreachable!(),
         }
     }
 
@@ -537,12 +527,12 @@ impl<'a> TraitDef<'a> {
                     tokens: None,
                 },
                 attrs: Vec::new(),
-                kind: ast::AssocItemKind::TyAlias(
+                kind: ast::AssocItemKind::TyAlias(box ast::TyAliasKind(
                     ast::Defaultness::Final,
                     Generics::default(),
                     Vec::new(),
                     Some(type_def.to_ty(cx, self.span, type_ident, generics)),
-                ),
+                )),
                 tokens: None,
             })
         });
@@ -608,10 +598,7 @@ impl<'a> TraitDef<'a> {
 
             let mut ty_params = params
                 .iter()
-                .filter_map(|param| match param.kind {
-                    ast::GenericParamKind::Type { .. } => Some(param),
-                    _ => None,
-                })
+                .filter(|param| matches!(param.kind, ast::GenericParamKind::Type { .. }))
                 .peekable();
 
             if ty_params.peek().is_some() {
@@ -700,7 +687,7 @@ impl<'a> TraitDef<'a> {
             self.span,
             Ident::invalid(),
             a,
-            ast::ItemKind::Impl {
+            ast::ItemKind::Impl(box ast::ImplKind {
                 unsafety,
                 polarity: ast::ImplPolarity::Positive,
                 defaultness: ast::Defaultness::Final,
@@ -709,7 +696,7 @@ impl<'a> TraitDef<'a> {
                 of_trait: opt_trait_ref,
                 self_ty: self_type,
                 items: methods.into_iter().chain(associated_types).collect(),
-            },
+            }),
         )
     }
 
@@ -879,7 +866,7 @@ impl<'a> MethodDef<'a> {
                 Self_ if nonstatic => {
                     self_args.push(arg_expr);
                 }
-                Ptr(ref ty, _) if (if let Self_ = **ty { true } else { false }) && nonstatic => {
+                Ptr(ref ty, _) if matches!(**ty, Self_) && nonstatic => {
                     self_args.push(cx.expr_deref(trait_.span, arg_expr))
                 }
                 _ => {
@@ -942,7 +929,7 @@ impl<'a> MethodDef<'a> {
                 tokens: None,
             },
             ident: method_ident,
-            kind: ast::AssocItemKind::Fn(def, sig, fn_generics, Some(body_block)),
+            kind: ast::AssocItemKind::Fn(box ast::FnKind(def, sig, fn_generics, Some(body_block))),
             tokens: None,
         })
     }
@@ -1591,7 +1578,7 @@ impl<'a> TraitDef<'a> {
                         if ident.is_none() {
                             cx.span_bug(sp, "a braced struct with unnamed fields in `derive`");
                         }
-                        ast::FieldPat {
+                        ast::PatField {
                             ident: ident.unwrap(),
                             is_shorthand: false,
                             attrs: ast::AttrVec::new(),

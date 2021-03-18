@@ -1,15 +1,12 @@
 //! Implementation of compiling the compiler and standard library, in "check"-based modes.
 
+use crate::builder::{Builder, Kind, RunConfig, ShouldRun, Step};
 use crate::cache::Interned;
 use crate::compile::{add_to_sysroot, run_cargo, rustc_cargo, rustc_cargo_env, std_cargo};
 use crate::config::TargetSelection;
 use crate::tool::{prepare_tool_cargo, SourceType};
 use crate::INTERNER;
-use crate::{
-    builder::{Builder, Kind, RunConfig, ShouldRun, Step},
-    Subcommand,
-};
-use crate::{Compiler, Mode};
+use crate::{Compiler, Mode, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -17,10 +14,39 @@ pub struct Std {
     pub target: TargetSelection,
 }
 
-fn args(kind: Kind) -> Vec<String> {
-    match kind {
-        Kind::Clippy => vec!["--".to_owned(), "--cap-lints".to_owned(), "warn".to_owned()],
-        _ => Vec::new(),
+/// Returns args for the subcommand itself (not for cargo)
+fn args(builder: &Builder<'_>) -> Vec<String> {
+    fn strings<'a>(arr: &'a [&str]) -> impl Iterator<Item = String> + 'a {
+        arr.iter().copied().map(String::from)
+    }
+
+    if let Subcommand::Clippy { fix, .. } = builder.config.cmd {
+        // disable the most spammy clippy lints
+        let ignored_lints = vec![
+            "many_single_char_names", // there are a lot in stdarch
+            "collapsible_if",
+            "type_complexity",
+            "missing_safety_doc", // almost 3K warnings
+            "too_many_arguments",
+            "needless_lifetimes", // people want to keep the lifetimes
+            "wrong_self_convention",
+        ];
+        let mut args = vec![];
+        if fix {
+            #[rustfmt::skip]
+            args.extend(strings(&[
+                "--fix", "-Zunstable-options",
+                // FIXME: currently, `--fix` gives an error while checking tests for libtest,
+                // possibly because libtest is not yet built in the sysroot.
+                // As a workaround, avoid checking tests and benches when passed --fix.
+                "--lib", "--bins", "--examples",
+            ]));
+        }
+        args.extend(strings(&["--", "--cap-lints", "warn"]));
+        args.extend(ignored_lints.iter().map(|lint| format!("-Aclippy::{}", lint)));
+        args
+    } else {
+        vec![]
     }
 }
 
@@ -47,7 +73,7 @@ impl Step for Std {
 
     fn run(self, builder: &Builder<'_>) {
         let target = self.target;
-        let compiler = builder.compiler(0, builder.config.build);
+        let compiler = builder.compiler(builder.top_stage, builder.config.build);
 
         let mut cargo = builder.cargo(
             compiler,
@@ -58,19 +84,26 @@ impl Step for Std {
         );
         std_cargo(builder, target, compiler.stage, &mut cargo);
 
-        builder.info(&format!("Checking std artifacts ({} -> {})", &compiler.host, target));
+        builder.info(&format!(
+            "Checking stage{} std artifacts ({} -> {})",
+            builder.top_stage, &compiler.host, target
+        ));
         run_cargo(
             builder,
             cargo,
-            args(builder.kind),
+            args(builder),
             &libstd_stamp(builder, compiler, target),
             vec![],
             true,
         );
 
-        let libdir = builder.sysroot_libdir(compiler, target);
-        let hostdir = builder.sysroot_libdir(compiler, compiler.host);
-        add_to_sysroot(&builder, &libdir, &hostdir, &libstd_stamp(builder, compiler, target));
+        // We skip populating the sysroot in non-zero stage because that'll lead
+        // to rlib/rmeta conflicts if std gets built during this session.
+        if compiler.stage == 0 {
+            let libdir = builder.sysroot_libdir(compiler, target);
+            let hostdir = builder.sysroot_libdir(compiler, compiler.host);
+            add_to_sysroot(&builder, &libdir, &hostdir, &libstd_stamp(builder, compiler, target));
+        }
 
         // Then run cargo again, once we've put the rmeta files for the library
         // crates into the sysroot. This is needed because e.g., core's tests
@@ -93,18 +126,18 @@ impl Step for Std {
             // Explicitly pass -p for all dependencies krates -- this will force cargo
             // to also check the tests/benches/examples for these crates, rather
             // than just the leaf crate.
-            for krate in builder.in_tree_crates("test") {
+            for krate in builder.in_tree_crates("test", Some(target)) {
                 cargo.arg("-p").arg(krate.name);
             }
 
             builder.info(&format!(
-                "Checking std test/bench/example targets ({} -> {})",
-                &compiler.host, target
+                "Checking stage{} std test/bench/example targets ({} -> {})",
+                builder.top_stage, &compiler.host, target
             ));
             run_cargo(
                 builder,
                 cargo,
-                args(builder.kind),
+                args(builder),
                 &libstd_test_stamp(builder, compiler, target),
                 vec![],
                 true,
@@ -137,10 +170,20 @@ impl Step for Rustc {
     /// the `compiler` targeting the `target` architecture. The artifacts
     /// created will also be linked into the sysroot directory.
     fn run(self, builder: &Builder<'_>) {
-        let compiler = builder.compiler(0, builder.config.build);
+        let compiler = builder.compiler(builder.top_stage, builder.config.build);
         let target = self.target;
 
-        builder.ensure(Std { target });
+        if compiler.stage != 0 {
+            // If we're not in stage 0, then we won't have a std from the beta
+            // compiler around. That means we need to make sure there's one in
+            // the sysroot for the compiler to find. Otherwise, we're going to
+            // fail when building crates that need to generate code (e.g., build
+            // scripts and their dependencies).
+            builder.ensure(crate::compile::Std { target: compiler.host, compiler });
+            builder.ensure(crate::compile::Std { target, compiler });
+        } else {
+            builder.ensure(Std { target });
+        }
 
         let mut cargo = builder.cargo(
             compiler,
@@ -157,15 +200,18 @@ impl Step for Rustc {
         // Explicitly pass -p for all compiler krates -- this will force cargo
         // to also check the tests/benches/examples for these crates, rather
         // than just the leaf crate.
-        for krate in builder.in_tree_crates("rustc-main") {
+        for krate in builder.in_tree_crates("rustc-main", Some(target)) {
             cargo.arg("-p").arg(krate.name);
         }
 
-        builder.info(&format!("Checking compiler artifacts ({} -> {})", &compiler.host, target));
+        builder.info(&format!(
+            "Checking stage{} compiler artifacts ({} -> {})",
+            builder.top_stage, &compiler.host, target
+        ));
         run_cargo(
             builder,
             cargo,
-            args(builder.kind),
+            args(builder),
             &librustc_stamp(builder, compiler, target),
             vec![],
             true,
@@ -199,7 +245,7 @@ impl Step for CodegenBackend {
     }
 
     fn run(self, builder: &Builder<'_>) {
-        let compiler = builder.compiler(0, builder.config.build);
+        let compiler = builder.compiler(builder.top_stage, builder.config.build);
         let target = self.target;
         let backend = self.backend;
 
@@ -217,10 +263,15 @@ impl Step for CodegenBackend {
             .arg(builder.src.join(format!("compiler/rustc_codegen_{}/Cargo.toml", backend)));
         rustc_cargo_env(builder, &mut cargo, target);
 
+        builder.info(&format!(
+            "Checking stage{} {} artifacts ({} -> {})",
+            builder.top_stage, backend, &compiler.host.triple, target.triple
+        ));
+
         run_cargo(
             builder,
             cargo,
-            args(builder.kind),
+            args(builder),
             &codegen_backend_stamp(builder, compiler, target, backend),
             vec![],
             true,
@@ -249,7 +300,7 @@ macro_rules! tool_check_step {
             }
 
             fn run(self, builder: &Builder<'_>) {
-                let compiler = builder.compiler(0, builder.config.build);
+                let compiler = builder.compiler(builder.top_stage, builder.config.build);
                 let target = self.target;
 
                 builder.ensure(Rustc { target });
@@ -269,8 +320,16 @@ macro_rules! tool_check_step {
                     cargo.arg("--all-targets");
                 }
 
+                // Enable internal lints for clippy and rustdoc
+                // NOTE: this intentionally doesn't enable lints for any other tools,
+                // see https://github.com/rust-lang/rust/pull/80573#issuecomment-754010776
+                if $path == "src/tools/rustdoc" || $path == "src/tools/clippy" {
+                    cargo.rustflag("-Zunstable-options");
+                }
+
                 builder.info(&format!(
-                    "Checking {} artifacts ({} -> {})",
+                    "Checking stage{} {} artifacts ({} -> {})",
+                    builder.top_stage,
                     stringify!($name).to_lowercase(),
                     &compiler.host.triple,
                     target.triple
@@ -278,7 +337,7 @@ macro_rules! tool_check_step {
                 run_cargo(
                     builder,
                     cargo,
-                    args(builder.kind),
+                    args(builder),
                     &stamp(builder, compiler, target),
                     vec![],
                     true,

@@ -8,12 +8,14 @@ use rustc_ast::ast::Attribute;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_errors::{Applicability, DiagnosticBuilder};
 use rustc_hir::intravisit::FnKind;
-use rustc_hir::{BindingAnnotation, Body, FnDecl, GenericArg, HirId, ItemKind, Node, PatKind, QPath, TyKind};
+use rustc_hir::{BindingAnnotation, Body, FnDecl, GenericArg, HirId, Impl, ItemKind, Node, PatKind, QPath, TyKind};
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_lint::{LateContext, LateLintPass};
+use rustc_middle::mir::FakeReadCause;
 use rustc_middle::ty::{self, TypeFoldable};
 use rustc_session::{declare_lint_pass, declare_tool_lint};
-use rustc_span::Span;
+use rustc_span::symbol::kw;
+use rustc_span::{sym, Span};
 use rustc_target::spec::abi::Abi;
 use rustc_trait_selection::traits;
 use rustc_trait_selection::traits::misc::can_type_implement_copy;
@@ -79,20 +81,22 @@ impl<'tcx> LateLintPass<'tcx> for NeedlessPassByValue {
         }
 
         match kind {
-            FnKind::ItemFn(.., header, _, attrs) => {
+            FnKind::ItemFn(.., header, _) => {
+                let attrs = cx.tcx.hir().attrs(hir_id);
                 if header.abi != Abi::Rust || requires_exact_signature(attrs) {
                     return;
                 }
             },
             FnKind::Method(..) => (),
-            FnKind::Closure(..) => return,
+            FnKind::Closure => return,
         }
 
         // Exclude non-inherent impls
         if let Some(Node::Item(item)) = cx.tcx.hir().find(cx.tcx.hir().get_parent_node(hir_id)) {
-            if matches!(item.kind, ItemKind::Impl{ of_trait: Some(_), .. } |
-                ItemKind::Trait(..))
-            {
+            if matches!(
+                item.kind,
+                ItemKind::Impl(Impl { of_trait: Some(_), .. }) | ItemKind::Trait(..)
+            ) {
                 return;
             }
         }
@@ -114,13 +118,9 @@ impl<'tcx> LateLintPass<'tcx> for NeedlessPassByValue {
             .filter(|p| !p.is_global())
             .filter_map(|obligation| {
                 // Note that we do not want to deal with qualified predicates here.
-                if let ty::PredicateKind::Atom(ty::PredicateAtom::Trait(pred, _)) = obligation.predicate.kind() {
-                    if pred.def_id() == sized_trait {
-                        return None;
-                    }
-                    Some(pred)
-                } else {
-                    None
+                match obligation.predicate.kind().no_bound_vars() {
+                    Some(ty::PredicateKind::Trait(pred, _)) if pred.def_id() != sized_trait => Some(pred),
+                    _ => None,
                 }
             })
             .collect::<Vec<_>>();
@@ -141,7 +141,7 @@ impl<'tcx> LateLintPass<'tcx> for NeedlessPassByValue {
         };
 
         let fn_sig = cx.tcx.fn_sig(fn_def_id);
-        let fn_sig = cx.tcx.erase_late_bound_regions(&fn_sig);
+        let fn_sig = cx.tcx.erase_late_bound_regions(fn_sig);
 
         for (idx, ((input, &ty), arg)) in decl.inputs.iter().zip(fn_sig.inputs()).zip(body.params).enumerate() {
             // All spans generated from a proc-macro invocation are the same...
@@ -152,7 +152,7 @@ impl<'tcx> LateLintPass<'tcx> for NeedlessPassByValue {
             // Ignore `self`s.
             if idx == 0 {
                 if let PatKind::Binding(.., ident, _) = arg.pat.kind {
-                    if ident.as_str() == "self" {
+                    if ident.name == kw::SelfLower {
                         continue;
                     }
                 }
@@ -204,12 +204,12 @@ impl<'tcx> LateLintPass<'tcx> for NeedlessPassByValue {
 
                         let deref_span = spans_need_deref.get(&canonical_id);
                         if_chain! {
-                            if is_type_diagnostic_item(cx, ty, sym!(vec_type));
+                            if is_type_diagnostic_item(cx, ty, sym::vec_type);
                             if let Some(clone_spans) =
                                 get_spans(cx, Some(body.id()), idx, &[("clone", ".to_owned()")]);
                             if let TyKind::Path(QPath::Resolved(_, ref path)) = input.kind;
                             if let Some(elem_ty) = path.segments.iter()
-                                .find(|seg| seg.ident.name == sym!(Vec))
+                                .find(|seg| seg.ident.name == sym::Vec)
                                 .and_then(|ps| ps.args.as_ref())
                                 .map(|params| params.args.iter().find_map(|arg| match arg {
                                     GenericArg::Type(ty) => Some(ty),
@@ -243,7 +243,7 @@ impl<'tcx> LateLintPass<'tcx> for NeedlessPassByValue {
                             }
                         }
 
-                        if is_type_diagnostic_item(cx, ty, sym!(string_type)) {
+                        if is_type_diagnostic_item(cx, ty, sym::string_type) {
                             if let Some(clone_spans) =
                                 get_spans(cx, Some(body.id()), idx, &[("clone", ".to_string()"), ("as_str", "")]) {
                                 diag.span_suggestion(
@@ -302,7 +302,7 @@ impl<'tcx> LateLintPass<'tcx> for NeedlessPassByValue {
 /// Functions marked with these attributes must have the exact signature.
 fn requires_exact_signature(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|attr| {
-        [sym!(proc_macro), sym!(proc_macro_attribute), sym!(proc_macro_derive)]
+        [sym::proc_macro, sym::proc_macro_attribute, sym::proc_macro_derive]
             .iter()
             .any(|&allow| attr.has_name(allow))
     })
@@ -325,13 +325,15 @@ impl MovedVariablesCtxt {
 }
 
 impl<'tcx> euv::Delegate<'tcx> for MovedVariablesCtxt {
-    fn consume(&mut self, cmt: &euv::PlaceWithHirId<'tcx>, mode: euv::ConsumeMode) {
+    fn consume(&mut self, cmt: &euv::PlaceWithHirId<'tcx>, _: HirId, mode: euv::ConsumeMode) {
         if let euv::ConsumeMode::Move = mode {
             self.move_common(cmt);
         }
     }
 
-    fn borrow(&mut self, _: &euv::PlaceWithHirId<'tcx>, _: ty::BorrowKind) {}
+    fn borrow(&mut self, _: &euv::PlaceWithHirId<'tcx>, _: HirId, _: ty::BorrowKind) {}
 
-    fn mutate(&mut self, _: &euv::PlaceWithHirId<'tcx>) {}
+    fn mutate(&mut self, _: &euv::PlaceWithHirId<'tcx>, _: HirId) {}
+
+    fn fake_read(&mut self, _: rustc_typeck::expr_use_visitor::Place<'tcx>, _: FakeReadCause, _: HirId) { }
 }

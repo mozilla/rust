@@ -10,6 +10,7 @@ use std::lazy::SyncLazy;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+pub mod bless;
 pub mod fmt;
 pub mod new_lint;
 pub mod ra_setup;
@@ -146,16 +147,30 @@ pub fn gen_deprecated<'a>(lints: impl Iterator<Item = &'a Lint>) -> Vec<String> 
 }
 
 #[must_use]
-pub fn gen_register_lint_list<'a>(lints: impl Iterator<Item = &'a Lint>) -> Vec<String> {
-    let pre = "    store.register_lints(&[".to_string();
-    let post = "    ]);".to_string();
-    let mut inner = lints
+pub fn gen_register_lint_list<'a>(
+    internal_lints: impl Iterator<Item = &'a Lint>,
+    usable_lints: impl Iterator<Item = &'a Lint>,
+) -> Vec<String> {
+    let header = "    store.register_lints(&[".to_string();
+    let footer = "    ]);".to_string();
+    let internal_lints = internal_lints
+        .sorted_by_key(|l| format!("        &{}::{},", l.module, l.name.to_uppercase()))
+        .map(|l| {
+            format!(
+                "        #[cfg(feature = \"internal-lints\")]\n        &{}::{},",
+                l.module,
+                l.name.to_uppercase()
+            )
+        });
+    let other_lints = usable_lints
+        .sorted_by_key(|l| format!("        &{}::{},", l.module, l.name.to_uppercase()))
         .map(|l| format!("        &{}::{},", l.module, l.name.to_uppercase()))
-        .sorted()
-        .collect::<Vec<String>>();
-    inner.insert(0, pre);
-    inner.push(post);
-    inner
+        .sorted();
+    let mut lint_list = vec![header];
+    lint_list.extend(internal_lints);
+    lint_list.extend(other_lints);
+    lint_list.push(footer);
+    lint_list
 }
 
 /// Gathers all files in `src/clippy_lints` and gathers all lints inside
@@ -220,6 +235,10 @@ pub struct FileChange {
 /// `path` is the relative path to the file on which you want to perform the replacement.
 ///
 /// See `replace_region_in_text` for documentation of the other options.
+///
+/// # Panics
+///
+/// Panics if the path could not read or then written
 pub fn replace_region_in_file<F>(
     path: &Path,
     start: &str,
@@ -267,6 +286,10 @@ where
 ///     .new_lines;
 /// assert_eq!("replace_start\na different\ntext\nreplace_end", result);
 /// ```
+///
+/// # Panics
+///
+/// Panics if start or end is not valid regex
 pub fn replace_region_in_text<F>(text: &str, start: &str, end: &str, replace_start: bool, replacements: F) -> FileChange
 where
     F: FnOnce() -> Vec<String>,
@@ -313,6 +336,11 @@ where
 }
 
 /// Returns the path to the Clippy project directory
+///
+/// # Panics
+///
+/// Panics if the current directory could not be retrieved, there was an error reading any of the
+/// Cargo.toml files or ancestor directory is the clippy root directory
 #[must_use]
 pub fn clippy_project_root() -> PathBuf {
     let current_dir = std::env::current_dir().unwrap();
@@ -501,7 +529,7 @@ fn test_gen_deprecated() {
 #[should_panic]
 fn test_gen_deprecated_fail() {
     let lints = vec![Lint::new("should_assert_eq2", "group2", "abc", None, "module_name")];
-    let _ = gen_deprecated(lints.iter());
+    let _deprecated_lints = gen_deprecated(lints.iter());
 }
 
 #[test]

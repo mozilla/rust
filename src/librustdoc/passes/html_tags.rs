@@ -4,33 +4,25 @@ use crate::core::DocContext;
 use crate::fold::DocFolder;
 use crate::html::markdown::opts;
 use core::ops::Range;
-use pulldown_cmark::{Event, Parser};
-use rustc_feature::UnstableFeatures;
-use rustc_session::lint;
+use pulldown_cmark::{Event, Parser, Tag};
 use std::iter::Peekable;
 use std::str::CharIndices;
 
-pub const CHECK_INVALID_HTML_TAGS: Pass = Pass {
+crate const CHECK_INVALID_HTML_TAGS: Pass = Pass {
     name: "check-invalid-html-tags",
     run: check_invalid_html_tags,
     description: "detects invalid HTML tags in doc comments",
 };
 
 struct InvalidHtmlTagsLinter<'a, 'tcx> {
-    cx: &'a DocContext<'tcx>,
+    cx: &'a mut DocContext<'tcx>,
 }
 
-impl<'a, 'tcx> InvalidHtmlTagsLinter<'a, 'tcx> {
-    fn new(cx: &'a DocContext<'tcx>) -> Self {
-        InvalidHtmlTagsLinter { cx }
-    }
-}
-
-pub fn check_invalid_html_tags(krate: Crate, cx: &DocContext<'_>) -> Crate {
-    if !UnstableFeatures::from_environment().is_nightly_build() {
+crate fn check_invalid_html_tags(krate: Crate, cx: &mut DocContext<'_>) -> Crate {
+    if !cx.tcx.sess.is_nightly_build() {
         krate
     } else {
-        let mut coll = InvalidHtmlTagsLinter::new(cx);
+        let mut coll = InvalidHtmlTagsLinter { cx };
 
         coll.fold_crate(krate)
     }
@@ -60,7 +52,7 @@ fn drop_tag(
                 continue;
             }
             let last_tag_name_low = last_tag_name.to_lowercase();
-            if ALLOWED_UNCLOSED.iter().any(|&at| at == &last_tag_name_low) {
+            if ALLOWED_UNCLOSED.iter().any(|&at| at == last_tag_name_low) {
                 continue;
             }
             // `tags` is used as a queue, meaning that everything after `pos` is included inside it.
@@ -175,36 +167,40 @@ fn extract_tags(
 
 impl<'a, 'tcx> DocFolder for InvalidHtmlTagsLinter<'a, 'tcx> {
     fn fold_item(&mut self, item: Item) -> Option<Item> {
-        let hir_id = match self.cx.as_local_hir_id(item.def_id) {
+        let tcx = self.cx.tcx;
+        let hir_id = match DocContext::as_local_hir_id(tcx, item.def_id) {
             Some(hir_id) => hir_id,
             None => {
                 // If non-local, no need to check anything.
-                return self.fold_item_recur(item);
+                return Some(self.fold_item_recur(item));
             }
         };
         let dox = item.attrs.collapsed_doc_value().unwrap_or_default();
         if !dox.is_empty() {
-            let cx = &self.cx;
             let report_diag = |msg: &str, range: &Range<usize>| {
-                let sp = match super::source_span_for_markdown_range(cx, &dox, range, &item.attrs) {
+                let sp = match super::source_span_for_markdown_range(tcx, &dox, range, &item.attrs)
+                {
                     Some(sp) => sp,
                     None => span_of_attrs(&item.attrs).unwrap_or(item.source.span()),
                 };
-                cx.tcx.struct_span_lint_hir(lint::builtin::INVALID_HTML_TAGS, hir_id, sp, |lint| {
+                tcx.struct_span_lint_hir(crate::lint::INVALID_HTML_TAGS, hir_id, sp, |lint| {
                     lint.build(msg).emit()
                 });
             };
 
             let mut tags = Vec::new();
             let mut is_in_comment = None;
+            let mut in_code_block = false;
 
             let p = Parser::new_ext(&dox, opts()).into_offset_iter();
 
             for (event, range) in p {
                 match event {
-                    Event::Html(text) | Event::Text(text) => {
+                    Event::Start(Tag::CodeBlock(_)) => in_code_block = true,
+                    Event::Html(text) | Event::Text(text) if !in_code_block => {
                         extract_tags(&mut tags, &text, range, &mut is_in_comment, &report_diag)
                     }
+                    Event::End(Tag::CodeBlock(_)) => in_code_block = false,
                     _ => {}
                 }
             }
@@ -221,6 +217,6 @@ impl<'a, 'tcx> DocFolder for InvalidHtmlTagsLinter<'a, 'tcx> {
             }
         }
 
-        self.fold_item_recur(item)
+        Some(self.fold_item_recur(item))
     }
 }

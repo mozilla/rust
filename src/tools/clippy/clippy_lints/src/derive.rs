@@ -1,13 +1,13 @@
 use crate::utils::paths;
 use crate::utils::{
-    get_trait_def_id, is_allowed, is_automatically_derived, is_copy, match_path, span_lint_and_help,
+    get_trait_def_id, is_allowed, is_automatically_derived, is_copy, match_def_path, span_lint_and_help,
     span_lint_and_note, span_lint_and_then,
 };
 use if_chain::if_chain;
 use rustc_hir::def_id::DefId;
 use rustc_hir::intravisit::{walk_expr, walk_fn, walk_item, FnKind, NestedVisitorMap, Visitor};
 use rustc_hir::{
-    BlockCheckMode, BodyId, Expr, ExprKind, FnDecl, HirId, Item, ItemKind, TraitRef, UnsafeSource, Unsafety,
+    BlockCheckMode, BodyId, Expr, ExprKind, FnDecl, HirId, Impl, Item, ItemKind, TraitRef, UnsafeSource, Unsafety,
 };
 use rustc_lint::{LateContext, LateLintPass};
 use rustc_middle::hir::map::Map;
@@ -164,13 +164,14 @@ declare_lint_pass!(Derive => [
 
 impl<'tcx> LateLintPass<'tcx> for Derive {
     fn check_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx Item<'_>) {
-        if let ItemKind::Impl {
+        if let ItemKind::Impl(Impl {
             of_trait: Some(ref trait_ref),
             ..
-        } = item.kind
+        }) = item.kind
         {
-            let ty = cx.tcx.type_of(cx.tcx.hir().local_def_id(item.hir_id));
-            let is_automatically_derived = is_automatically_derived(&*item.attrs);
+            let ty = cx.tcx.type_of(item.def_id);
+            let attrs = cx.tcx.hir().attrs(item.hir_id());
+            let is_automatically_derived = is_automatically_derived(attrs);
 
             check_hash_peq(cx, item.span, trait_ref, ty, is_automatically_derived);
             check_ord_partial_ord(cx, item.span, trait_ref, ty, is_automatically_derived);
@@ -193,10 +194,9 @@ fn check_hash_peq<'tcx>(
     hash_is_automatically_derived: bool,
 ) {
     if_chain! {
-        if match_path(&trait_ref.path, &paths::HASH);
         if let Some(peq_trait_def_id) = cx.tcx.lang_items().eq_trait();
-        if let Some(def_id) = &trait_ref.trait_def_id();
-        if !def_id.is_local();
+        if let Some(def_id) = trait_ref.trait_def_id();
+        if match_def_path(cx, def_id, &paths::HASH);
         then {
             // Look for the PartialEq implementations for `ty`
             cx.tcx.for_each_relevant_impl(peq_trait_def_id, ty, |impl_id| {
@@ -294,7 +294,12 @@ fn check_ord_partial_ord<'tcx>(
 
 /// Implementation of the `EXPL_IMPL_CLONE_ON_COPY` lint.
 fn check_copy_clone<'tcx>(cx: &LateContext<'tcx>, item: &Item<'_>, trait_ref: &TraitRef<'_>, ty: Ty<'tcx>) {
-    if match_path(&trait_ref.path, &paths::CLONE_TRAIT) {
+    if cx
+        .tcx
+        .lang_items()
+        .clone_trait()
+        .map_or(false, |id| Some(id) == trait_ref.trait_def_id())
+    {
         if !is_copy(cx, ty) {
             return;
         }
@@ -352,7 +357,8 @@ fn check_unsafe_derive_deserialize<'tcx>(
     }
 
     if_chain! {
-        if match_path(&trait_ref.path, &paths::SERDE_DESERIALIZE);
+        if let Some(trait_def_id) = trait_ref.trait_def_id();
+        if match_def_path(cx, trait_def_id, &paths::SERDE_DESERIALIZE);
         if let ty::Adt(def, _) = ty.kind();
         if let Some(local_def_id) = def.did.as_local();
         let adt_hir_id = cx.tcx.hir().local_def_id_to_hir_id(local_def_id);

@@ -71,6 +71,10 @@ declare_features! (
     /// Allows using custom attributes (RFC 572).
     (removed, custom_attribute, "1.0.0", Some(29642), None,
      Some("removed in favor of `#![register_tool]` and `#![register_attr]`")),
+    /// Allows features specific to OIBIT (now called auto traits).
+    /// Renamed to `auto_traits`.
+    (removed, optin_builtin_traits, "1.0.0", Some(13231), None,
+     Some("renamed to `auto_traits`")),
     (removed, pushpop_unsafe, "1.2.0", None, None, None),
     (removed, needs_allocator, "1.4.0", Some(27389), None,
      Some("subsumed by `#![feature(allocator_internals)]`")),
@@ -93,13 +97,16 @@ declare_features! (
     (removed, extern_in_paths, "1.33.0", Some(55600), None,
      Some("subsumed by `::foo::bar` paths")),
     (removed, quote, "1.33.0", Some(29601), None, None),
+    /// Allows `[x; N]` where `x` is a constant (RFC 2203).
+    (removed, const_in_array_repeat_expressions,  "1.37.0", Some(49147), None,
+     Some("removed due to causing promotable bugs")),
     /// Allows using `#[unsafe_destructor_blind_to_params]` (RFC 1238).
     (removed, dropck_parametricity, "1.38.0", Some(28498), None, None),
     (removed, await_macro, "1.38.0", Some(50547), None,
      Some("subsumed by `.await` syntax")),
     /// Allows defining `existential type`s.
     (removed, existential_type, "1.38.0", Some(63063), None,
-     Some("removed in favor of `#![feature(type_alias_impl_trait)]`")),
+     Some("removed in favor of `#![feature(min_type_alias_impl_trait)]`")),
     /// Allows using the macros:
     /// + `__diagnostic_used`
     /// + `__register_diagnostic`
@@ -113,7 +120,6 @@ declare_features! (
      Some("removed in favor of `#![feature(marker_trait_attr)]`")),
     /// Allows `#[no_debug]`.
     (removed, no_debug, "1.43.0", Some(29721), None, Some("removed due to lack of demand")),
-
     /// Allows comparing raw pointers during const eval.
     (removed, const_compare_raw_pointers, "1.46.0", Some(53020), None,
      Some("cannot be allowed in const eval in any meaningful way")),

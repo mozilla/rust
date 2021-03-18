@@ -6,8 +6,8 @@ use rustc_attr as attr;
 use rustc_data_structures::svh::Svh;
 use rustc_data_structures::sync::MetadataRef;
 use rustc_hir as hir;
-use rustc_hir::def::CtorKind;
-use rustc_hir::def_id::{DefId, DefIndex, DefPathHash};
+use rustc_hir::def::{CtorKind, DefKind};
+use rustc_hir::def_id::{DefId, DefIndex, DefPathHash, StableCrateId};
 use rustc_hir::definitions::DefKey;
 use rustc_hir::lang_items;
 use rustc_index::{bit_set::FiniteBitSet, vec::IndexVec};
@@ -20,6 +20,7 @@ use rustc_serialize::opaque::Encoder;
 use rustc_session::config::SymbolManglingVersion;
 use rustc_session::CrateDisambiguator;
 use rustc_span::edition::Edition;
+use rustc_span::hygiene::MacroKind;
 use rustc_span::symbol::{Ident, Symbol};
 use rustc_span::{self, ExpnData, ExpnId, Span};
 use rustc_target::spec::{PanicStrategy, TargetTriple};
@@ -202,6 +203,7 @@ crate struct CrateRoot<'tcx> {
     extra_filename: String,
     hash: Svh,
     disambiguator: CrateDisambiguator,
+    stable_crate_id: StableCrateId,
     panic_strategy: PanicStrategy,
     edition: Edition,
     has_global_allocator: bool,
@@ -278,6 +280,7 @@ macro_rules! define_tables {
 }
 
 define_tables! {
+    def_kind: Table<DefIndex, Lazy<DefKind>>,
     kind: Table<DefIndex, Lazy<EntryKind>>,
     visibility: Table<DefIndex, Lazy<ty::Visibility>>,
     span: Table<DefIndex, Lazy<Span>>,
@@ -301,6 +304,7 @@ define_tables! {
     // As an optimization, a missing entry indicates an empty `&[]`.
     explicit_item_bounds: Table<DefIndex, Lazy!([(ty::Predicate<'tcx>, Span)])>,
     mir: Table<DefIndex, Lazy!(mir::Body<'tcx>)>,
+    mir_for_ctfe: Table<DefIndex, Lazy!(mir::Body<'tcx>)>,
     promoted_mir: Table<DefIndex, Lazy!(IndexVec<mir::Promoted, mir::Body<'tcx>>)>,
     mir_abstract_consts: Table<DefIndex, Lazy!(&'tcx [mir::abstract_const::Node<'tcx>])>,
     unused_generic_params: Table<DefIndex, Lazy<FiniteBitSet<u32>>>,
@@ -336,6 +340,7 @@ enum EntryKind {
     ForeignFn(Lazy<FnData>),
     Mod(Lazy<ModData>),
     MacroDef(Lazy<MacroDef>),
+    ProcMacro(MacroKind),
     Closure,
     Generator(hir::GeneratorKind),
     Trait(Lazy<TraitData>),

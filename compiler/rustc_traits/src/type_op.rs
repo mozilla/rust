@@ -70,7 +70,7 @@ impl AscribeUserTypeCx<'me, 'tcx> {
                 DUMMY_SP,
                 hir::CRATE_HIR_ID,
                 self.param_env,
-                &value,
+                value,
             )
             .into_value_registering_obligations(self.infcx, self.fulfill_cx)
     }
@@ -140,7 +140,7 @@ impl AscribeUserTypeCx<'me, 'tcx> {
             self.relate(self_ty, Variance::Invariant, impl_self_ty)?;
 
             self.prove_predicate(
-                ty::PredicateAtom::WellFormed(impl_self_ty.into()).to_predicate(self.tcx()),
+                ty::PredicateKind::WellFormed(impl_self_ty.into()).to_predicate(self.tcx()),
             );
         }
 
@@ -155,7 +155,7 @@ impl AscribeUserTypeCx<'me, 'tcx> {
         // them?  This would only be relevant if some input
         // type were ill-formed but did not appear in `ty`,
         // which...could happen with normalization...
-        self.prove_predicate(ty::PredicateAtom::WellFormed(ty.into()).to_predicate(self.tcx()));
+        self.prove_predicate(ty::PredicateKind::WellFormed(ty.into()).to_predicate(self.tcx()));
         Ok(())
     }
 }
@@ -184,7 +184,7 @@ where
 {
     let (param_env, Normalize { value }) = key.into_parts();
     let Normalized { value, obligations } =
-        infcx.at(&ObligationCause::dummy(), param_env).normalize(&value)?;
+        infcx.at(&ObligationCause::dummy(), param_env).normalize(value)?;
     fulfill_cx.register_predicate_obligations(infcx, obligations);
     Ok(value)
 }

@@ -1,12 +1,13 @@
-//! This module provides constants which are specific to the implementation
-//! of the `f64` floating point data type.
+//! Constants specific to the `f64` double-precision floating point type.
 //!
-//! *[See also the `f64` primitive type](../../std/primitive.f64.html).*
+//! *[See also the `f64` primitive type](primitive@f64).*
 //!
 //! Mathematically significant numbers are provided in the `consts` sub-module.
 //!
-//! Although using these constants won’t cause compilation warnings,
-//! new code should use the associated constants directly on the primitive type.
+//! For the constants defined directly in this module
+//! (as distinct from those defined in the `consts` sub-module),
+//! new code should instead use the associated constants
+//! defined directly on the `f64` type.
 
 #![stable(feature = "rust1", since = "1.0.0")]
 #![allow(missing_docs)]
@@ -20,15 +21,11 @@ use crate::intrinsics;
 use crate::sys::cmath;
 
 #[stable(feature = "rust1", since = "1.0.0")]
-pub use core::f64::consts;
-#[stable(feature = "rust1", since = "1.0.0")]
-pub use core::f64::{DIGITS, EPSILON, MANTISSA_DIGITS, RADIX};
-#[stable(feature = "rust1", since = "1.0.0")]
-pub use core::f64::{INFINITY, MAX_10_EXP, NAN, NEG_INFINITY};
-#[stable(feature = "rust1", since = "1.0.0")]
-pub use core::f64::{MAX, MIN, MIN_POSITIVE};
-#[stable(feature = "rust1", since = "1.0.0")]
-pub use core::f64::{MAX_EXP, MIN_10_EXP, MIN_EXP};
+#[allow(deprecated, deprecated_in_future)]
+pub use core::f64::{
+    consts, DIGITS, EPSILON, INFINITY, MANTISSA_DIGITS, MAX, MAX_10_EXP, MAX_EXP, MIN, MIN_10_EXP,
+    MIN_EXP, MIN_POSITIVE, NAN, NEG_INFINITY, RADIX,
+};
 
 #[cfg(not(test))]
 #[lang = "f64_runtime"]
@@ -206,8 +203,10 @@ impl f64 {
     /// Fused multiply-add. Computes `(self * a) + b` with only one rounding
     /// error, yielding a more accurate result than an unfused multiply-add.
     ///
-    /// Using `mul_add` can be more performant than an unfused multiply-add if
-    /// the target architecture has a dedicated `fma` CPU instruction.
+    /// Using `mul_add` *may* be more performant than an unfused multiply-add if
+    /// the target architecture has a dedicated `fma` CPU instruction. However,
+    /// this is not always true, and will be heavily dependant on designing
+    /// algorithms with specific target hardware in mind.
     ///
     /// # Examples
     ///
@@ -506,7 +505,7 @@ impl f64 {
         unsafe { cmath::fdim(self, other) }
     }
 
-    /// Returns the cubic root of a number.
+    /// Returns the cube root of a number.
     ///
     /// # Examples
     ///
@@ -721,12 +720,13 @@ impl f64 {
     /// # Examples
     ///
     /// ```
-    /// let x = 7.0_f64;
+    /// let x = 1e-16_f64;
     ///
-    /// // e^(ln(7)) - 1
-    /// let abs_difference = (x.ln().exp_m1() - 6.0).abs();
+    /// // for very small x, e^x is approximately 1 + x + x^2 / 2
+    /// let approx = x + x * x / 2.0;
+    /// let abs_difference = (x.exp_m1() - approx).abs();
     ///
-    /// assert!(abs_difference < 1e-10);
+    /// assert!(abs_difference < 1e-20);
     /// ```
     #[must_use = "method returns a new number and does not mutate the original value"]
     #[stable(feature = "rust1", since = "1.0.0")]
@@ -741,12 +741,13 @@ impl f64 {
     /// # Examples
     ///
     /// ```
-    /// let x = std::f64::consts::E - 1.0;
+    /// let x = 1e-16_f64;
     ///
-    /// // ln(1 + (e - 1)) == ln(e) == 1
-    /// let abs_difference = (x.ln_1p() - 1.0).abs();
+    /// // for very small x, ln(1 + x) is approximately x - x^2 / 2
+    /// let approx = x - x * x / 2.0;
+    /// let abs_difference = (x.ln_1p() - approx).abs();
     ///
-    /// assert!(abs_difference < 1e-10);
+    /// assert!(abs_difference < 1e-20);
     /// ```
     #[must_use = "method returns a new number and does not mutate the original value"]
     #[stable(feature = "rust1", since = "1.0.0")]
@@ -878,64 +879,26 @@ impl f64 {
         0.5 * ((2.0 * self) / (1.0 - self)).ln_1p()
     }
 
-    /// Restrict a value to a certain interval unless it is NaN.
-    ///
-    /// Returns `max` if `self` is greater than `max`, and `min` if `self` is
-    /// less than `min`. Otherwise this returns `self`.
-    ///
-    /// Note that this function returns NaN if the initial value was NaN as
-    /// well.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `min > max`, `min` is NaN, or `max` is NaN.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// #![feature(clamp)]
-    /// assert!((-3.0f64).clamp(-2.0, 1.0) == -2.0);
-    /// assert!((0.0f64).clamp(-2.0, 1.0) == 0.0);
-    /// assert!((2.0f64).clamp(-2.0, 1.0) == 1.0);
-    /// assert!((f64::NAN).clamp(-2.0, 1.0).is_nan());
-    /// ```
-    #[must_use = "method returns a new number and does not mutate the original value"]
-    #[unstable(feature = "clamp", issue = "44095")]
-    #[inline]
-    pub fn clamp(self, min: f64, max: f64) -> f64 {
-        assert!(min <= max);
-        let mut x = self;
-        if x < min {
-            x = min;
-        }
-        if x > max {
-            x = max;
-        }
-        x
-    }
-
     // Solaris/Illumos requires a wrapper around log, log2, and log10 functions
     // because of their non-standard behavior (e.g., log(-n) returns -Inf instead
     // of expected NaN).
     fn log_wrapper<F: Fn(f64) -> f64>(self, log_fn: F) -> f64 {
         if !cfg!(any(target_os = "solaris", target_os = "illumos")) {
             log_fn(self)
-        } else {
-            if self.is_finite() {
-                if self > 0.0 {
-                    log_fn(self)
-                } else if self == 0.0 {
-                    Self::NEG_INFINITY // log(0) = -Inf
-                } else {
-                    Self::NAN // log(-n) = NaN
-                }
-            } else if self.is_nan() {
-                self // log(NaN) = NaN
-            } else if self > 0.0 {
-                self // log(Inf) = Inf
+        } else if self.is_finite() {
+            if self > 0.0 {
+                log_fn(self)
+            } else if self == 0.0 {
+                Self::NEG_INFINITY // log(0) = -Inf
             } else {
-                Self::NAN // log(-Inf) = NaN
+                Self::NAN // log(-n) = NaN
             }
+        } else if self.is_nan() {
+            self // log(NaN) = NaN
+        } else if self > 0.0 {
+            self // log(Inf) = Inf
+        } else {
+            Self::NAN // log(-Inf) = NaN
         }
     }
 }

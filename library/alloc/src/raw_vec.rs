@@ -1,7 +1,7 @@
 #![unstable(feature = "raw_vec_internals", reason = "implementation detail", issue = "none")]
 #![doc(hidden)]
 
-use core::alloc::LayoutErr;
+use core::alloc::LayoutError;
 use core::cmp;
 use core::intrinsics;
 use core::mem::{self, ManuallyDrop, MaybeUninit};
@@ -9,7 +9,7 @@ use core::ops::Drop;
 use core::ptr::{self, NonNull, Unique};
 use core::slice;
 
-use crate::alloc::{handle_alloc_error, AllocRef, Global, Layout};
+use crate::alloc::{handle_alloc_error, Allocator, Global, Layout};
 use crate::boxed::Box;
 use crate::collections::TryReserveError::{self, *};
 
@@ -46,7 +46,7 @@ enum AllocInit {
 /// `usize::MAX`. This means that you need to be careful when round-tripping this type with a
 /// `Box<[T]>`, since `capacity()` won't yield the length.
 #[allow(missing_debug_implementations)]
-pub struct RawVec<T, A: AllocRef = Global> {
+pub struct RawVec<T, A: Allocator = Global> {
     ptr: Unique<T>,
     cap: usize,
     alloc: A,
@@ -113,11 +113,23 @@ impl<T> RawVec<T, Global> {
     }
 }
 
-impl<T, A: AllocRef> RawVec<T, A> {
+impl<T, A: Allocator> RawVec<T, A> {
+    // Tiny Vecs are dumb. Skip to:
+    // - 8 if the element size is 1, because any heap allocators is likely
+    //   to round up a request of less than 8 bytes to at least 8 bytes.
+    // - 4 if elements are moderate-sized (<= 1 KiB).
+    // - 1 otherwise, to avoid wasting too much space for very short Vecs.
+    const MIN_NON_ZERO_CAP: usize = if mem::size_of::<T>() == 1 {
+        8
+    } else if mem::size_of::<T>() <= 1024 {
+        4
+    } else {
+        1
+    };
+
     /// Like `new`, but parameterized over the choice of allocator for
     /// the returned `RawVec`.
-    #[cfg_attr(not(bootstrap), rustc_allow_const_fn_unstable(const_fn))]
-    #[cfg_attr(bootstrap, allow_internal_unstable(const_fn))]
+    #[rustc_allow_const_fn_unstable(const_fn)]
     pub const fn new_in(alloc: A) -> Self {
         // `cap: 0` means "unallocated". zero-sized types are ignored.
         Self { ptr: Unique::dangling(), cap: 0, alloc }
@@ -140,7 +152,7 @@ impl<T, A: AllocRef> RawVec<T, A> {
     /// Converts a `Box<[T]>` into a `RawVec<T>`.
     pub fn from_box(slice: Box<[T], A>) -> Self {
         unsafe {
-            let (slice, alloc) = Box::into_raw_with_alloc(slice);
+            let (slice, alloc) = Box::into_raw_with_allocator(slice);
             RawVec::from_raw_parts_in(slice.as_mut_ptr(), slice.len(), alloc)
         }
     }
@@ -186,8 +198,8 @@ impl<T, A: AllocRef> RawVec<T, A> {
                 Err(_) => capacity_overflow(),
             }
             let result = match init {
-                AllocInit::Uninitialized => alloc.alloc(layout),
-                AllocInit::Zeroed => alloc.alloc_zeroed(layout),
+                AllocInit::Uninitialized => alloc.allocate(layout),
+                AllocInit::Zeroed => alloc.allocate_zeroed(layout),
             };
             let ptr = match result {
                 Ok(ptr) => ptr,
@@ -220,6 +232,7 @@ impl<T, A: AllocRef> RawVec<T, A> {
     /// Gets a raw pointer to the start of the allocation. Note that this is
     /// `Unique::dangling()` if `capacity == 0` or `T` is zero-sized. In the former case, you must
     /// be careful.
+    #[inline]
     pub fn ptr(&self) -> *mut T {
         self.ptr.as_ptr()
     }
@@ -233,13 +246,8 @@ impl<T, A: AllocRef> RawVec<T, A> {
     }
 
     /// Returns a shared reference to the allocator backing this `RawVec`.
-    pub fn alloc(&self) -> &A {
+    pub fn allocator(&self) -> &A {
         &self.alloc
-    }
-
-    /// Returns a mutable reference to the allocator backing this `RawVec`.
-    pub fn alloc_mut(&mut self) -> &mut A {
-        &mut self.alloc
     }
 
     fn current_memory(&self) -> Option<(NonNull<u8>, Layout)> {
@@ -365,7 +373,7 @@ impl<T, A: AllocRef> RawVec<T, A> {
     }
 }
 
-impl<T, A: AllocRef> RawVec<T, A> {
+impl<T, A: Allocator> RawVec<T, A> {
     /// Returns if the buffer needs to grow to fulfill the needed extra capacity.
     /// Mainly used to make inlining reserve-calls possible without inlining `grow`.
     fn needs_to_grow(&self, len: usize, additional: usize) -> bool {
@@ -405,22 +413,7 @@ impl<T, A: AllocRef> RawVec<T, A> {
         // This guarantees exponential growth. The doubling cannot overflow
         // because `cap <= isize::MAX` and the type of `cap` is `usize`.
         let cap = cmp::max(self.cap * 2, required_cap);
-
-        // Tiny Vecs are dumb. Skip to:
-        // - 8 if the element size is 1, because any heap allocators is likely
-        //   to round up a request of less than 8 bytes to at least 8 bytes.
-        // - 4 if elements are moderate-sized (<= 1 KiB).
-        // - 1 otherwise, to avoid wasting too much space for very short Vecs.
-        // Note that `min_non_zero_cap` is computed statically.
-        let elem_size = mem::size_of::<T>();
-        let min_non_zero_cap = if elem_size == 1 {
-            8
-        } else if elem_size <= 1024 {
-            4
-        } else {
-            1
-        };
-        let cap = cmp::max(min_non_zero_cap, cap);
+        let cap = cmp::max(Self::MIN_NON_ZERO_CAP, cap);
 
         let new_layout = Layout::array::<T>(cap);
 
@@ -471,13 +464,14 @@ impl<T, A: AllocRef> RawVec<T, A> {
 // above `RawVec::grow_amortized` for details. (The `A` parameter isn't
 // significant, because the number of different `A` types seen in practice is
 // much smaller than the number of `T` types.)
+#[inline(never)]
 fn finish_grow<A>(
-    new_layout: Result<Layout, LayoutErr>,
+    new_layout: Result<Layout, LayoutError>,
     current_memory: Option<(NonNull<u8>, Layout)>,
     alloc: &mut A,
 ) -> Result<NonNull<[u8]>, TryReserveError>
 where
-    A: AllocRef,
+    A: Allocator,
 {
     // Check for the error here to minimize the size of `RawVec::grow_*`.
     let new_layout = new_layout.map_err(|_| CapacityOverflow)?;
@@ -492,17 +486,17 @@ where
             alloc.grow(ptr, old_layout, new_layout)
         }
     } else {
-        alloc.alloc(new_layout)
+        alloc.allocate(new_layout)
     };
 
     memory.map_err(|_| AllocError { layout: new_layout, non_exhaustive: () })
 }
 
-unsafe impl<#[may_dangle] T, A: AllocRef> Drop for RawVec<T, A> {
+unsafe impl<#[may_dangle] T, A: Allocator> Drop for RawVec<T, A> {
     /// Frees the memory owned by the `RawVec` *without* trying to drop its contents.
     fn drop(&mut self) {
         if let Some((ptr, layout)) = self.current_memory() {
-            unsafe { self.alloc.dealloc(ptr, layout) }
+            unsafe { self.alloc.deallocate(ptr, layout) }
         }
     }
 }

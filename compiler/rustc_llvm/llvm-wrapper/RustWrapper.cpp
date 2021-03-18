@@ -124,9 +124,7 @@ extern "C" LLVMValueRef LLVMRustGetOrInsertFunction(LLVMModuleRef M,
   return wrap(unwrap(M)
                   ->getOrInsertFunction(StringRef(Name, NameLen),
                                         unwrap<FunctionType>(FunctionTy))
-#if LLVM_VERSION_GE(9, 0)
                   .getCallee()
-#endif
   );
 }
 
@@ -207,6 +205,10 @@ static Attribute::AttrKind fromRust(LLVMRustAttribute Kind) {
     return Attribute::ReadNone;
   case InaccessibleMemOnly:
     return Attribute::InaccessibleMemOnly;
+  case SanitizeHWAddress:
+    return Attribute::SanitizeHWAddress;
+  case WillReturn:
+    return Attribute::WillReturn;
   }
   report_fatal_error("bad AttributeKind");
 }
@@ -217,6 +219,14 @@ extern "C" void LLVMRustAddCallSiteAttribute(LLVMValueRef Instr, unsigned Index,
   Attribute Attr = Attribute::get(Call->getContext(), fromRust(RustAttr));
   Call->addAttribute(Index, Attr);
 }
+
+extern "C" void LLVMRustAddCallSiteAttrString(LLVMValueRef Instr, unsigned Index,
+                                              const char *Name) {
+  CallBase *Call = unwrap<CallBase>(Instr);
+  Attribute Attr = Attribute::get(Call->getContext(), Name);
+  Call->addAttribute(Index, Attr);
+}
+
 
 extern "C" void LLVMRustAddAlignmentCallSiteAttr(LLVMValueRef Instr,
                                                  unsigned Index,
@@ -251,10 +261,17 @@ extern "C" void LLVMRustAddDereferenceableOrNullCallSiteAttr(LLVMValueRef Instr,
 extern "C" void LLVMRustAddByValCallSiteAttr(LLVMValueRef Instr, unsigned Index,
                                              LLVMTypeRef Ty) {
   CallBase *Call = unwrap<CallBase>(Instr);
-#if LLVM_VERSION_GE(9, 0)
   Attribute Attr = Attribute::getWithByValType(Call->getContext(), unwrap(Ty));
+  Call->addAttribute(Index, Attr);
+}
+
+extern "C" void LLVMRustAddStructRetCallSiteAttr(LLVMValueRef Instr, unsigned Index,
+                                                 LLVMTypeRef Ty) {
+  CallBase *Call = unwrap<CallBase>(Instr);
+#if LLVM_VERSION_GE(12, 0)
+  Attribute Attr = Attribute::getWithStructRetType(Call->getContext(), unwrap(Ty));
 #else
-  Attribute Attr = Attribute::get(Call->getContext(), Attribute::ByVal);
+  Attribute Attr = Attribute::get(Call->getContext(), Attribute::StructRet);
 #endif
   Call->addAttribute(Index, Attr);
 }
@@ -296,10 +313,17 @@ extern "C" void LLVMRustAddDereferenceableOrNullAttr(LLVMValueRef Fn,
 extern "C" void LLVMRustAddByValAttr(LLVMValueRef Fn, unsigned Index,
                                      LLVMTypeRef Ty) {
   Function *F = unwrap<Function>(Fn);
-#if LLVM_VERSION_GE(9, 0)
   Attribute Attr = Attribute::getWithByValType(F->getContext(), unwrap(Ty));
+  F->addAttribute(Index, Attr);
+}
+
+extern "C" void LLVMRustAddStructRetAttr(LLVMValueRef Fn, unsigned Index,
+                                         LLVMTypeRef Ty) {
+  Function *F = unwrap<Function>(Fn);
+#if LLVM_VERSION_GE(12, 0)
+  Attribute Attr = Attribute::getWithStructRetType(F->getContext(), unwrap(Ty));
 #else
-  Attribute Attr = Attribute::get(F->getContext(), Attribute::ByVal);
+  Attribute Attr = Attribute::get(F->getContext(), Attribute::StructRet);
 #endif
   F->addAttribute(Index, Attr);
 }
@@ -616,11 +640,9 @@ static DISubprogram::DISPFlags fromRust(LLVMRustDISPFlags SPFlags) {
   if (isSet(SPFlags & LLVMRustDISPFlags::SPFlagOptimized)) {
     Result |= DISubprogram::DISPFlags::SPFlagOptimized;
   }
-#if LLVM_VERSION_GE(9, 0)
   if (isSet(SPFlags & LLVMRustDISPFlags::SPFlagMainSubprogram)) {
     Result |= DISubprogram::DISPFlags::SPFlagMainSubprogram;
   }
-#endif
 
   return Result;
 }
@@ -648,6 +670,7 @@ enum class LLVMRustChecksumKind {
   None,
   MD5,
   SHA1,
+  SHA256,
 };
 
 static Optional<DIFile::ChecksumKind> fromRust(LLVMRustChecksumKind Kind) {
@@ -658,6 +681,10 @@ static Optional<DIFile::ChecksumKind> fromRust(LLVMRustChecksumKind Kind) {
     return DIFile::ChecksumKind::CSK_MD5;
   case LLVMRustChecksumKind::SHA1:
     return DIFile::ChecksumKind::CSK_SHA1;
+#if (LLVM_VERSION_MAJOR >= 11)
+  case LLVMRustChecksumKind::SHA256:
+    return DIFile::ChecksumKind::CSK_SHA256;
+#endif
   default:
     report_fatal_error("bad ChecksumKind.");
   }
@@ -666,6 +693,8 @@ static Optional<DIFile::ChecksumKind> fromRust(LLVMRustChecksumKind Kind) {
 extern "C" uint32_t LLVMRustDebugMetadataVersion() {
   return DEBUG_METADATA_VERSION;
 }
+
+extern "C" uint32_t LLVMRustVersionPatch() { return LLVM_VERSION_PATCH; }
 
 extern "C" uint32_t LLVMRustVersionMinor() { return LLVM_VERSION_MINOR; }
 
@@ -697,13 +726,14 @@ extern "C" LLVMMetadataRef LLVMRustDIBuilderCreateCompileUnit(
     const char *Producer, size_t ProducerLen, bool isOptimized,
     const char *Flags, unsigned RuntimeVer,
     const char *SplitName, size_t SplitNameLen,
-    LLVMRustDebugEmissionKind Kind) {
+    LLVMRustDebugEmissionKind Kind,
+    uint64_t DWOId, bool SplitDebugInlining) {
   auto *File = unwrapDI<DIFile>(FileRef);
 
   return wrap(Builder->createCompileUnit(Lang, File, StringRef(Producer, ProducerLen),
                                          isOptimized, Flags, RuntimeVer,
                                          StringRef(SplitName, SplitNameLen),
-                                         fromRust(Kind)));
+                                         fromRust(Kind), DWOId, SplitDebugInlining));
 }
 
 extern "C" LLVMMetadataRef LLVMRustDIBuilderCreateFile(
@@ -739,10 +769,6 @@ extern "C" LLVMMetadataRef LLVMRustDIBuilderCreateFunction(
       DITemplateParameterArray(unwrap<MDTuple>(TParam));
   DISubprogram::DISPFlags llvmSPFlags = fromRust(SPFlags);
   DINode::DIFlags llvmFlags = fromRust(Flags);
-#if LLVM_VERSION_LT(9, 0)
-  if (isSet(SPFlags & LLVMRustDISPFlags::SPFlagMainSubprogram))
-    llvmFlags |= DINode::DIFlags::FlagMainSubprogram;
-#endif
   DISubprogram *Sub = Builder->createFunction(
       unwrapDI<DIScope>(Scope),
       StringRef(Name, NameLen),
@@ -766,7 +792,7 @@ extern "C" LLVMMetadataRef LLVMRustDIBuilderCreateTypedef(
     LLVMMetadataRef File, unsigned LineNo, LLVMMetadataRef Scope) {
   return wrap(Builder->createTypedef(
     unwrap<DIType>(Type), StringRef(Name, NameLen), unwrap<DIFile>(File),
-    LineNo, unwrap<DIScope>(Scope)));
+    LineNo, unwrapDIPtr<DIScope>(Scope)));
 }
 
 extern "C" LLVMMetadataRef LLVMRustDIBuilderCreatePointerType(
@@ -936,7 +962,7 @@ extern "C" LLVMValueRef LLVMRustDIBuilderInsertDeclareAtEnd(
   return wrap(Builder->insertDeclare(
       unwrap(V), unwrap<DILocalVariable>(VarInfo),
       Builder->createExpression(llvm::ArrayRef<int64_t>(AddrOps, AddrOpsCount)),
-      DebugLoc(cast<MDNode>(DL)),
+      DebugLoc(cast<MDNode>(unwrap(DL))),
       unwrap(InsertAtEnd)));
 }
 
@@ -1004,15 +1030,20 @@ LLVMRustDICompositeTypeReplaceArrays(LLVMRustDIBuilderRef Builder,
 }
 
 extern "C" LLVMMetadataRef
-LLVMRustDIBuilderCreateDebugLocation(LLVMContextRef ContextRef, unsigned Line,
-                                     unsigned Column, LLVMMetadataRef Scope,
+LLVMRustDIBuilderCreateDebugLocation(unsigned Line, unsigned Column,
+                                     LLVMMetadataRef ScopeRef,
                                      LLVMMetadataRef InlinedAt) {
-  LLVMContext &Context = *unwrap(ContextRef);
-
-  DebugLoc debug_loc = DebugLoc::get(Line, Column, unwrapDIPtr<MDNode>(Scope),
+#if LLVM_VERSION_GE(12, 0)
+  MDNode *Scope = unwrapDIPtr<MDNode>(ScopeRef);
+  DILocation *Loc = DILocation::get(
+      Scope->getContext(), Line, Column, Scope,
+      unwrapDIPtr<MDNode>(InlinedAt));
+  return wrap(Loc);
+#else
+  DebugLoc debug_loc = DebugLoc::get(Line, Column, unwrapDIPtr<MDNode>(ScopeRef),
                                      unwrapDIPtr<MDNode>(InlinedAt));
-
   return wrap(debug_loc.getAsMDNode());
+#endif
 }
 
 extern "C" int64_t LLVMRustDIBuilderCreateOpDeref() {
@@ -1263,6 +1294,10 @@ extern "C" LLVMTypeKind LLVMRustGetTypeKind(LLVMTypeRef Ty) {
   case Type::BFloatTyID:
     return LLVMBFloatTypeKind;
 #endif
+#if LLVM_VERSION_GE(12, 0)
+  case Type::X86_AMXTyID:
+    return LLVMX86_AMXTypeKind;
+#endif
   }
   report_fatal_error("Unhandled TypeID.");
 }
@@ -1473,7 +1508,7 @@ extern "C" void LLVMRustSetComdat(LLVMModuleRef M, LLVMValueRef V,
                                   const char *Name, size_t NameLen) {
   Triple TargetTriple(unwrap(M)->getTargetTriple());
   GlobalObject *GV = unwrap<GlobalObject>(V);
-  if (!TargetTriple.isOSBinFormatMachO()) {
+  if (TargetTriple.supportsCOMDAT()) {
     StringRef NameRef(Name, NameLen);
     GV->setComdat(unwrap(M)->getOrInsertComdat(NameRef));
   }
@@ -1708,11 +1743,23 @@ LLVMRustBuildVectorReduceMax(LLVMBuilderRef B, LLVMValueRef Src, bool IsSigned) 
 }
 extern "C" LLVMValueRef
 LLVMRustBuildVectorReduceFMin(LLVMBuilderRef B, LLVMValueRef Src, bool NoNaN) {
-   return wrap(unwrap(B)->CreateFPMinReduce(unwrap(Src), NoNaN));
+#if LLVM_VERSION_GE(12, 0)
+  Instruction *I = unwrap(B)->CreateFPMinReduce(unwrap(Src));
+  I->setHasNoNaNs(NoNaN);
+  return wrap(I);
+#else
+  return wrap(unwrap(B)->CreateFPMinReduce(unwrap(Src), NoNaN));
+#endif
 }
 extern "C" LLVMValueRef
 LLVMRustBuildVectorReduceFMax(LLVMBuilderRef B, LLVMValueRef Src, bool NoNaN) {
+#if LLVM_VERSION_GE(12, 0)
+  Instruction *I = unwrap(B)->CreateFPMaxReduce(unwrap(Src));
+  I->setHasNoNaNs(NoNaN);
+  return wrap(I);
+#else
   return wrap(unwrap(B)->CreateFPMaxReduce(unwrap(Src), NoNaN));
+#endif
 }
 
 extern "C" LLVMValueRef

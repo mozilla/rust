@@ -9,7 +9,7 @@ use rustc_codegen_ssa::{
 };
 use rustc_middle::ty::layout::HasTyCtxt;
 use rustc_middle::ty::Ty;
-use rustc_target::abi::{Align, HasDataLayout, LayoutOf, Size};
+use rustc_target::abi::{Align, Endian, HasDataLayout, LayoutOf, Size};
 
 fn round_pointer_up_to_alignment(
     bx: &mut Builder<'a, 'll, 'tcx>,
@@ -52,7 +52,7 @@ fn emit_direct_ptr_va_arg(
     let next = bx.inbounds_gep(addr, &[full_direct_size]);
     bx.store(next, va_list_addr, bx.tcx().data_layout.pointer_align.abi);
 
-    if size.bytes() < slot_size.bytes() && &*bx.tcx().sess.target.target_endian == "big" {
+    if size.bytes() < slot_size.bytes() && bx.tcx().sess.target.endian == Endian::Big {
         let adjusted_size = bx.cx().const_i32((slot_size.bytes() - size.bytes()) as i32);
         let adjusted = bx.inbounds_gep(addr, &[adjusted_size]);
         (bx.bitcast(adjusted, bx.cx().type_ptr_to(llty)), addr_align)
@@ -105,7 +105,6 @@ fn emit_aapcs_va_arg(
     let mut end = bx.build_sibling_block("va_arg.end");
     let zero = bx.const_i32(0);
     let offset_align = Align::from_bytes(4).unwrap();
-    assert!(&*bx.tcx().sess.target.target_endian == "little");
 
     let gr_type = target_ty.is_any_ptr() || target_ty.is_integral();
     let (reg_off, reg_top_index, slot_size) = if gr_type {
@@ -144,9 +143,14 @@ fn emit_aapcs_va_arg(
     let top = in_reg.load(top, bx.tcx().data_layout.pointer_align.abi);
 
     // reg_value = *(@top + reg_off_v);
-    let top = in_reg.gep(top, &[reg_off_v]);
-    let top = in_reg.bitcast(top, bx.cx.type_ptr_to(layout.llvm_type(bx)));
-    let reg_value = in_reg.load(top, layout.align.abi);
+    let mut reg_addr = in_reg.gep(top, &[reg_off_v]);
+    if bx.tcx().sess.target.endian == Endian::Big && layout.size.bytes() != slot_size {
+        // On big-endian systems the value is right-aligned in its slot.
+        let offset = bx.const_i32((slot_size - layout.size.bytes()) as i32);
+        reg_addr = in_reg.gep(reg_addr, &[offset]);
+    }
+    let reg_addr = in_reg.bitcast(reg_addr, bx.cx.type_ptr_to(layout.llvm_type(bx)));
+    let reg_value = in_reg.load(reg_addr, layout.align.abi);
     in_reg.br(&end.llbb());
 
     // On Stack block
@@ -175,22 +179,22 @@ pub(super) fn emit_va_arg(
     let arch = &bx.cx.tcx.sess.target.arch;
     match &**arch {
         // Windows x86
-        "x86" if target.options.is_like_windows => {
+        "x86" if target.is_like_windows => {
             emit_ptr_va_arg(bx, addr, target_ty, false, Align::from_bytes(4).unwrap(), false)
         }
         // Generic x86
         "x86" => emit_ptr_va_arg(bx, addr, target_ty, false, Align::from_bytes(4).unwrap(), true),
         // Windows AArch64
-        "aarch64" if target.options.is_like_windows => {
+        "aarch64" if target.is_like_windows => {
             emit_ptr_va_arg(bx, addr, target_ty, false, Align::from_bytes(8).unwrap(), false)
         }
         // macOS / iOS AArch64
-        "aarch64" if target.options.is_like_osx => {
+        "aarch64" if target.is_like_osx => {
             emit_ptr_va_arg(bx, addr, target_ty, false, Align::from_bytes(8).unwrap(), true)
         }
         "aarch64" => emit_aapcs_va_arg(bx, addr, target_ty),
         // Windows x86_64
-        "x86_64" if target.options.is_like_windows => {
+        "x86_64" if target.is_like_windows => {
             let target_ty_size = bx.cx.size_of(target_ty).bytes();
             let indirect: bool = target_ty_size > 8 || !target_ty_size.is_power_of_two();
             emit_ptr_va_arg(bx, addr, target_ty, indirect, Align::from_bytes(8).unwrap(), false)

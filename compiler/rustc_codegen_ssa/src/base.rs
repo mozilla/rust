@@ -1,18 +1,3 @@
-//! Codegen the completed AST to the LLVM IR.
-//!
-//! Some functions here, such as `codegen_block` and `codegen_expr`, return a value --
-//! the result of the codegen to LLVM -- while others, such as `codegen_fn`
-//! and `mono_item`, are called only for the side effect of adding a
-//! particular definition to the LLVM IR output we're producing.
-//!
-//! Hopefully useful general knowledge about codegen:
-//!
-//! * There's no way to find out the `Ty` type of a `Value`. Doing so
-//!   would be "trying to get the eggs out of an omelette" (credit:
-//!   pcwalton). You can, instead, find out its `llvm::Type` by calling `val_ty`,
-//!   but one `llvm::Type` corresponds to many `Ty`s; for instance, `tup(int, int,
-//!   int)` and `rec(x=int, y=int, z=int)` will have the same `llvm::Type`.
-
 use crate::back::write::{
     compute_per_cgu_lto_type, start_async_codegen, submit_codegened_module_to_llvm,
     submit_post_lto_module_to_llvm, submit_pre_lto_module_to_llvm, ComputedLtoType, OngoingCodegen,
@@ -27,8 +12,8 @@ use crate::{CachedModuleCodegen, CrateInfo, MemFlags, ModuleCodegen, ModuleKind}
 
 use rustc_attr as attr;
 use rustc_data_structures::fx::FxHashMap;
-use rustc_data_structures::profiling::print_time_passes_entry;
-use rustc_data_structures::sync::{par_iter, Lock, ParallelIterator};
+use rustc_data_structures::profiling::{get_resident_set_size, print_time_passes_entry};
+use rustc_data_structures::sync::{par_iter, ParallelIterator};
 use rustc_hir as hir;
 use rustc_hir::def_id::{LocalDefId, LOCAL_CRATE};
 use rustc_hir::lang_items::LangItem;
@@ -44,15 +29,13 @@ use rustc_middle::ty::query::Providers;
 use rustc_middle::ty::{self, Instance, Ty, TyCtxt};
 use rustc_session::cgu_reuse_tracker::CguReuse;
 use rustc_session::config::{self, EntryFnType};
-use rustc_session::utils::NativeLibKind;
 use rustc_session::Session;
-use rustc_span::Span;
-use rustc_symbol_mangling::test as symbol_names_test;
 use rustc_target::abi::{Align, LayoutOf, VariantIdx};
 
-use std::cmp;
 use std::ops::{Deref, DerefMut};
 use std::time::{Duration, Instant};
+
+use itertools::Itertools;
 
 pub fn bin_op_to_icmp_predicate(op: hir::BinOpKind, signed: bool) -> IntPredicate {
     match op {
@@ -327,7 +310,7 @@ fn cast_shift_rhs<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
 /// currently uses SEH-ish unwinding with DWARF info tables to the side (same as
 /// 64-bit MinGW) instead of "full SEH".
 pub fn wants_msvc_seh(sess: &Session) -> bool {
-    sess.target.options.is_like_msvc
+    sess.target.is_like_msvc
 }
 
 pub fn memcpy_ty<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
@@ -364,11 +347,7 @@ pub fn codegen_instance<'a, 'tcx: 'a, Bx: BuilderMethods<'a, 'tcx>>(
 pub fn maybe_create_entry_wrapper<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
     cx: &'a Bx::CodegenCx,
 ) -> Option<Bx::Function> {
-    let (main_def_id, span) = match cx.tcx().entry_fn(LOCAL_CRATE) {
-        Some((def_id, _)) => (def_id, cx.tcx().def_span(def_id)),
-        None => return None,
-    };
-
+    let main_def_id = cx.tcx().entry_fn(LOCAL_CRATE).map(|(def_id, _)| def_id)?;
     let instance = Instance::mono(cx.tcx(), main_def_id.to_def_id());
 
     if !cx.codegen_unit().contains_item(&MonoItem::Fn(instance)) {
@@ -381,19 +360,18 @@ pub fn maybe_create_entry_wrapper<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
 
     return cx.tcx().entry_fn(LOCAL_CRATE).map(|(_, et)| {
         let use_start_lang_item = EntryFnType::Start != et;
-        create_entry_fn::<Bx>(cx, span, main_llfn, main_def_id, use_start_lang_item)
+        create_entry_fn::<Bx>(cx, main_llfn, main_def_id, use_start_lang_item)
     });
 
     fn create_entry_fn<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
         cx: &'a Bx::CodegenCx,
-        sp: Span,
         rust_main: Bx::Value,
         rust_main_def_id: LocalDefId,
         use_start_lang_item: bool,
     ) -> Bx::Function {
         // The entry function is either `int main(void)` or `int main(int argc, char **argv)`,
         // depending on whether the target needs `argc` and `argv` to be passed in.
-        let llfty = if cx.sess().target.options.main_needs_argc_argv {
+        let llfty = if cx.sess().target.main_needs_argc_argv {
             cx.type_func(&[cx.type_int(), cx.type_ptr_to(cx.type_i8p())], cx.type_int())
         } else {
             cx.type_func(&[], cx.type_int())
@@ -405,14 +383,15 @@ pub fn maybe_create_entry_wrapper<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
         // late-bound regions, since late-bound
         // regions must appear in the argument
         // listing.
-        let main_ret_ty = cx.tcx().erase_regions(&main_ret_ty.no_bound_vars().unwrap());
+        let main_ret_ty = cx.tcx().erase_regions(main_ret_ty.no_bound_vars().unwrap());
 
         let llfn = match cx.declare_c_main(llfty) {
             Some(llfn) => llfn,
             None => {
                 // FIXME: We should be smart and show a better diagnostic here.
+                let span = cx.tcx().def_span(rust_main_def_id);
                 cx.sess()
-                    .struct_span_err(sp, "entry symbol `main` declared multiple times")
+                    .struct_span_err(span, "entry symbol `main` declared multiple times")
                     .help("did you use `#[no_mangle]` on `fn main`? Use `#[start]` instead")
                     .emit();
                 cx.sess().abort_if_errors();
@@ -464,7 +443,7 @@ fn get_argc_argv<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
     cx: &'a Bx::CodegenCx,
     bx: &mut Bx,
 ) -> (Bx::Value, Bx::Value) {
-    if cx.sess().target.options.main_needs_argc_argv {
+    if cx.sess().target.main_needs_argc_argv {
         // Params from native `main()` used as args for rust start function
         let param_argc = bx.get_param(0);
         let param_argv = bx.get_param(1);
@@ -490,8 +469,6 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
         let ongoing_codegen = start_async_codegen(backend, tcx, metadata, 1);
 
         ongoing_codegen.codegen_finished(tcx);
-
-        finalize_tcx(tcx);
 
         ongoing_codegen.check_for_errors(tcx.sess);
 
@@ -570,15 +547,24 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
         ongoing_codegen.submit_pre_codegened_module_to_llvm(tcx, metadata_module);
     }
 
-    // We sort the codegen units by size. This way we can schedule work for LLVM
-    // a bit more efficiently.
-    let codegen_units = {
-        let mut codegen_units = codegen_units.iter().collect::<Vec<_>>();
-        codegen_units.sort_by_cached_key(|cgu| cmp::Reverse(cgu.size_estimate()));
-        codegen_units
-    };
+    // For better throughput during parallel processing by LLVM, we used to sort
+    // CGUs largest to smallest. This would lead to better thread utilization
+    // by, for example, preventing a large CGU from being processed last and
+    // having only one LLVM thread working while the rest remained idle.
+    //
+    // However, this strategy would lead to high memory usage, as it meant the
+    // LLVM-IR for all of the largest CGUs would be resident in memory at once.
+    //
+    // Instead, we can compromise by ordering CGUs such that the largest and
+    // smallest are first, second largest and smallest are next, etc. If there
+    // are large size variations, this can reduce memory usage significantly.
+    let codegen_units: Vec<_> = {
+        let mut sorted_cgus = codegen_units.iter().collect::<Vec<_>>();
+        sorted_cgus.sort_by_cached_key(|cgu| cgu.size_estimate());
 
-    let total_codegen_time = Lock::new(Duration::new(0, 0));
+        let (first_half, second_half) = sorted_cgus.split_at(sorted_cgus.len() / 2);
+        second_half.iter().rev().interleave(first_half).copied().collect()
+    };
 
     // The non-parallel compiler can only translate codegen units to LLVM IR
     // on a single thread, leading to a staircase effect where the N LLVM
@@ -602,23 +588,26 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
                     .collect();
 
                 // Compile the found CGUs in parallel.
-                par_iter(cgus)
+                let start_time = Instant::now();
+
+                let pre_compiled_cgus = par_iter(cgus)
                     .map(|(i, _)| {
-                        let start_time = Instant::now();
                         let module = backend.compile_codegen_unit(tcx, codegen_units[i].name());
-                        let mut time = total_codegen_time.lock();
-                        *time += start_time.elapsed();
                         (i, module)
                     })
-                    .collect()
+                    .collect();
+
+                (pre_compiled_cgus, start_time.elapsed())
             })
         } else {
-            FxHashMap::default()
+            (FxHashMap::default(), Duration::new(0, 0))
         }
     };
 
     let mut cgu_reuse = Vec::new();
     let mut pre_compiled_cgus: Option<FxHashMap<usize, _>> = None;
+    let mut total_codegen_time = Duration::new(0, 0);
+    let start_rss = tcx.sess.time_passes().then(|| get_resident_set_size());
 
     for (i, cgu) in codegen_units.iter().enumerate() {
         ongoing_codegen.wait_for_signal_to_codegen_item();
@@ -631,7 +620,9 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
                 codegen_units.iter().map(|cgu| determine_cgu_reuse(tcx, &cgu)).collect()
             });
             // Pre compile some CGUs
-            pre_compiled_cgus = Some(pre_compile_cgus(&cgu_reuse));
+            let (compiled_cgus, codegen_time) = pre_compile_cgus(&cgu_reuse);
+            pre_compiled_cgus = Some(compiled_cgus);
+            total_codegen_time += codegen_time;
         }
 
         let cgu_reuse = cgu_reuse[i];
@@ -645,10 +636,14 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
                     } else {
                         let start_time = Instant::now();
                         let module = backend.compile_codegen_unit(tcx, cgu.name());
-                        let mut time = total_codegen_time.lock();
-                        *time += start_time.elapsed();
+                        total_codegen_time += start_time.elapsed();
                         module
                     };
+                // This will unwind if there are errors, which triggers our `AbortCodegenOnDrop`
+                // guard. Unfortunately, just skipping the `submit_codegened_module_to_llvm` makes
+                // compilation hang on post-monomorphization errors.
+                tcx.sess.abort_if_errors();
+
                 submit_codegened_module_to_llvm(
                     &backend,
                     &ongoing_codegen.coordinator_send,
@@ -687,19 +682,18 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
 
     // Since the main thread is sometimes blocked during codegen, we keep track
     // -Ztime-passes output manually.
-    print_time_passes_entry(
-        tcx.sess.time_passes(),
-        "codegen_to_LLVM_IR",
-        total_codegen_time.into_inner(),
-    );
+    if tcx.sess.time_passes() {
+        let end_rss = get_resident_set_size();
 
-    rustc_incremental::assert_module_sources::assert_module_sources(tcx);
-
-    symbol_names_test::report_symbol_names(tcx);
+        print_time_passes_entry(
+            "codegen_to_LLVM_IR",
+            total_codegen_time,
+            start_rss.unwrap(),
+            end_rss,
+        );
+    }
 
     ongoing_codegen.check_for_errors(tcx.sess);
-
-    finalize_tcx(tcx);
 
     ongoing_codegen.into_inner()
 }
@@ -751,18 +745,6 @@ impl<B: ExtraBackendMethods> Drop for AbortCodegenOnDrop<B> {
     }
 }
 
-fn finalize_tcx(tcx: TyCtxt<'_>) {
-    tcx.sess.time("assert_dep_graph", || rustc_incremental::assert_dep_graph(tcx));
-    tcx.sess.time("serialize_dep_graph", || rustc_incremental::save_dep_graph(tcx));
-
-    // We assume that no queries are run past here. If there are new queries
-    // after this point, they'll show up as "<unknown>" in self-profiling data.
-    {
-        let _prof_timer = tcx.prof.generic_activity("self_profile_alloc_query_strings");
-        tcx.alloc_self_profile_query_strings();
-    }
-}
-
 impl CrateInfo {
     pub fn new(tcx: TyCtxt<'_>) -> CrateInfo {
         let mut info = CrateInfo {
@@ -771,7 +753,7 @@ impl CrateInfo {
             profiler_runtime: None,
             is_no_builtins: Default::default(),
             native_libraries: Default::default(),
-            used_libraries: tcx.native_libraries(LOCAL_CRATE),
+            used_libraries: tcx.native_libraries(LOCAL_CRATE).iter().map(Into::into).collect(),
             link_args: tcx.link_args(LOCAL_CRATE),
             crate_name: Default::default(),
             used_crates_dynamic: cstore::used_crates(tcx, LinkagePreference::RequireDynamic),
@@ -792,7 +774,8 @@ impl CrateInfo {
         info.missing_lang_items.reserve(n_crates);
 
         for &cnum in crates.iter() {
-            info.native_libraries.insert(cnum, tcx.native_libraries(cnum));
+            info.native_libraries
+                .insert(cnum, tcx.native_libraries(cnum).iter().map(Into::into).collect());
             info.crate_name.insert(cnum, tcx.crate_name(cnum).to_string());
             info.used_crate_source.insert(cnum, tcx.used_crate_source(cnum));
             if tcx.is_panic_runtime(cnum) {
@@ -824,7 +807,7 @@ impl CrateInfo {
     }
 }
 
-pub fn provide_both(providers: &mut Providers) {
+pub fn provide(providers: &mut Providers) {
     providers.backend_optimization_level = |tcx, cratenum| {
         let for_speed = match tcx.sess.opts.optimize {
             // If globally no optimisation is done, #[optimize] has no effect.
@@ -857,34 +840,6 @@ pub fn provide_both(providers: &mut Providers) {
         }
         tcx.sess.opts.optimize
     };
-
-    providers.dllimport_foreign_items = |tcx, krate| {
-        let module_map = tcx.foreign_modules(krate);
-        let module_map =
-            module_map.iter().map(|lib| (lib.def_id, lib)).collect::<FxHashMap<_, _>>();
-
-        let dllimports = tcx
-            .native_libraries(krate)
-            .iter()
-            .filter(|lib| {
-                if !matches!(lib.kind, NativeLibKind::Dylib | NativeLibKind::Unspecified) {
-                    return false;
-                }
-                let cfg = match lib.cfg {
-                    Some(ref cfg) => cfg,
-                    None => return true,
-                };
-                attr::cfg_matches(cfg, &tcx.sess.parse_sess, None)
-            })
-            .filter_map(|lib| lib.foreign_module)
-            .map(|id| &module_map[&id])
-            .flat_map(|module| module.foreign_items.iter().cloned())
-            .collect();
-        dllimports
-    };
-
-    providers.is_dllimport_foreign_item =
-        |tcx, def_id| tcx.dllimport_foreign_items(def_id.krate).contains(&def_id);
 }
 
 fn determine_cgu_reuse<'tcx>(tcx: TyCtxt<'tcx>, cgu: &CodegenUnit<'tcx>) -> CguReuse {
@@ -912,7 +867,7 @@ fn determine_cgu_reuse<'tcx>(tcx: TyCtxt<'tcx>, cgu: &CodegenUnit<'tcx>) -> CguR
         cgu.name()
     );
 
-    if tcx.dep_graph.try_mark_green(tcx, &dep_node).is_some() {
+    if tcx.try_mark_green(&dep_node) {
         // We can re-use either the pre- or the post-thinlto state. If no LTO is
         // being performed then we can use post-LTO artifacts, otherwise we must
         // reuse pre-LTO artifacts

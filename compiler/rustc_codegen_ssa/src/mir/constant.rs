@@ -11,31 +11,31 @@ use super::FunctionCx;
 
 impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
     pub fn eval_mir_constant_to_operand(
-        &mut self,
+        &self,
         bx: &mut Bx,
         constant: &mir::Constant<'tcx>,
     ) -> Result<OperandRef<'tcx, Bx::Value>, ErrorHandled> {
         let val = self.eval_mir_constant(constant)?;
-        let ty = self.monomorphize(&constant.literal.ty);
+        let ty = self.monomorphize(constant.ty());
         Ok(OperandRef::from_const(bx, val, ty))
     }
 
     pub fn eval_mir_constant(
-        &mut self,
+        &self,
         constant: &mir::Constant<'tcx>,
     ) -> Result<ConstValue<'tcx>, ErrorHandled> {
-        match self.monomorphize(&constant.literal).val {
+        let ct = self.monomorphize(constant.literal);
+        let ct = match ct {
+            mir::ConstantKind::Ty(ct) => ct,
+            mir::ConstantKind::Val(val, _) => return Ok(val),
+        };
+        match ct.val {
             ty::ConstKind::Unevaluated(def, substs, promoted) => self
                 .cx
                 .tcx()
                 .const_eval_resolve(ty::ParamEnv::reveal_all(), def, substs, promoted, None)
                 .map_err(|err| {
-                    if promoted.is_none() {
-                        self.cx
-                            .tcx()
-                            .sess
-                            .span_err(constant.span, "erroneous constant encountered");
-                    }
+                    self.cx.tcx().sess.span_err(constant.span, "erroneous constant encountered");
                     err
                 }),
             ty::ConstKind::Value(value) => Ok(value),
@@ -83,7 +83,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
             .unwrap_or_else(|_| {
                 bx.tcx().sess.span_err(span, "could not evaluate shuffle_indices at compile time");
                 // We've errored, so we don't have to produce working code.
-                let ty = self.monomorphize(&ty);
+                let ty = self.monomorphize(ty);
                 let llty = bx.backend_type(bx.layout_of(ty));
                 (bx.const_undef(llty), ty)
             })

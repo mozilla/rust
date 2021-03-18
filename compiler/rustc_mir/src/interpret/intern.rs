@@ -16,6 +16,7 @@
 
 use super::validity::RefTracking;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_errors::ErrorReported;
 use rustc_hir as hir;
 use rustc_middle::mir::interpret::InterpResult;
 use rustc_middle::ty::{self, layout::TyAndLayout, Ty};
@@ -24,19 +25,20 @@ use rustc_target::abi::Size;
 use rustc_ast::Mutability;
 
 use super::{AllocId, Allocation, InterpCx, MPlaceTy, Machine, MemoryKind, Scalar, ValueVisitor};
+use crate::const_eval;
 
-pub trait CompileTimeMachine<'mir, 'tcx> = Machine<
+pub trait CompileTimeMachine<'mir, 'tcx, T> = Machine<
     'mir,
     'tcx,
-    MemoryKind = !,
+    MemoryKind = T,
     PointerTag = (),
     ExtraFnVal = !,
     FrameExtra = (),
     AllocExtra = (),
-    MemoryMap = FxHashMap<AllocId, (MemoryKind<!>, Allocation)>,
+    MemoryMap = FxHashMap<AllocId, (MemoryKind<T>, Allocation)>,
 >;
 
-struct InternVisitor<'rt, 'mir, 'tcx, M: CompileTimeMachine<'mir, 'tcx>> {
+struct InternVisitor<'rt, 'mir, 'tcx, M: CompileTimeMachine<'mir, 'tcx, const_eval::MemoryKind>> {
     /// The ectx from which we intern.
     ecx: &'rt mut InterpCx<'mir, 'tcx, M>,
     /// Previously encountered safe references.
@@ -73,7 +75,7 @@ struct IsStaticOrFn;
 /// `immutable` things might become mutable if `ty` is not frozen.
 /// `ty` can be `None` if there is no potential interior mutability
 /// to account for (e.g. for vtables).
-fn intern_shallow<'rt, 'mir, 'tcx, M: CompileTimeMachine<'mir, 'tcx>>(
+fn intern_shallow<'rt, 'mir, 'tcx, M: CompileTimeMachine<'mir, 'tcx, const_eval::MemoryKind>>(
     ecx: &'rt mut InterpCx<'mir, 'tcx, M>,
     leftover_allocations: &'rt mut FxHashSet<AllocId>,
     alloc_id: AllocId,
@@ -103,7 +105,10 @@ fn intern_shallow<'rt, 'mir, 'tcx, M: CompileTimeMachine<'mir, 'tcx>>(
     // This match is just a canary for future changes to `MemoryKind`, which most likely need
     // changes in this function.
     match kind {
-        MemoryKind::Stack | MemoryKind::Vtable | MemoryKind::CallerLocation => {}
+        MemoryKind::Stack
+        | MemoryKind::Machine(const_eval::MemoryKind::Heap)
+        | MemoryKind::Vtable
+        | MemoryKind::CallerLocation => {}
     }
     // Set allocation mutability as appropriate. This is used by LLVM to put things into
     // read-only memory, and also by Miri when evaluating other globals that
@@ -137,7 +142,9 @@ fn intern_shallow<'rt, 'mir, 'tcx, M: CompileTimeMachine<'mir, 'tcx>>(
     None
 }
 
-impl<'rt, 'mir, 'tcx, M: CompileTimeMachine<'mir, 'tcx>> InternVisitor<'rt, 'mir, 'tcx, M> {
+impl<'rt, 'mir, 'tcx, M: CompileTimeMachine<'mir, 'tcx, const_eval::MemoryKind>>
+    InternVisitor<'rt, 'mir, 'tcx, M>
+{
     fn intern_shallow(
         &mut self,
         alloc_id: AllocId,
@@ -148,8 +155,8 @@ impl<'rt, 'mir, 'tcx, M: CompileTimeMachine<'mir, 'tcx>> InternVisitor<'rt, 'mir
     }
 }
 
-impl<'rt, 'mir, 'tcx: 'mir, M: CompileTimeMachine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
-    for InternVisitor<'rt, 'mir, 'tcx, M>
+impl<'rt, 'mir, 'tcx: 'mir, M: CompileTimeMachine<'mir, 'tcx, const_eval::MemoryKind>>
+    ValueVisitor<'mir, 'tcx, M> for InternVisitor<'rt, 'mir, 'tcx, M>
 {
     type V = MPlaceTy<'tcx>;
 
@@ -160,7 +167,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: CompileTimeMachine<'mir, 'tcx>> ValueVisitor<'mir
 
     fn visit_aggregate(
         &mut self,
-        mplace: MPlaceTy<'tcx>,
+        mplace: &MPlaceTy<'tcx>,
         fields: impl Iterator<Item = InterpResult<'tcx, Self::V>>,
     ) -> InterpResult<'tcx> {
         // ZSTs cannot contain pointers, so we can skip them.
@@ -184,14 +191,14 @@ impl<'rt, 'mir, 'tcx: 'mir, M: CompileTimeMachine<'mir, 'tcx>> ValueVisitor<'mir
         self.walk_aggregate(mplace, fields)
     }
 
-    fn visit_value(&mut self, mplace: MPlaceTy<'tcx>) -> InterpResult<'tcx> {
+    fn visit_value(&mut self, mplace: &MPlaceTy<'tcx>) -> InterpResult<'tcx> {
         // Handle Reference types, as these are the only relocations supported by const eval.
         // Raw pointers (and boxes) are handled by the `leftover_relocations` logic.
         let tcx = self.ecx.tcx;
         let ty = mplace.layout.ty;
         if let ty::Ref(_, referenced_ty, ref_mutability) = *ty.kind() {
-            let value = self.ecx.read_immediate(mplace.into())?;
-            let mplace = self.ecx.ref_to_mplace(value)?;
+            let value = self.ecx.read_immediate(&(*mplace).into())?;
+            let mplace = self.ecx.ref_to_mplace(&value)?;
             assert_eq!(mplace.layout.ty, referenced_ty);
             // Handle trait object vtables.
             if let ty::Dynamic(..) =
@@ -285,11 +292,13 @@ pub enum InternKind {
 /// tracks where in the value we are and thus can show much better error messages.
 /// Any errors here would anyway be turned into `const_err` lints, whereas validation failures
 /// are hard errors.
-pub fn intern_const_alloc_recursive<M: CompileTimeMachine<'mir, 'tcx>>(
+#[tracing::instrument(level = "debug", skip(ecx))]
+pub fn intern_const_alloc_recursive<M: CompileTimeMachine<'mir, 'tcx, const_eval::MemoryKind>>(
     ecx: &mut InterpCx<'mir, 'tcx, M>,
     intern_kind: InternKind,
-    ret: MPlaceTy<'tcx>,
-) where
+    ret: &MPlaceTy<'tcx>,
+) -> Result<(), ErrorReported>
+where
     'tcx: 'mir,
 {
     let tcx = ecx.tcx;
@@ -319,7 +328,7 @@ pub fn intern_const_alloc_recursive<M: CompileTimeMachine<'mir, 'tcx>>(
         Some(ret.layout.ty),
     );
 
-    ref_tracking.track((ret, base_intern_mode), || ());
+    ref_tracking.track((*ret, base_intern_mode), || ());
 
     while let Some(((mplace, mode), _)) = ref_tracking.todo.pop() {
         let res = InternVisitor {
@@ -329,7 +338,7 @@ pub fn intern_const_alloc_recursive<M: CompileTimeMachine<'mir, 'tcx>>(
             leftover_allocations,
             inside_unsafe_cell: false,
         }
-        .visit_value(mplace);
+        .visit_value(&mplace);
         // We deliberately *ignore* interpreter errors here.  When there is a problem, the remaining
         // references are "leftover"-interned, and later validation will show a proper error
         // and point at the right part of the value causing the problem.
@@ -342,14 +351,6 @@ pub fn intern_const_alloc_recursive<M: CompileTimeMachine<'mir, 'tcx>>(
                         "error during interning should later cause validation failure: {}",
                         error
                     ),
-                );
-                // Some errors shouldn't come up because creating them causes
-                // an allocation, which we should avoid. When that happens,
-                // dedicated error variants should be introduced instead.
-                assert!(
-                    !error.kind.allocates(),
-                    "interning encountered allocating error: {}",
-                    error
                 );
             }
         }
@@ -405,15 +406,19 @@ pub fn intern_const_alloc_recursive<M: CompileTimeMachine<'mir, 'tcx>>(
             // Codegen does not like dangling pointers, and generally `tcx` assumes that
             // all allocations referenced anywhere actually exist. So, make sure we error here.
             ecx.tcx.sess.span_err(ecx.tcx.span, "encountered dangling pointer in final constant");
+            return Err(ErrorReported);
         } else if ecx.tcx.get_global_alloc(alloc_id).is_none() {
             // We have hit an `AllocId` that is neither in local or global memory and isn't
             // marked as dangling by local memory.  That should be impossible.
             span_bug!(ecx.tcx.span, "encountered unknown alloc id {:?}", alloc_id);
         }
     }
+    Ok(())
 }
 
-impl<'mir, 'tcx: 'mir, M: super::intern::CompileTimeMachine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
+impl<'mir, 'tcx: 'mir, M: super::intern::CompileTimeMachine<'mir, 'tcx, !>>
+    InterpCx<'mir, 'tcx, M>
+{
     /// A helper function that allocates memory for the layout given and gives you access to mutate
     /// it. Once your own mutation code is done, the backing `Allocation` is removed from the
     /// current `Memory` and returned.
@@ -422,11 +427,11 @@ impl<'mir, 'tcx: 'mir, M: super::intern::CompileTimeMachine<'mir, 'tcx>> InterpC
         layout: TyAndLayout<'tcx>,
         f: impl FnOnce(
             &mut InterpCx<'mir, 'tcx, M>,
-            MPlaceTy<'tcx, M::PointerTag>,
+            &MPlaceTy<'tcx, M::PointerTag>,
         ) -> InterpResult<'tcx, ()>,
     ) -> InterpResult<'tcx, &'tcx Allocation> {
         let dest = self.allocate(layout, MemoryKind::Stack);
-        f(self, dest)?;
+        f(self, &dest)?;
         let ptr = dest.ptr.assert_ptr();
         assert_eq!(ptr.offset, Size::ZERO);
         let mut alloc = self.memory.alloc_map.remove(&ptr.alloc_id).unwrap().1;

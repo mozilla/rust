@@ -140,12 +140,7 @@ impl<'a> ExtCtxt<'a> {
     }
 
     pub fn stmt_expr(&self, expr: P<ast::Expr>) -> ast::Stmt {
-        ast::Stmt {
-            id: ast::DUMMY_NODE_ID,
-            span: expr.span,
-            kind: ast::StmtKind::Expr(expr),
-            tokens: None,
-        }
+        ast::Stmt { id: ast::DUMMY_NODE_ID, span: expr.span, kind: ast::StmtKind::Expr(expr) }
     }
 
     pub fn stmt_let(&self, sp: Span, mutbl: bool, ident: Ident, ex: P<ast::Expr>) -> ast::Stmt {
@@ -162,13 +157,9 @@ impl<'a> ExtCtxt<'a> {
             id: ast::DUMMY_NODE_ID,
             span: sp,
             attrs: AttrVec::new(),
-        });
-        ast::Stmt {
-            id: ast::DUMMY_NODE_ID,
-            kind: ast::StmtKind::Local(local),
-            span: sp,
             tokens: None,
-        }
+        });
+        ast::Stmt { id: ast::DUMMY_NODE_ID, kind: ast::StmtKind::Local(local), span: sp }
     }
 
     // Generates `let _: Type;`, which is usually used for type assertions.
@@ -180,17 +171,13 @@ impl<'a> ExtCtxt<'a> {
             id: ast::DUMMY_NODE_ID,
             span,
             attrs: AttrVec::new(),
+            tokens: None,
         });
-        ast::Stmt { id: ast::DUMMY_NODE_ID, kind: ast::StmtKind::Local(local), span, tokens: None }
+        ast::Stmt { id: ast::DUMMY_NODE_ID, kind: ast::StmtKind::Local(local), span }
     }
 
     pub fn stmt_item(&self, sp: Span, item: P<ast::Item>) -> ast::Stmt {
-        ast::Stmt {
-            id: ast::DUMMY_NODE_ID,
-            kind: ast::StmtKind::Item(item),
-            span: sp,
-            tokens: None,
-        }
+        ast::Stmt { id: ast::DUMMY_NODE_ID, kind: ast::StmtKind::Item(item), span: sp }
     }
 
     pub fn block_expr(&self, expr: P<ast::Expr>) -> P<ast::Block> {
@@ -200,7 +187,6 @@ impl<'a> ExtCtxt<'a> {
                 id: ast::DUMMY_NODE_ID,
                 span: expr.span,
                 kind: ast::StmtKind::Expr(expr),
-                tokens: None,
             }],
         )
     }
@@ -281,8 +267,8 @@ impl<'a> ExtCtxt<'a> {
     pub fn expr_block(&self, b: P<ast::Block>) -> P<ast::Expr> {
         self.expr(b.span, ast::ExprKind::Block(b, None))
     }
-    pub fn field_imm(&self, span: Span, ident: Ident, e: P<ast::Expr>) -> ast::Field {
-        ast::Field {
+    pub fn field_imm(&self, span: Span, ident: Ident, e: P<ast::Expr>) -> ast::ExprField {
+        ast::ExprField {
             ident: ident.with_span_pos(span),
             expr: e,
             span,
@@ -296,15 +282,18 @@ impl<'a> ExtCtxt<'a> {
         &self,
         span: Span,
         path: ast::Path,
-        fields: Vec<ast::Field>,
+        fields: Vec<ast::ExprField>,
     ) -> P<ast::Expr> {
-        self.expr(span, ast::ExprKind::Struct(path, fields, None))
+        self.expr(
+            span,
+            ast::ExprKind::Struct(P(ast::StructExpr { path, fields, rest: ast::StructRest::None })),
+        )
     }
     pub fn expr_struct_ident(
         &self,
         span: Span,
         id: Ident,
-        fields: Vec<ast::Field>,
+        fields: Vec<ast::ExprField>,
     ) -> P<ast::Expr> {
         self.expr_struct(span, self.path_ident(span, id), fields)
     }
@@ -433,7 +422,7 @@ impl<'a> ExtCtxt<'a> {
         &self,
         span: Span,
         path: ast::Path,
-        field_pats: Vec<ast::FieldPat>,
+        field_pats: Vec<ast::PatField>,
     ) -> P<ast::Pat> {
         self.pat(span, PatKind::Struct(path, field_pats, false))
     }

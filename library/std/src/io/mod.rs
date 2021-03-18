@@ -240,7 +240,6 @@
 //!
 //! [`File`]: crate::fs::File
 //! [`TcpStream`]: crate::net::TcpStream
-//! [`Vec<T>`]: Vec
 //! [`io::stdout`]: stdout
 //! [`io::Result`]: self::Result
 //! [`?` operator]: ../../book/appendix-02-operators.html
@@ -268,24 +267,25 @@ pub use self::buffered::IntoInnerError;
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use self::buffered::{BufReader, BufWriter, LineWriter};
 #[stable(feature = "rust1", since = "1.0.0")]
+pub use self::copy::copy;
+#[stable(feature = "rust1", since = "1.0.0")]
 pub use self::cursor::Cursor;
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use self::error::{Error, ErrorKind, Result};
+#[unstable(feature = "internal_output_capture", issue = "none")]
+#[doc(no_inline, hidden)]
+pub use self::stdio::set_output_capture;
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use self::stdio::{stderr, stdin, stdout, Stderr, Stdin, Stdout};
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use self::stdio::{StderrLock, StdinLock, StdoutLock};
 #[unstable(feature = "print_internals", issue = "none")]
 pub use self::stdio::{_eprint, _print};
-#[unstable(feature = "libstd_io_internals", issue = "42788")]
-#[doc(no_inline, hidden)]
-pub use self::stdio::{set_panic, set_print, LocalOutput};
 #[stable(feature = "rust1", since = "1.0.0")]
-pub use self::util::{copy, empty, repeat, sink, Empty, Repeat, Sink};
-
-pub(crate) use self::stdio::clone_io;
+pub use self::util::{empty, repeat, sink, Empty, Repeat, Sink};
 
 mod buffered;
+pub(crate) mod copy;
 mod cursor;
 mod error;
 mod impls;
@@ -368,7 +368,6 @@ where
 {
     let start_len = buf.len();
     let mut g = Guard { len: buf.len(), buf };
-    let ret;
     loop {
         if g.len == g.buf.len() {
             unsafe {
@@ -387,21 +386,20 @@ where
             }
         }
 
-        match r.read(&mut g.buf[g.len..]) {
-            Ok(0) => {
-                ret = Ok(g.len - start_len);
-                break;
+        let buf = &mut g.buf[g.len..];
+        match r.read(buf) {
+            Ok(0) => return Ok(g.len - start_len),
+            Ok(n) => {
+                // We can't allow bogus values from read. If it is too large, the returned vec could have its length
+                // set past its capacity, or if it overflows the vec could be shortened which could create an invalid
+                // string if this is called via read_to_string.
+                assert!(n <= buf.len());
+                g.len += n;
             }
-            Ok(n) => g.len += n,
             Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
-            Err(e) => {
-                ret = Err(e);
-                break;
-            }
+            Err(e) => return Err(e),
         }
     }
-
-    ret
 }
 
 pub(crate) fn default_read_vectored<F>(read: F, bufs: &mut [IoSliceMut<'_>]) -> Result<usize>
@@ -418,6 +416,25 @@ where
 {
     let buf = bufs.iter().find(|b| !b.is_empty()).map_or(&[][..], |b| &**b);
     write(buf)
+}
+
+pub(crate) fn default_read_exact<R: Read + ?Sized>(this: &mut R, mut buf: &mut [u8]) -> Result<()> {
+    while !buf.is_empty() {
+        match this.read(buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                let tmp = buf;
+                buf = &mut tmp[n..];
+            }
+            Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    if !buf.is_empty() {
+        Err(Error::new(ErrorKind::UnexpectedEof, "failed to fill whole buffer"))
+    } else {
+        Ok(())
+    }
 }
 
 /// The `Read` trait allows for reading bytes from a source.
@@ -467,7 +484,7 @@ where
 /// }
 /// ```
 ///
-/// Read from [`&str`] because [`&[u8]`][slice] implements `Read`:
+/// Read from [`&str`] because [`&[u8]`][prim@slice] implements `Read`:
 ///
 /// ```no_run
 /// # use std::io;
@@ -489,7 +506,6 @@ where
 /// [`&str`]: prim@str
 /// [`std::io`]: self
 /// [`File`]: crate::fs::File
-/// [slice]: ../../std/primitive.slice.html
 #[stable(feature = "rust1", since = "1.0.0")]
 #[doc(spotlight)]
 pub trait Read {
@@ -770,23 +786,8 @@ pub trait Read {
     /// }
     /// ```
     #[stable(feature = "read_exact", since = "1.6.0")]
-    fn read_exact(&mut self, mut buf: &mut [u8]) -> Result<()> {
-        while !buf.is_empty() {
-            match self.read(buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    let tmp = buf;
-                    buf = &mut tmp[n..];
-                }
-                Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
-                Err(e) => return Err(e),
-            }
-        }
-        if !buf.is_empty() {
-            Err(Error::new(ErrorKind::UnexpectedEof, "failed to fill whole buffer"))
-        } else {
-            Ok(())
-        }
+    fn read_exact(&mut self, buf: &mut [u8]) -> Result<()> {
+        default_read_exact(self, buf)
     }
 
     /// Creates a "by reference" adaptor for this instance of `Read`.
@@ -944,6 +945,54 @@ pub trait Read {
     {
         Take { inner: self, limit }
     }
+}
+
+/// Read all bytes from a [reader][Read] into a new [`String`].
+///
+/// This is a convenience function for [`Read::read_to_string`]. Using this
+/// function avoids having to create a variable first and provides more type
+/// safety since you can only get the buffer out if there were no errors. (If you
+/// use [`Read::read_to_string`] you have to remember to check whether the read
+/// succeeded because otherwise your buffer will be empty or only partially full.)
+///
+/// # Performance
+///
+/// The downside of this function's increased ease of use and type safety is
+/// that it gives you less control over performance. For example, you can't
+/// pre-allocate memory like you can using [`String::with_capacity`] and
+/// [`Read::read_to_string`]. Also, you can't re-use the buffer if an error
+/// occurs while reading.
+///
+/// In many cases, this function's performance will be adequate and the ease of use
+/// and type safety tradeoffs will be worth it. However, there are cases where you
+/// need more control over performance, and in those cases you should definitely use
+/// [`Read::read_to_string`] directly.
+///
+/// # Errors
+///
+/// This function forces you to handle errors because the output (the `String`)
+/// is wrapped in a [`Result`]. See [`Read::read_to_string`] for the errors
+/// that can occur. If any error occurs, you will get an [`Err`], so you
+/// don't have to worry about your buffer being empty or partially full.
+///
+/// # Examples
+///
+/// ```no_run
+/// #![feature(io_read_to_string)]
+///
+/// # use std::io;
+/// fn main() -> io::Result<()> {
+///     let stdin = io::read_to_string(&mut io::stdin())?;
+///     println!("Stdin was:");
+///     println!("{}", stdin);
+///     Ok(())
+/// }
+/// ```
+#[unstable(feature = "io_read_to_string", issue = "80218")]
+pub fn read_to_string<R: Read>(reader: &mut R) -> Result<String> {
+    let mut buf = String::new();
+    reader.read_to_string(&mut buf)?;
+    Ok(buf)
 }
 
 /// A buffer type used with `Read::read_vectored`.
@@ -1308,10 +1357,10 @@ pub trait Write {
         default_write_vectored(|b| self.write(b), bufs)
     }
 
-    /// Determines if this `Write`er has an efficient [`write_vectored`]
+    /// Determines if this `Write`r has an efficient [`write_vectored`]
     /// implementation.
     ///
-    /// If a `Write`er does not override the default [`write_vectored`]
+    /// If a `Write`r does not override the default [`write_vectored`]
     /// implementation, code using it may want to avoid the method all together
     /// and coalesce writes into a single buffer for higher performance.
     ///
@@ -1623,7 +1672,7 @@ pub trait Seek {
     /// # Example
     ///
     /// ```no_run
-    /// #![feature(seek_convenience)]
+    /// #![feature(seek_stream_len)]
     /// use std::{
     ///     io::{self, Seek},
     ///     fs::File,
@@ -1637,7 +1686,7 @@ pub trait Seek {
     ///     Ok(())
     /// }
     /// ```
-    #[unstable(feature = "seek_convenience", issue = "59359")]
+    #[unstable(feature = "seek_stream_len", issue = "59359")]
     fn stream_len(&mut self) -> Result<u64> {
         let old_pos = self.stream_position()?;
         let len = self.seek(SeekFrom::End(0))?;
@@ -1658,7 +1707,6 @@ pub trait Seek {
     /// # Example
     ///
     /// ```no_run
-    /// #![feature(seek_convenience)]
     /// use std::{
     ///     io::{self, BufRead, BufReader, Seek},
     ///     fs::File,
@@ -1675,7 +1723,7 @@ pub trait Seek {
     ///     Ok(())
     /// }
     /// ```
-    #[unstable(feature = "seek_convenience", issue = "59359")]
+    #[stable(feature = "seek_convenience", since = "1.51.0")]
     fn stream_position(&mut self) -> Result<u64> {
         self.seek(SeekFrom::Current(0))
     }
@@ -1985,7 +2033,6 @@ pub trait BufRead: Read {
     /// also yielded an error.
     ///
     /// [`io::Result`]: self::Result
-    /// [`Vec<u8>`]: Vec
     /// [`read_until`]: BufRead::read_until
     ///
     /// # Examples
@@ -2190,6 +2237,19 @@ impl<T: BufRead, U: BufRead> BufRead for Chain<T, U> {
 
     fn consume(&mut self, amt: usize) {
         if !self.done_first { self.first.consume(amt) } else { self.second.consume(amt) }
+    }
+}
+
+impl<T, U> SizeHint for Chain<T, U> {
+    fn lower_bound(&self) -> usize {
+        SizeHint::lower_bound(&self.first) + SizeHint::lower_bound(&self.second)
+    }
+
+    fn upper_bound(&self) -> Option<usize> {
+        match (SizeHint::upper_bound(&self.first), SizeHint::upper_bound(&self.second)) {
+            (Some(first), Some(second)) => Some(first + second),
+            _ => None,
+        }
     }
 }
 
@@ -2418,6 +2478,30 @@ impl<R: Read> Iterator for Bytes<R> {
                 Err(e) => Some(Err(e)),
             };
         }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        SizeHint::size_hint(&self.inner)
+    }
+}
+
+trait SizeHint {
+    fn lower_bound(&self) -> usize;
+
+    fn upper_bound(&self) -> Option<usize>;
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.lower_bound(), self.upper_bound())
+    }
+}
+
+impl<T> SizeHint for T {
+    default fn lower_bound(&self) -> usize {
+        0
+    }
+
+    default fn upper_bound(&self) -> Option<usize> {
+        None
     }
 }
 

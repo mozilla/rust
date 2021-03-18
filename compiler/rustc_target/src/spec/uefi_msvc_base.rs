@@ -9,7 +9,7 @@
 // the timer-interrupt. Device-drivers are required to use polling-based models. Furthermore, all
 // code runs in the same environment, no process separation is supported.
 
-use crate::spec::{LinkerFlavor, LldFlavor, PanicStrategy, TargetOptions};
+use crate::spec::{LinkerFlavor, LldFlavor, PanicStrategy, StackProbeType, TargetOptions};
 
 pub fn opts() -> TargetOptions {
     let mut base = super::msvc_base::opts();
@@ -37,22 +37,17 @@ pub fn opts() -> TargetOptions {
         .extend(pre_link_args_msvc);
 
     TargetOptions {
+        os: "uefi".to_string(),
+        linker_flavor: LinkerFlavor::Lld(LldFlavor::Link),
         disable_redzone: true,
         exe_suffix: ".efi".to_string(),
         allows_weak_linkage: false,
         panic_strategy: PanicStrategy::Abort,
-        stack_probes: true,
+        // LLVM does not emit inline assembly because the LLVM target does not get considered as…
+        // "Windows".
+        stack_probes: StackProbeType::Call,
         singlethread: true,
         linker: Some("rust-lld".to_string()),
-        // FIXME: This should likely be `true` inherited from `msvc_base`
-        // because UEFI follows Windows ABI and uses PE/COFF.
-        // The `false` is probably causing ABI bugs right now.
-        is_like_windows: false,
-        // FIXME: This should likely be `true` inherited from `msvc_base`
-        // because UEFI follows Windows ABI and uses PE/COFF.
-        // The `false` is probably causing ABI bugs right now.
-        is_like_msvc: false,
-
         ..base
     }
 }

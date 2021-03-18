@@ -310,6 +310,7 @@ mod cache_aligned;
 /// println!("{}", recv.recv().unwrap()); // Received after 2 seconds
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
+#[cfg_attr(not(test), rustc_diagnostic_item = "Receiver")]
 pub struct Receiver<T> {
     inner: UnsafeCell<Flavor<T>>,
 }
@@ -535,9 +536,6 @@ unsafe impl<T: Send> Send for SyncSender<T> {}
 /// A **send** operation can only fail if the receiving end of a channel is
 /// disconnected, implying that the data could never be received. The error
 /// contains the data being sent as a payload so it can be recovered.
-///
-/// [`Sender::send`]: Sender::send
-/// [`SyncSender::send`]: SyncSender::send
 #[stable(feature = "rust1", since = "1.0.0")]
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub struct SendError<T>(#[stable(feature = "rust1", since = "1.0.0")] pub T);

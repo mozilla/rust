@@ -8,10 +8,10 @@ use crate::dataflow::{AnalysisDomain, Backward, GenKill, GenKillAnalysis};
 ///
 /// This analysis considers references as being used only at the point of the
 /// borrow. In other words, this analysis does not track uses because of references that already
-/// exist. See [this `mir-datalow` test][flow-test] for an example. You almost never want to use
+/// exist. See [this `mir-dataflow` test][flow-test] for an example. You almost never want to use
 /// this analysis without also looking at the results of [`MaybeBorrowedLocals`].
 ///
-/// [`MaybeBorrowedLocals`]: ../struct.MaybeBorrowedLocals.html
+/// [`MaybeBorrowedLocals`]: super::MaybeBorrowedLocals
 /// [flow-test]: https://github.com/rust-lang/rust/blob/a08c47310c7d49cbdc5d7afb38408ba519967ecd/src/test/ui/mir-dataflow/liveness-ptr.rs
 /// [liveness]: https://en.wikipedia.org/wiki/Live_variable_analysis
 pub struct MaybeLiveLocals;
@@ -95,7 +95,7 @@ where
 
         // We purposefully do not call `super_place` here to avoid calling `visit_local` for this
         // place with one of the `Projection` variants of `PlaceContext`.
-        self.visit_projection(local, projection, context, location);
+        self.visit_projection(place.as_ref(), context, location);
 
         match DefUse::for_place(context) {
             // Treat derefs as a use of the base local. `*p = 4` is not a def of `p` but a use.
@@ -134,7 +134,7 @@ impl DefUse {
 
             // `MutatingUseContext::Call` and `MutatingUseContext::Yield` indicate that this is the
             // destination place for a `Call` return or `Yield` resume respectively. Since this is
-            // only a `Def` when the function returns succesfully, we handle this case separately
+            // only a `Def` when the function returns successfully, we handle this case separately
             // in `call_return_effect` above.
             PlaceContext::MutatingUse(MutatingUseContext::Call | MutatingUseContext::Yield) => None,
 

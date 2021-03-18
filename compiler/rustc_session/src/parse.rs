@@ -4,7 +4,7 @@
 use crate::lint::{BufferedEarlyLint, BuiltinLintDiagnostics, Lint, LintId};
 use rustc_ast::node_id::NodeId;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
-use rustc_data_structures::sync::{Lock, Lrc, OnceCell};
+use rustc_data_structures::sync::{Lock, Lrc};
 use rustc_errors::{emitter::SilentEmitter, ColorConfig, Handler};
 use rustc_errors::{error_code, Applicability, DiagnosticBuilder};
 use rustc_feature::{find_feature_issue, GateIssue, UnstableFeatures};
@@ -13,7 +13,6 @@ use rustc_span::hygiene::ExpnId;
 use rustc_span::source_map::{FilePathMapping, SourceMap};
 use rustc_span::{MultiSpan, Span, Symbol};
 
-use std::path::PathBuf;
 use std::str;
 
 /// The set of keys (and, optionally, values) that define the compilation
@@ -119,17 +118,15 @@ pub struct ParseSess {
     pub unstable_features: UnstableFeatures,
     pub config: CrateConfig,
     pub edition: Edition,
+    pub missing_fragment_specifiers: Lock<FxHashMap<Span, NodeId>>,
     /// Places where raw identifiers were used. This is used for feature-gating raw identifiers.
     pub raw_identifier_spans: Lock<Vec<Span>>,
-    /// Used to determine and report recursive module inclusions.
-    pub included_mod_stack: Lock<Vec<PathBuf>>,
     source_map: Lrc<SourceMap>,
     pub buffered_lints: Lock<Vec<BufferedEarlyLint>>,
     /// Contains the spans of block expressions that could have been incomplete based on the
     /// operation token that followed it, but that the parser cannot identify without further
     /// analysis.
     pub ambiguous_block_expr_parse: Lock<FxHashMap<Span, Span>>,
-    pub injected_crate_name: OnceCell<Symbol>,
     pub gated_spans: GatedSpans,
     pub symbol_gallery: SymbolGallery,
     /// The parser has reached `Eof` due to an unclosed brace. Used to silence unnecessary errors.
@@ -138,6 +135,8 @@ pub struct ParseSess {
     pub env_depinfo: Lock<FxHashSet<(Symbol, Option<Symbol>)>>,
     /// All the type ascriptions expressions that have had a suggestion for likely path typo.
     pub type_ascription_path_suggestions: Lock<FxHashSet<Span>>,
+    /// Whether cfg(version) should treat the current release as incomplete
+    pub assume_incomplete_release: bool,
 }
 
 impl ParseSess {
@@ -150,20 +149,20 @@ impl ParseSess {
     pub fn with_span_handler(handler: Handler, source_map: Lrc<SourceMap>) -> Self {
         Self {
             span_diagnostic: handler,
-            unstable_features: UnstableFeatures::from_environment(),
+            unstable_features: UnstableFeatures::from_environment(None),
             config: FxHashSet::default(),
             edition: ExpnId::root().expn_data().edition,
+            missing_fragment_specifiers: Default::default(),
             raw_identifier_spans: Lock::new(Vec::new()),
-            included_mod_stack: Lock::new(vec![]),
             source_map,
             buffered_lints: Lock::new(vec![]),
             ambiguous_block_expr_parse: Lock::new(FxHashMap::default()),
-            injected_crate_name: OnceCell::new(),
             gated_spans: GatedSpans::default(),
             symbol_gallery: SymbolGallery::default(),
             reached_eof: Lock::new(false),
             env_depinfo: Default::default(),
             type_ascription_path_suggestions: Default::default(),
+            assume_incomplete_release: false,
         }
     }
 

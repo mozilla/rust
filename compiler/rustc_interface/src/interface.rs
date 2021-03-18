@@ -8,7 +8,7 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::sync::Lrc;
 use rustc_data_structures::OnDrop;
 use rustc_errors::registry::Registry;
-use rustc_errors::ErrorReported;
+use rustc_errors::{ErrorReported, Handler};
 use rustc_lint::LintStore;
 use rustc_middle::ty;
 use rustc_parse::new_parser_from_source_str;
@@ -25,8 +25,9 @@ use std::sync::{Arc, Mutex};
 pub type Result<T> = result::Result<T, ErrorReported>;
 
 /// Represents a compiler session.
+///
 /// Can be used to run `rustc_interface` queries.
-/// Created by passing `Config` to `run_compiler`.
+/// Created by passing [`Config`] to [`run_compiler`].
 pub struct Compiler {
     pub(crate) sess: Lrc<Session>,
     codegen_backend: Lrc<Box<dyn CodegenBackend>>,
@@ -34,7 +35,6 @@ pub struct Compiler {
     pub(crate) input_path: Option<PathBuf>,
     pub(crate) output_dir: Option<PathBuf>,
     pub(crate) output_file: Option<PathBuf>,
-    pub(crate) crate_name: Option<String>,
     pub(crate) register_lints: Option<Box<dyn Fn(&Session, &mut LintStore) + Send + Sync>>,
     pub(crate) override_queries:
         Option<fn(&Session, &mut ty::query::Providers, &mut ty::query::Providers)>,
@@ -55,6 +55,9 @@ impl Compiler {
     }
     pub fn output_file(&self) -> &Option<PathBuf> {
         &self.output_file
+    }
+    pub fn register_lints(&self) -> &Option<Box<dyn Fn(&Session, &mut LintStore) + Send + Sync>> {
+        &self.register_lints
     }
     pub fn build_output_filenames(
         &self,
@@ -137,8 +140,10 @@ pub struct Config {
     /// Set to capture stderr output during compiler execution
     pub stderr: Option<Arc<Mutex<Vec<u8>>>>,
 
-    pub crate_name: Option<String>,
     pub lint_caps: FxHashMap<lint::LintId, lint::Level>,
+
+    /// This is a callback from the driver that is called when [`ParseSess`] is created.
+    pub parse_sess_created: Option<Box<dyn FnOnce(&mut ParseSess) + Send>>,
 
     /// This is a callback from the driver that is called when we're registering lints;
     /// it is called during plugin registration when we have the LintStore in a non-shared state.
@@ -164,7 +169,7 @@ pub struct Config {
 
 pub fn create_compiler_and_run<R>(config: Config, f: impl FnOnce(&Compiler) -> R) -> R {
     let registry = &config.registry;
-    let (sess, codegen_backend) = util::create_session(
+    let (mut sess, codegen_backend) = util::create_session(
         config.opts,
         config.crate_cfg,
         config.diagnostic_output,
@@ -175,6 +180,14 @@ pub fn create_compiler_and_run<R>(config: Config, f: impl FnOnce(&Compiler) -> R
         registry.clone(),
     );
 
+    if let Some(parse_sess_created) = config.parse_sess_created {
+        parse_sess_created(
+            &mut Lrc::get_mut(&mut sess)
+                .expect("create_session() should never share the returned session")
+                .parse_sess,
+        );
+    }
+
     let compiler = Compiler {
         sess,
         codegen_backend,
@@ -182,7 +195,6 @@ pub fn create_compiler_and_run<R>(config: Config, f: impl FnOnce(&Compiler) -> R
         input_path: config.input_path,
         output_dir: config.output_dir,
         output_file: config.output_file,
-        crate_name: config.crate_name,
         register_lints: config.register_lints,
         override_queries: config.override_queries,
     };
@@ -211,4 +223,25 @@ pub fn run_compiler<R: Send>(mut config: Config, f: impl FnOnce(&Compiler) -> R 
         &stderr,
         || create_compiler_and_run(config, f),
     )
+}
+
+pub fn try_print_query_stack(handler: &Handler, num_frames: Option<usize>) {
+    eprintln!("query stack during panic:");
+
+    // Be careful relying on global state here: this code is called from
+    // a panic hook, which means that the global `Handler` may be in a weird
+    // state if it was responsible for triggering the panic.
+    let i = ty::tls::with_context_opt(|icx| {
+        if let Some(icx) = icx {
+            icx.tcx.queries.try_print_query_stack(icx.tcx, icx.query, handler, num_frames)
+        } else {
+            0
+        }
+    });
+
+    if num_frames == None || num_frames >= Some(i) {
+        eprintln!("end of query stack");
+    } else {
+        eprintln!("we're just showing a limited slice of the query stack");
+    }
 }

@@ -136,7 +136,7 @@ pre {
 .content .highlighted.primitive { background-color: #00708a; }
 .content .highlighted.keyword { background-color: #884719; }
 
-.content .stability::before { color: #ccc; }
+.content .item-info::before { color: #ccc; }
 
 .content span.enum, .content a.enum, .block a.current.enum { color: #82b089; }
 .content span.struct, .content a.struct, .block a.current.struct { color: #2dbfb8; }
@@ -177,7 +177,7 @@ a {
 }
 
 .docblock:not(.type-decl) a:not(.srclink):not(.test-arrow),
-.docblock-short a:not(.srclink):not(.test-arrow), .stability a,
+.docblock-short a:not(.srclink):not(.test-arrow), .item-info a,
 #help a {
 	color: #D2991D;
 }
@@ -222,10 +222,7 @@ a.test-arrow {
 .stab.unstable { background: #FFF5D6; border-color: #FFC600; color: #2f2f2f; }
 .stab.deprecated { background: #F3DFFF; border-color: #7F0087; color: #2f2f2f; }
 .stab.portability { background: #C4ECFF; border-color: #7BA5DB; color: #2f2f2f; }
-
-.stab.portability > code {
-	color: #ddd;
-}
+.stab.portability > code { background: none; }
 
 #help > div {
 	background: #4d4d4d;
@@ -239,7 +236,6 @@ a.test-arrow {
 #help dt {
 	border-color: #bfbfbf;
 	background: rgba(0,0,0,0);
-	color: black;
 }
 
 .since {
@@ -337,13 +333,13 @@ pre.ignore:hover, .information:hover + pre.ignore {
 	color: #0089ff;
 }
 
-.tooltip .tooltiptext {
+.tooltip::after {
 	background-color: #000;
 	color: #fff;
 	border-color: #000;
 }
 
-.tooltip .tooltiptext::after {
+.tooltip::before {
 	border-color: transparent black transparent transparent;
 }
 
@@ -352,16 +348,17 @@ pre.ignore:hover, .information:hover + pre.ignore {
 	border-color: #777;
 }
 
-#titles > div:not(.selected) {
+#titles > button:not(.selected) {
 	background-color: #252525;
 	border-top-color: #252525;
 }
 
-#titles > div:hover, #titles > div.selected {
+#titles > button:hover, #titles > button.selected {
 	border-top-color: #0089ff;
+	background-color: #353535;
 }
 
-#titles > div > div.count {
+#titles > button > div.count {
 	color: #888;
 }
 

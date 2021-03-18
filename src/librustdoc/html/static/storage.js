@@ -4,14 +4,43 @@
 var darkThemes = ["dark", "ayu"];
 var currentTheme = document.getElementById("themeStyle");
 var mainTheme = document.getElementById("mainThemeStyle");
-var localStoredTheme = getCurrentValue("rustdoc-theme");
+
+var settingsDataset = (function () {
+    var settingsElement = document.getElementById("default-settings");
+    if (settingsElement === null) {
+        return null;
+    }
+    var dataset = settingsElement.dataset;
+    if (dataset === undefined) {
+        return null;
+    }
+    return dataset;
+})();
+
+function getSettingValue(settingName) {
+    var current = getCurrentValue('rustdoc-' + settingName);
+    if (current !== null) {
+        return current;
+    }
+    if (settingsDataset !== null) {
+        var def = settingsDataset[settingName.replace(/-/g,'_')];
+        if (def !== undefined) {
+            return def;
+        }
+    }
+    return null;
+}
+
+var localStoredTheme = getSettingValue("theme");
 
 var savedHref = [];
 
+// eslint-disable-next-line no-unused-vars
 function hasClass(elem, className) {
     return elem && elem.classList && elem.classList.contains(className);
 }
 
+// eslint-disable-next-line no-unused-vars
 function addClass(elem, className) {
     if (!elem || !elem.classList) {
         return;
@@ -19,6 +48,7 @@ function addClass(elem, className) {
     elem.classList.add(className);
 }
 
+// eslint-disable-next-line no-unused-vars
 function removeClass(elem, className) {
     if (!elem || !elem.classList) {
         return;
@@ -54,39 +84,25 @@ function onEachLazy(lazyArray, func, reversed) {
         reversed);
 }
 
+// eslint-disable-next-line no-unused-vars
 function hasOwnProperty(obj, property) {
     return Object.prototype.hasOwnProperty.call(obj, property);
 }
 
-function usableLocalStorage() {
-    // Check if the browser supports localStorage at all:
-    if (typeof Storage === "undefined") {
-        return false;
-    }
-    // Check if we can access it; this access will fail if the browser
-    // preferences deny access to localStorage, e.g., to prevent storage of
-    // "cookies" (or cookie-likes, as is the case here).
-    try {
-        return window.localStorage !== null && window.localStorage !== undefined;
-    } catch(err) {
-        // Storage is supported, but browser preferences deny access to it.
-        return false;
-    }
-}
-
 function updateLocalStorage(name, value) {
-    if (usableLocalStorage()) {
-        localStorage[name] = value;
-    } else {
-        // No Web Storage support so we do nothing
+    try {
+        window.localStorage.setItem(name, value);
+    } catch(e) {
+        // localStorage is not accessible, do nothing
     }
 }
 
 function getCurrentValue(name) {
-    if (usableLocalStorage() && localStorage[name] !== undefined) {
-        return localStorage[name];
+    try {
+        return window.localStorage.getItem(name);
+    } catch(e) {
+        return null;
     }
-    return null;
 }
 
 function switchTheme(styleElem, mainStyleElem, newTheme, saveTheme) {
@@ -121,6 +137,8 @@ function switchTheme(styleElem, mainStyleElem, newTheme, saveTheme) {
     }
 }
 
+// This function is called from "theme.js", generated in `html/render/mod.rs`.
+// eslint-disable-next-line no-unused-vars
 function useSystemTheme(value) {
     if (value === undefined) {
         value = true;
@@ -139,13 +157,13 @@ var updateSystemTheme = (function() {
     if (!window.matchMedia) {
         // fallback to the CSS computed value
         return function() {
-            let cssTheme = getComputedStyle(document.documentElement)
+            var cssTheme = getComputedStyle(document.documentElement)
                 .getPropertyValue('content');
 
             switchTheme(
                 currentTheme,
                 mainTheme,
-                JSON.parse(cssTheme) || light,
+                JSON.parse(cssTheme) || "light",
                 true
             );
         };
@@ -156,9 +174,9 @@ var updateSystemTheme = (function() {
 
     function handlePreferenceChange(mql) {
         // maybe the user has disabled the setting in the meantime!
-        if (getCurrentValue("rustdoc-use-system-theme") !== "false") {
-            var lightTheme = getCurrentValue("rustdoc-preferred-light-theme") || "light";
-            var darkTheme = getCurrentValue("rustdoc-preferred-dark-theme") || "dark";
+        if (getSettingValue("use-system-theme") !== "false") {
+            var lightTheme = getSettingValue("preferred-light-theme") || "light";
+            var darkTheme = getSettingValue("preferred-dark-theme") || "dark";
 
             if (mql.matches) {
                 // prefers a dark theme
@@ -181,11 +199,11 @@ var updateSystemTheme = (function() {
     };
 })();
 
-if (getCurrentValue("rustdoc-use-system-theme") !== "false" && window.matchMedia) {
+if (getSettingValue("use-system-theme") !== "false" && window.matchMedia) {
     // update the preferred dark theme if the user is already using a dark theme
     // See https://github.com/rust-lang/rust/pull/77809#issuecomment-707875732
-    if (getCurrentValue("rustdoc-use-system-theme") === null
-        && getCurrentValue("rustdoc-preferred-dark-theme") === null
+    if (getSettingValue("use-system-theme") === null
+        && getSettingValue("preferred-dark-theme") === null
         && darkThemes.indexOf(localStoredTheme) >= 0) {
         updateLocalStorage("rustdoc-preferred-dark-theme", localStoredTheme);
     }
@@ -196,7 +214,7 @@ if (getCurrentValue("rustdoc-use-system-theme") !== "false" && window.matchMedia
     switchTheme(
         currentTheme,
         mainTheme,
-        getCurrentValue("rustdoc-theme") || "light",
+        getSettingValue("theme") || "light",
         false
     );
 }

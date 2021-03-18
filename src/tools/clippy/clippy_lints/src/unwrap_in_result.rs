@@ -5,7 +5,7 @@ use rustc_lint::{LateContext, LateLintPass};
 use rustc_middle::hir::map::Map;
 use rustc_middle::ty;
 use rustc_session::{declare_lint_pass, declare_tool_lint};
-use rustc_span::Span;
+use rustc_span::{sym, Span};
 
 declare_clippy_lint! {
     /// **What it does:** Checks for functions of type Result that contain `expect()` or `unwrap()`
@@ -57,8 +57,8 @@ impl<'tcx> LateLintPass<'tcx> for UnwrapInResult {
             // first check if it's a method or function
             if let hir::ImplItemKind::Fn(ref _signature, _) = impl_item.kind;
             // checking if its return type is `result` or `option`
-            if is_type_diagnostic_item(cx, return_ty(cx, impl_item.hir_id), sym!(result_type))
-                || is_type_diagnostic_item(cx, return_ty(cx, impl_item.hir_id), sym!(option_type));
+            if is_type_diagnostic_item(cx, return_ty(cx, impl_item.hir_id()), sym::result_type)
+                || is_type_diagnostic_item(cx, return_ty(cx, impl_item.hir_id()), sym::option_type);
             then {
                 lint_impl_body(cx, impl_item.span, impl_item);
             }
@@ -82,8 +82,8 @@ impl<'a, 'tcx> Visitor<'tcx> for FindExpectUnwrap<'a, 'tcx> {
         // check for `expect`
         if let Some(arglists) = method_chain_args(expr, &["expect"]) {
             let reciever_ty = self.typeck_results.expr_ty(&arglists[0][0]).peel_refs();
-            if is_type_diagnostic_item(self.lcx, reciever_ty, sym!(option_type))
-                || is_type_diagnostic_item(self.lcx, reciever_ty, sym!(result_type))
+            if is_type_diagnostic_item(self.lcx, reciever_ty, sym::option_type)
+                || is_type_diagnostic_item(self.lcx, reciever_ty, sym::result_type)
             {
                 self.result.push(expr.span);
             }
@@ -92,8 +92,8 @@ impl<'a, 'tcx> Visitor<'tcx> for FindExpectUnwrap<'a, 'tcx> {
         // check for `unwrap`
         if let Some(arglists) = method_chain_args(expr, &["unwrap"]) {
             let reciever_ty = self.typeck_results.expr_ty(&arglists[0][0]).peel_refs();
-            if is_type_diagnostic_item(self.lcx, reciever_ty, sym!(option_type))
-                || is_type_diagnostic_item(self.lcx, reciever_ty, sym!(result_type))
+            if is_type_diagnostic_item(self.lcx, reciever_ty, sym::option_type)
+                || is_type_diagnostic_item(self.lcx, reciever_ty, sym::result_type)
             {
                 self.result.push(expr.span);
             }
@@ -114,10 +114,9 @@ fn lint_impl_body<'tcx>(cx: &LateContext<'tcx>, impl_span: Span, impl_item: &'tc
         if let ImplItemKind::Fn(_, body_id) = impl_item.kind;
         then {
             let body = cx.tcx.hir().body(body_id);
-            let impl_item_def_id = cx.tcx.hir().local_def_id(impl_item.hir_id);
             let mut fpu = FindExpectUnwrap {
                 lcx: cx,
-                typeck_results: cx.tcx.typeck(impl_item_def_id),
+                typeck_results: cx.tcx.typeck(impl_item.def_id),
                 result: Vec::new(),
             };
             fpu.visit_expr(&body.value);

@@ -9,6 +9,7 @@ use rustc_lint::{LateContext, LateLintPass, LintContext};
 use rustc_middle::lint::in_external_macro;
 use rustc_middle::ty::{Ty, TyS};
 use rustc_session::{declare_tool_lint, impl_lint_pass};
+use rustc_span::sym;
 
 declare_clippy_lint! {
     /// **What it does:** Checks for types with a `fn new() -> Self` method and no
@@ -59,9 +60,9 @@ impl_lint_pass!(NewWithoutDefault => [NEW_WITHOUT_DEFAULT]);
 impl<'tcx> LateLintPass<'tcx> for NewWithoutDefault {
     #[allow(clippy::too_many_lines)]
     fn check_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx hir::Item<'_>) {
-        if let hir::ItemKind::Impl {
+        if let hir::ItemKind::Impl(hir::Impl {
             of_trait: None, items, ..
-        } = item.kind
+        }) = item.kind
         {
             for assoc_item in items {
                 if let hir::AssocItemKind::Fn { has_self: false } = assoc_item.kind {
@@ -71,7 +72,7 @@ impl<'tcx> LateLintPass<'tcx> for NewWithoutDefault {
                     }
                     if let hir::ImplItemKind::Fn(ref sig, _) = impl_item.kind {
                         let name = impl_item.ident.name;
-                        let id = impl_item.hir_id;
+                        let id = impl_item.hir_id();
                         if sig.header.constness == hir::Constness::Const {
                             // can't be implemented by default
                             return;
@@ -91,7 +92,7 @@ impl<'tcx> LateLintPass<'tcx> for NewWithoutDefault {
                             // impl of `Default`
                             return;
                         }
-                        if sig.decl.inputs.is_empty() && name == sym!(new) && cx.access_levels.is_reachable(id) {
+                        if sig.decl.inputs.is_empty() && name == sym::new && cx.access_levels.is_reachable(id) {
                             let self_def_id = cx.tcx.hir().local_def_id(cx.tcx.hir().get_parent_item(id));
                             let self_ty = cx.tcx.type_of(self_def_id);
                             if_chain! {

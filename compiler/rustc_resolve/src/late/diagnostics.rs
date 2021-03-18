@@ -5,7 +5,6 @@ use crate::path_names_to_string;
 use crate::{CrateLint, Module, ModuleKind, ModuleOrUniformRoot};
 use crate::{PathResult, PathSource, Segment};
 
-use rustc_ast::util::lev_distance::find_best_match_for_name;
 use rustc_ast::visit::FnKind;
 use rustc_ast::{self as ast, Expr, ExprKind, Item, ItemKind, NodeId, Path, Ty, TyKind};
 use rustc_ast_pretty::pprust::path_segment_to_string;
@@ -16,9 +15,10 @@ use rustc_hir::def::Namespace::{self, *};
 use rustc_hir::def::{self, CtorKind, CtorOf, DefKind};
 use rustc_hir::def_id::{DefId, CRATE_DEF_INDEX, LOCAL_CRATE};
 use rustc_hir::PrimTy;
-use rustc_session::config::nightly_options;
 use rustc_session::parse::feature_err;
+use rustc_span::edition::Edition;
 use rustc_span::hygiene::MacroKind;
+use rustc_span::lev_distance::find_best_match_for_name;
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::{BytePos, MultiSpan, Span, DUMMY_SP};
 
@@ -30,7 +30,21 @@ type Res = def::Res<ast::NodeId>;
 enum AssocSuggestion {
     Field,
     MethodWithSelf,
-    AssocItem,
+    AssocFn,
+    AssocType,
+    AssocConst,
+}
+
+impl AssocSuggestion {
+    fn action(&self) -> &'static str {
+        match self {
+            AssocSuggestion::Field => "use the available field",
+            AssocSuggestion::MethodWithSelf => "call the method with the fully-qualified path",
+            AssocSuggestion::AssocFn => "call the associated function",
+            AssocSuggestion::AssocConst => "use the associated `const`",
+            AssocSuggestion::AssocType => "use the associated type",
+        }
+    }
 }
 
 crate enum MissingLifetimeSpot<'tcx> {
@@ -120,7 +134,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
         let is_enum_variant = &|res| matches!(res, Res::Def(DefKind::Variant, _));
 
         // Make the base error.
-        let expected = source.descr_expected();
+        let mut expected = source.descr_expected();
         let path_str = Segment::names_to_string(path);
         let item_str = path.last().unwrap().ident;
         let (base_msg, fallback_label, base_span, could_be_expr) = if let Some(res) = res {
@@ -153,6 +167,15 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
             let (mod_prefix, mod_str) = if path.len() == 1 {
                 (String::new(), "this scope".to_string())
             } else if path.len() == 2 && path[0].ident.name == kw::PathRoot {
+                if self.r.session.edition() > Edition::Edition2015 {
+                    // In edition 2018 onwards, the `::foo` syntax may only pull from the extern prelude
+                    // which overrides all other expectations of item type
+                    expected = "crate";
+                    (String::new(), "the list of imported crates".to_string())
+                } else {
+                    (String::new(), "the crate root".to_string())
+                }
+            } else if path.len() == 2 && path[0].ident.name == kw::Crate {
                 (String::new(), "the crate root".to_string())
             } else {
                 let mod_path = &path[..path.len() - 1];
@@ -167,7 +190,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
             (
                 format!("cannot find {} `{}` in {}{}", expected, item_str, mod_prefix, mod_str),
                 if path_str == "async" && expected.starts_with("struct") {
-                    "`async` blocks are only allowed in the 2018 edition".to_string()
+                    "`async` blocks are only allowed in Rust 2018 or later".to_string()
                 } else {
                     format!("not found in {}", mod_str)
                 },
@@ -251,7 +274,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                 // The current function has a `self' parameter, but we were unable to resolve
                 // a reference to `self`. This can only happen if the `self` identifier we
                 // are resolving came from a different hygiene context.
-                if fn_kind.decl().inputs.get(0).map(|p| p.is_self()).unwrap_or(false) {
+                if fn_kind.decl().inputs.get(0).map_or(false, |p| p.is_self()) {
                     err.span_label(*span, "this function has a `self` parameter, but a macro invocation can only access identifiers it receives from parameters");
                 } else {
                     let doesnt = if is_assoc_fn {
@@ -306,9 +329,13 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
             .collect::<Vec<_>>();
         let crate_def_id = DefId::local(CRATE_DEF_INDEX);
         if candidates.is_empty() && is_expected(Res::Def(DefKind::Enum, crate_def_id)) {
-            let enum_candidates =
-                self.r.lookup_import_candidates(ident, ns, &self.parent_scope, is_enum_variant);
-
+            let mut enum_candidates: Vec<_> = self
+                .r
+                .lookup_import_candidates(ident, ns, &self.parent_scope, is_enum_variant)
+                .into_iter()
+                .map(|suggestion| import_candidate_to_enum_paths(&suggestion))
+                .filter(|(_, enum_ty_path)| !enum_ty_path.starts_with("std::prelude::"))
+                .collect();
             if !enum_candidates.is_empty() {
                 if let (PathSource::Type, Some(span)) =
                     (source, self.diagnostic_metadata.current_type_ascription.last())
@@ -327,10 +354,6 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                     }
                 }
 
-                let mut enum_candidates = enum_candidates
-                    .iter()
-                    .map(|suggestion| import_candidate_to_enum_paths(&suggestion))
-                    .collect::<Vec<_>>();
                 enum_candidates.sort();
 
                 // Contextualize for E0412 "cannot find type", but don't belabor the point
@@ -350,19 +373,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                 err.span_suggestions(
                     span,
                     &msg,
-                    enum_candidates
-                        .into_iter()
-                        .map(|(_variant_path, enum_ty_path)| enum_ty_path)
-                        // Variants re-exported in prelude doesn't mean `prelude::v1` is the
-                        // type name!
-                        // FIXME: is there a more principled way to do this that
-                        // would work for other re-exports?
-                        .filter(|enum_ty_path| enum_ty_path != "std::prelude::v1")
-                        // Also write `Option` rather than `std::prelude::v1::Option`.
-                        .map(|enum_ty_path| {
-                            // FIXME #56861: DRY-er prelude filtering.
-                            enum_ty_path.trim_start_matches("std::prelude::v1::").to_owned()
-                        }),
+                    enum_candidates.into_iter().map(|(_variant_path, enum_ty_path)| enum_ty_path),
                     Applicability::MachineApplicable,
                 );
             }
@@ -386,15 +397,18 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                     AssocSuggestion::MethodWithSelf if self_is_available => {
                         err.span_suggestion(
                             span,
-                            "try",
+                            "you might have meant to call the method",
                             format!("self.{}", path_str),
                             Applicability::MachineApplicable,
                         );
                     }
-                    AssocSuggestion::MethodWithSelf | AssocSuggestion::AssocItem => {
+                    AssocSuggestion::MethodWithSelf
+                    | AssocSuggestion::AssocFn
+                    | AssocSuggestion::AssocConst
+                    | AssocSuggestion::AssocType => {
                         err.span_suggestion(
                             span,
-                            "try",
+                            &format!("you might have meant to {}", candidate.action()),
                             format!("Self::{}", path_str),
                             Applicability::MachineApplicable,
                         );
@@ -526,6 +540,41 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                 err.span_label(base_span, fallback_label);
             }
         }
+        if let Some(err_code) = &err.code {
+            if err_code == &rustc_errors::error_code!(E0425) {
+                for label_rib in &self.label_ribs {
+                    for (label_ident, node_id) in &label_rib.bindings {
+                        if format!("'{}", ident) == label_ident.to_string() {
+                            err.span_label(label_ident.span, "a label with a similar name exists");
+                            if let PathSource::Expr(Some(Expr {
+                                kind: ExprKind::Break(None, Some(_)),
+                                ..
+                            })) = source
+                            {
+                                err.span_suggestion(
+                                    span,
+                                    "use the similarly named label",
+                                    label_ident.name.to_string(),
+                                    Applicability::MaybeIncorrect,
+                                );
+                                // Do not lint against unused label when we suggest them.
+                                self.diagnostic_metadata.unused_labels.remove(node_id);
+                            }
+                        }
+                    }
+                }
+            } else if err_code == &rustc_errors::error_code!(E0412) {
+                if let Some(correct) = Self::likely_rust_type(path) {
+                    err.span_suggestion(
+                        span,
+                        "perhaps you intended to use this type",
+                        correct.to_string(),
+                        Applicability::MaybeIncorrect,
+                    );
+                }
+            }
+        }
+
         (err, candidates)
     }
 
@@ -702,10 +751,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                 _ => break,
             }
         }
-        let followed_by_brace = match sm.span_to_snippet(sp) {
-            Ok(ref snippet) if snippet == "{" => true,
-            _ => false,
-        };
+        let followed_by_brace = matches!(sm.span_to_snippet(sp), Ok(ref snippet) if snippet == "{");
         // In case this could be a struct literal that needs to be surrounded
         // by parentheses, find the appropriate span.
         let mut i = 0;
@@ -851,7 +897,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                     err.span_suggestion(
                         span,
                         &format!("use struct {} syntax instead", descr),
-                        format!("{} {{{pad}{}{pad}}}", path_str, fields, pad = pad),
+                        format!("{path_str} {{{pad}{fields}{pad}}}"),
                         applicability,
                     );
                 }
@@ -871,12 +917,12 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                     Applicability::MaybeIncorrect,
                 );
                 if path_str == "try" && span.rust_2015() {
-                    err.note("if you want the `try` keyword, you need to be in the 2018 edition");
+                    err.note("if you want the `try` keyword, you need Rust 2018 or later");
                 }
             }
             (Res::Def(DefKind::TyAlias, def_id), PathSource::Trait(_)) => {
                 err.span_label(span, "type aliases cannot be used as traits");
-                if nightly_options::is_nightly_build() {
+                if self.r.session.is_nightly_build() {
                     let msg = "you might have meant to use `#![feature(trait_alias)]` instead of a \
                                `type` alias";
                     if let Some(span) = self.def_span(def_id) {
@@ -1065,9 +1111,21 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
             }
         }
 
-        for assoc_type_ident in &self.diagnostic_metadata.current_trait_assoc_types {
-            if *assoc_type_ident == ident {
-                return Some(AssocSuggestion::AssocItem);
+        if let Some(items) = self.diagnostic_metadata.current_trait_assoc_items {
+            for assoc_item in items {
+                if assoc_item.ident == ident {
+                    return Some(match &assoc_item.kind {
+                        ast::AssocItemKind::Const(..) => AssocSuggestion::AssocConst,
+                        ast::AssocItemKind::Fn(box ast::FnKind(_, sig, ..))
+                            if sig.decl.has_self() =>
+                        {
+                            AssocSuggestion::MethodWithSelf
+                        }
+                        ast::AssocItemKind::Fn(..) => AssocSuggestion::AssocFn,
+                        ast::AssocItemKind::TyAlias(..) => AssocSuggestion::AssocType,
+                        ast::AssocItemKind::MacCall(_) => continue,
+                    });
+                }
             }
         }
 
@@ -1083,11 +1141,20 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
             ) {
                 let res = binding.res();
                 if filter_fn(res) {
-                    return Some(if self.r.has_self.contains(&res.def_id()) {
-                        AssocSuggestion::MethodWithSelf
+                    if self.r.has_self.contains(&res.def_id()) {
+                        return Some(AssocSuggestion::MethodWithSelf);
                     } else {
-                        AssocSuggestion::AssocItem
-                    });
+                        match res {
+                            Res::Def(DefKind::AssocFn, _) => return Some(AssocSuggestion::AssocFn),
+                            Res::Def(DefKind::AssocConst, _) => {
+                                return Some(AssocSuggestion::AssocConst);
+                            }
+                            Res::Def(DefKind::AssocTy, _) => {
+                                return Some(AssocSuggestion::AssocType);
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
         }
@@ -1152,8 +1219,8 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
             // Add primitive types to the mix
             if filter_fn(Res::PrimTy(PrimTy::Bool)) {
                 names.extend(
-                    self.r.primitive_type_table.primitive_types.iter().map(|(name, prim_ty)| {
-                        TypoSuggestion::from_res(*name, Res::PrimTy(*prim_ty))
+                    PrimTy::ALL.iter().map(|prim_ty| {
+                        TypoSuggestion::from_res(prim_ty.name(), Res::PrimTy(*prim_ty))
                     }),
                 )
             }
@@ -1174,7 +1241,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
         names.sort_by_cached_key(|suggestion| suggestion.candidate.as_str());
 
         match find_best_match_for_name(
-            names.iter().map(|suggestion| &suggestion.candidate),
+            &names.iter().map(|suggestion| suggestion.candidate).collect::<Vec<Symbol>>(),
             name,
             None,
         ) {
@@ -1183,6 +1250,23 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
             }
             _ => None,
         }
+    }
+
+    // Returns the name of the Rust type approximately corresponding to
+    // a type name in another programming language.
+    fn likely_rust_type(path: &[Segment]) -> Option<Symbol> {
+        let name = path[path.len() - 1].ident.as_str();
+        // Common Java types
+        Some(match &*name {
+            "byte" => sym::u8, // In Java, bytes are signed, but in practice one almost always wants unsigned bytes.
+            "short" => sym::i16,
+            "boolean" => sym::bool,
+            "int" => sym::i32,
+            "long" => sym::i64,
+            "float" => sym::f32,
+            "double" => sym::f64,
+            _ => return None,
+        })
     }
 
     /// Only used in a specific case of type ascription suggestions
@@ -1400,8 +1484,7 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
             }
         } else {
             let needs_placeholder = |def_id: DefId, kind: CtorKind| {
-                let has_no_fields =
-                    self.r.field_names.get(&def_id).map(|f| f.is_empty()).unwrap_or(false);
+                let has_no_fields = self.r.field_names.get(&def_id).map_or(false, |f| f.is_empty());
                 match kind {
                     CtorKind::Const => false,
                     CtorKind::Fn | CtorKind::Fictive if has_no_fields => false,
@@ -1560,9 +1643,10 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
             .bindings
             .iter()
             .filter(|(id, _)| id.span.ctxt() == label.span.ctxt())
-            .map(|(id, _)| &id.name);
+            .map(|(id, _)| id.name)
+            .collect::<Vec<Symbol>>();
 
-        find_best_match_for_name(names, label.name, None).map(|symbol| {
+        find_best_match_for_name(&names, label.name, None).map(|symbol| {
             // Upon finding a similar name, get the ident that it was from - the span
             // contained within helps make a useful diagnostic. In addition, determine
             // whether this candidate is within scope.
@@ -1597,31 +1681,44 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
         );
         err.span_label(lifetime_ref.span, "undeclared lifetime");
         let mut suggests_in_band = false;
+        let mut suggest_note = true;
         for missing in &self.missing_named_lifetime_spots {
             match missing {
                 MissingLifetimeSpot::Generics(generics) => {
-                    let (span, sugg) = if let Some(param) =
-                        generics.params.iter().find(|p| match p.kind {
+                    let (span, sugg) = if let Some(param) = generics.params.iter().find(|p| {
+                        !matches!(
+                            p.kind,
                             hir::GenericParamKind::Type {
                                 synthetic: Some(hir::SyntheticTyParamKind::ImplTrait),
                                 ..
-                            } => false,
-                            hir::GenericParamKind::Lifetime {
+                            } | hir::GenericParamKind::Lifetime {
                                 kind: hir::LifetimeParamKind::Elided,
-                            } => false,
-                            _ => true,
-                        }) {
+                            }
+                        )
+                    }) {
                         (param.span.shrink_to_lo(), format!("{}, ", lifetime_ref))
                     } else {
                         suggests_in_band = true;
                         (generics.span, format!("<{}>", lifetime_ref))
                     };
-                    err.span_suggestion(
-                        span,
-                        &format!("consider introducing lifetime `{}` here", lifetime_ref),
-                        sugg,
-                        Applicability::MaybeIncorrect,
-                    );
+                    if !span.from_expansion() {
+                        err.span_suggestion(
+                            span,
+                            &format!("consider introducing lifetime `{}` here", lifetime_ref),
+                            sugg,
+                            Applicability::MaybeIncorrect,
+                        );
+                    } else if suggest_note {
+                        suggest_note = false; // Avoid displaying the same help multiple times.
+                        err.span_label(
+                            span,
+                            &format!(
+                                "lifetime `{}` is missing in item created through this procedural \
+                                 macro",
+                                lifetime_ref,
+                            ),
+                        );
+                    }
                 }
                 MissingLifetimeSpot::HigherRanked { span, span_type } => {
                     err.span_suggestion(
@@ -1636,19 +1733,19 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
                     );
                     err.note(
                         "for more information on higher-ranked polymorphism, visit \
-                            https://doc.rust-lang.org/nomicon/hrtb.html",
+                         https://doc.rust-lang.org/nomicon/hrtb.html",
                     );
                 }
                 _ => {}
             }
         }
-        if nightly_options::is_nightly_build()
+        if self.tcx.sess.is_nightly_build()
             && !self.tcx.features().in_band_lifetimes
             && suggests_in_band
         {
             err.help(
                 "if you want to experiment with in-band lifetime bindings, \
-                    add `#![feature(in_band_lifetimes)]` to the crate attributes",
+                 add `#![feature(in_band_lifetimes)]` to the crate attributes",
             );
         }
         err.emit();
@@ -1788,12 +1885,14 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
                         }
                         msg = "consider introducing a named lifetime parameter".to_string();
                         should_break = true;
-                        if let Some(param) = generics.params.iter().find(|p| match p.kind {
-                            hir::GenericParamKind::Type {
-                                synthetic: Some(hir::SyntheticTyParamKind::ImplTrait),
-                                ..
-                            } => false,
-                            _ => true,
+                        if let Some(param) = generics.params.iter().find(|p| {
+                            !matches!(
+                                p.kind,
+                                hir::GenericParamKind::Type {
+                                    synthetic: Some(hir::SyntheticTyParamKind::ImplTrait),
+                                    ..
+                                }
+                            )
                         }) {
                             (param.span.shrink_to_lo(), "'a, ".to_string())
                         } else {
@@ -1854,9 +1953,8 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
                         if snippet.starts_with('&') && !snippet.starts_with("&'") {
                             introduce_suggestion
                                 .push((param.span, format!("&'a {}", &snippet[1..])));
-                        } else if snippet.starts_with("&'_ ") {
-                            introduce_suggestion
-                                .push((param.span, format!("&'a {}", &snippet[4..])));
+                        } else if let Some(stripped) = snippet.strip_prefix("&'_ ") {
+                            introduce_suggestion.push((param.span, format!("&'a {}", &stripped)));
                         }
                     }
                 }
@@ -1934,8 +2032,8 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
         }
     }
 
-    /// Non-static lifetimes are prohibited in anonymous constants under `min_const_generics` so
-    /// this function will emit an error if `min_const_generics` is enabled, the body identified by
+    /// Non-static lifetimes are prohibited in anonymous constants under `min_const_generics`.
+    /// This function will emit an error if `const_generics` is not enabled, the body identified by
     /// `body_id` is an anonymous constant and `lifetime_ref` is non-static.
     crate fn maybe_emit_forbidden_non_static_lifetime_error(
         &self,
@@ -1951,7 +2049,7 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
             hir::LifetimeName::Implicit | hir::LifetimeName::Static | hir::LifetimeName::Underscore
         );
 
-        if self.tcx.features().min_const_generics && is_anon_const && !is_allowed_lifetime {
+        if !self.tcx.lazy_normalization() && is_anon_const && !is_allowed_lifetime {
             feature_err(
                 &self.tcx.sess.parse_sess,
                 sym::const_generics,

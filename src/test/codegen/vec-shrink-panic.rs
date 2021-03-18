@@ -15,9 +15,9 @@ pub fn shrink_to_fit(vec: &mut Vec<u32>) {
 
 // CHECK-LABEL: @issue71861
 #[no_mangle]
-pub fn issue71861(n: usize) -> Box<[u32]> {
+pub fn issue71861(vec: Vec<u32>) -> Box<[u32]> {
     // CHECK-NOT: panic
-    vec![0; n].into_boxed_slice()
+    vec.into_boxed_slice()
 }
 
 // CHECK-LABEL: @issue75636
@@ -25,12 +25,4 @@ pub fn issue71861(n: usize) -> Box<[u32]> {
 pub fn issue75636<'a>(iter: &[&'a str]) -> Box<[&'a str]> {
     // CHECK-NOT: panic
     iter.iter().copied().collect()
-}
-
-// Sanity-check that we do see a possible panic for an arbitrary `Vec::shrink_to`.
-// CHECK-LABEL: @shrink_to
-#[no_mangle]
-pub fn shrink_to(vec: &mut Vec<u32>) {
-    // CHECK: panic
-    vec.shrink_to(42);
 }

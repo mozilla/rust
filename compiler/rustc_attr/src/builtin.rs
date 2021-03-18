@@ -10,7 +10,6 @@ use rustc_session::Session;
 use rustc_span::hygiene::Transparency;
 use rustc_span::{symbol::sym, symbol::Symbol, Span};
 use std::num::NonZeroU32;
-use version_check::Version;
 
 pub fn is_builtin_attr(attr: &Attribute) -> bool {
     attr.is_doc_comment() || attr.ident().filter(|ident| is_builtin_attr_name(ident.name)).is_some()
@@ -67,7 +66,7 @@ fn handle_errors(sess: &ParseSess, span: Span, error: AttrError) {
     }
 }
 
-#[derive(Clone, PartialEq, Encodable, Decodable)]
+#[derive(Copy, Clone, PartialEq, Encodable, Decodable, Debug)]
 pub enum InlineAttr {
     None,
     Hint,
@@ -75,13 +74,13 @@ pub enum InlineAttr {
     Never,
 }
 
-#[derive(Clone, Encodable, Decodable)]
+#[derive(Clone, Encodable, Decodable, Debug, PartialEq, Eq)]
 pub enum InstructionSetAttr {
     ArmA32,
     ArmT32,
 }
 
-#[derive(Clone, Encodable, Decodable)]
+#[derive(Clone, Encodable, Decodable, Debug)]
 pub enum OptimizeAttr {
     None,
     Speed,
@@ -177,7 +176,7 @@ pub fn find_stability(
     sess: &Session,
     attrs: &[Attribute],
     item_sp: Span,
-) -> (Option<Stability>, Option<ConstStability>) {
+) -> (Option<(Stability, Span)>, Option<(ConstStability, Span)>) {
     find_stability_generic(sess, attrs.iter(), item_sp)
 }
 
@@ -185,15 +184,16 @@ fn find_stability_generic<'a, I>(
     sess: &Session,
     attrs_iter: I,
     item_sp: Span,
-) -> (Option<Stability>, Option<ConstStability>)
+) -> (Option<(Stability, Span)>, Option<(ConstStability, Span)>)
 where
     I: Iterator<Item = &'a Attribute>,
 {
     use StabilityLevel::*;
 
-    let mut stab: Option<Stability> = None;
-    let mut const_stab: Option<ConstStability> = None;
+    let mut stab: Option<(Stability, Span)> = None;
+    let mut const_stab: Option<(ConstStability, Span)> = None;
     let mut promotable = false;
+
     let diagnostic = &sess.parse_sess.span_diagnostic;
 
     'outer: for attr in attrs_iter {
@@ -294,7 +294,7 @@ where
                                                     or \"none\"",
                                                 )
                                                 .span_label(
-                                                    mi.name_value_literal().unwrap().span,
+                                                    mi.name_value_literal_span().unwrap(),
                                                     msg,
                                                 )
                                                 .emit();
@@ -357,10 +357,12 @@ where
                             }
                             let level = Unstable { reason, issue: issue_num, is_soft };
                             if sym::unstable == meta_name {
-                                stab = Some(Stability { level, feature });
+                                stab = Some((Stability { level, feature }, attr.span));
                             } else {
-                                const_stab =
-                                    Some(ConstStability { level, feature, promotable: false });
+                                const_stab = Some((
+                                    ConstStability { level, feature, promotable: false },
+                                    attr.span,
+                                ));
                             }
                         }
                         (None, _, _) => {
@@ -433,10 +435,12 @@ where
                         (Some(feature), Some(since)) => {
                             let level = Stable { since };
                             if sym::stable == meta_name {
-                                stab = Some(Stability { level, feature });
+                                stab = Some((Stability { level, feature }, attr.span));
                             } else {
-                                const_stab =
-                                    Some(ConstStability { level, feature, promotable: false });
+                                const_stab = Some((
+                                    ConstStability { level, feature, promotable: false },
+                                    attr.span,
+                                ));
                             }
                         }
                         (None, _) => {
@@ -456,7 +460,7 @@ where
 
     // Merge the const-unstable info into the stability info
     if promotable {
-        if let Some(ref mut stab) = const_stab {
+        if let Some((ref mut stab, _)) = const_stab {
             stab.promotable = promotable;
         } else {
             struct_span_err!(
@@ -526,6 +530,26 @@ fn gate_cfg(gated_cfg: &GatedCfg, cfg_span: Span, sess: &ParseSess, features: &F
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Version {
+    major: u16,
+    minor: u16,
+    patch: u16,
+}
+
+fn parse_version(s: &str, allow_appendix: bool) -> Option<Version> {
+    let mut components = s.split('-');
+    let d = components.next()?;
+    if !allow_appendix && components.next().is_some() {
+        return None;
+    }
+    let mut digits = d.splitn(3, '.');
+    let major = digits.next()?.parse().ok()?;
+    let minor = digits.next()?.parse().ok()?;
+    let patch = digits.next().unwrap_or("0").parse().ok()?;
+    Some(Version { major, minor, patch })
+}
+
 /// Evaluate a cfg-like condition (with `any` and `all`), using `eval` to
 /// evaluate individual items.
 pub fn eval_condition(
@@ -555,19 +579,26 @@ pub fn eval_condition(
                     return false;
                 }
             };
-            let min_version = match Version::parse(&min_version.as_str()) {
+            let min_version = match parse_version(&min_version.as_str(), false) {
                 Some(ver) => ver,
                 None => {
-                    sess.span_diagnostic.struct_span_err(*span, "invalid version literal").emit();
+                    sess.span_diagnostic
+                        .struct_span_warn(
+                            *span,
+                            "unknown version literal format, assuming it refers to a future version",
+                        )
+                        .emit();
                     return false;
                 }
             };
-            let channel = env!("CFG_RELEASE_CHANNEL");
-            let nightly = channel == "nightly" || channel == "dev";
-            let rustc_version = Version::parse(env!("CFG_RELEASE")).unwrap();
+            let rustc_version = parse_version(env!("CFG_RELEASE"), true).unwrap();
 
-            // See https://github.com/rust-lang/rust/issues/64796#issuecomment-625474439 for details
-            if nightly { rustc_version > min_version } else { rustc_version >= min_version }
+            // See https://github.com/rust-lang/rust/issues/64796#issuecomment-640851454 for details
+            if sess.assume_incomplete_release {
+                rustc_version > min_version
+            } else {
+                rustc_version >= min_version
+            }
         }
         ast::MetaItemKind::List(ref mis) => {
             for mi in mis.iter() {
@@ -621,7 +652,7 @@ pub fn eval_condition(
     }
 }
 
-#[derive(Encodable, Decodable, Clone, HashStable_Generic)]
+#[derive(Debug, Encodable, Decodable, Clone, HashStable_Generic)]
 pub struct Deprecation {
     pub since: Option<Symbol>,
     /// The note to issue a reason.
@@ -637,19 +668,15 @@ pub struct Deprecation {
 }
 
 /// Finds the deprecation attribute. `None` if none exists.
-pub fn find_deprecation(sess: &Session, attrs: &[Attribute], item_sp: Span) -> Option<Deprecation> {
-    find_deprecation_generic(sess, attrs.iter(), item_sp)
+pub fn find_deprecation(sess: &Session, attrs: &[Attribute]) -> Option<(Deprecation, Span)> {
+    find_deprecation_generic(sess, attrs.iter())
 }
 
-fn find_deprecation_generic<'a, I>(
-    sess: &Session,
-    attrs_iter: I,
-    item_sp: Span,
-) -> Option<Deprecation>
+fn find_deprecation_generic<'a, I>(sess: &Session, attrs_iter: I) -> Option<(Deprecation, Span)>
 where
     I: Iterator<Item = &'a Attribute>,
 {
-    let mut depr: Option<Deprecation> = None;
+    let mut depr: Option<(Deprecation, Span)> = None;
     let diagnostic = &sess.parse_sess.span_diagnostic;
 
     'outer: for attr in attrs_iter {
@@ -658,8 +685,11 @@ where
             continue;
         }
 
-        if depr.is_some() {
-            struct_span_err!(diagnostic, item_sp, E0550, "multiple deprecated attributes").emit();
+        if let Some((_, span)) = &depr {
+            struct_span_err!(diagnostic, attr.span, E0550, "multiple deprecated attributes")
+                .span_label(attr.span, "repeated deprecation attribute")
+                .span_label(*span, "first deprecation attribute")
+                .emit();
             break;
         }
 
@@ -780,7 +810,7 @@ where
         sess.mark_attr_used(&attr);
 
         let is_since_rustc_version = sess.check_name(attr, sym::rustc_deprecated);
-        depr = Some(Deprecation { since, note, suggestion, is_since_rustc_version });
+        depr = Some((Deprecation { since, note, suggestion, is_since_rustc_version }, attr.span));
     }
 
     depr
@@ -901,38 +931,36 @@ pub fn find_repr_attrs(sess: &Session, attr: &Attribute) -> Vec<ReprAttr> {
                         )
                         .emit();
                     }
-                } else {
-                    if let Some(meta_item) = item.meta_item() {
-                        if meta_item.has_name(sym::align) {
-                            if let MetaItemKind::NameValue(ref value) = meta_item.kind {
-                                recognised = true;
-                                let mut err = struct_span_err!(
-                                    diagnostic,
-                                    item.span(),
-                                    E0693,
-                                    "incorrect `repr(align)` attribute format"
-                                );
-                                match value.kind {
-                                    ast::LitKind::Int(int, ast::LitIntType::Unsuffixed) => {
-                                        err.span_suggestion(
-                                            item.span(),
-                                            "use parentheses instead",
-                                            format!("align({})", int),
-                                            Applicability::MachineApplicable,
-                                        );
-                                    }
-                                    ast::LitKind::Str(s, _) => {
-                                        err.span_suggestion(
-                                            item.span(),
-                                            "use parentheses instead",
-                                            format!("align({})", s),
-                                            Applicability::MachineApplicable,
-                                        );
-                                    }
-                                    _ => {}
+                } else if let Some(meta_item) = item.meta_item() {
+                    if meta_item.has_name(sym::align) {
+                        if let MetaItemKind::NameValue(ref value) = meta_item.kind {
+                            recognised = true;
+                            let mut err = struct_span_err!(
+                                diagnostic,
+                                item.span(),
+                                E0693,
+                                "incorrect `repr(align)` attribute format"
+                            );
+                            match value.kind {
+                                ast::LitKind::Int(int, ast::LitIntType::Unsuffixed) => {
+                                    err.span_suggestion(
+                                        item.span(),
+                                        "use parentheses instead",
+                                        format!("align({})", int),
+                                        Applicability::MachineApplicable,
+                                    );
                                 }
-                                err.emit();
+                                ast::LitKind::Str(s, _) => {
+                                    err.span_suggestion(
+                                        item.span(),
+                                        "use parentheses instead",
+                                        format!("align({})", s),
+                                        Applicability::MachineApplicable,
+                                    );
+                                }
+                                _ => {}
                             }
+                            err.emit();
                         }
                     }
                 }
@@ -1012,14 +1040,14 @@ pub fn find_transparency(
 pub fn allow_internal_unstable<'a>(
     sess: &'a Session,
     attrs: &'a [Attribute],
-) -> Option<impl Iterator<Item = Symbol> + 'a> {
+) -> impl Iterator<Item = Symbol> + 'a {
     allow_unstable(sess, attrs, sym::allow_internal_unstable)
 }
 
 pub fn rustc_allow_const_fn_unstable<'a>(
     sess: &'a Session,
     attrs: &'a [Attribute],
-) -> Option<impl Iterator<Item = Symbol> + 'a> {
+) -> impl Iterator<Item = Symbol> + 'a {
     allow_unstable(sess, attrs, sym::rustc_allow_const_fn_unstable)
 }
 
@@ -1027,7 +1055,7 @@ fn allow_unstable<'a>(
     sess: &'a Session,
     attrs: &'a [Attribute],
     symbol: Symbol,
-) -> Option<impl Iterator<Item = Symbol> + 'a> {
+) -> impl Iterator<Item = Symbol> + 'a {
     let attrs = sess.filter_by_name(attrs, symbol);
     let list = attrs
         .filter_map(move |attr| {
@@ -1041,7 +1069,7 @@ fn allow_unstable<'a>(
         })
         .flatten();
 
-    Some(list.into_iter().filter_map(move |it| {
+    list.into_iter().filter_map(move |it| {
         let name = it.ident().map(|ident| ident.name);
         if name.is_none() {
             sess.diagnostic().span_err(
@@ -1050,5 +1078,5 @@ fn allow_unstable<'a>(
             );
         }
         name
-    }))
+    })
 }

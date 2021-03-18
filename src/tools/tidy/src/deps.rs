@@ -67,7 +67,6 @@ const PERMITTED_DEPENDENCIES: &[&str] = &[
     "arrayvec",
     "atty",
     "autocfg",
-    "backtrace",
     "bitflags",
     "block-buffer",
     "block-padding",
@@ -80,11 +79,13 @@ const PERMITTED_DEPENDENCIES: &[&str] = &[
     "cloudabi",
     "cmake",
     "compiler_builtins",
+    "cpuid-bool",
     "crc32fast",
     "crossbeam-deque",
     "crossbeam-epoch",
     "crossbeam-queue",
     "crossbeam-utils",
+    "cstr",
     "datafrog",
     "difference",
     "digest",
@@ -103,6 +104,7 @@ const PERMITTED_DEPENDENCIES: &[&str] = &[
     "getopts",
     "getrandom",
     "gimli",
+    "gsgdt",
     "hashbrown",
     "hermit-abi",
     "humantime",
@@ -130,6 +132,8 @@ const PERMITTED_DEPENDENCIES: &[&str] = &[
     "parking_lot",
     "parking_lot_core",
     "pathdiff",
+    "perf-event-open-sys",
+    "pin-project-lite",
     "pkg-config",
     "polonius-engine",
     "ppv-lite86",
@@ -160,6 +164,7 @@ const PERMITTED_DEPENDENCIES: &[&str] = &[
     "serde",
     "serde_derive",
     "sha-1",
+    "sha2",
     "smallvec",
     "snap",
     "stable_deref_trait",
@@ -212,12 +217,12 @@ fn check_exceptions(metadata: &Metadata, bad: &mut bool) {
     for (name, license) in EXCEPTIONS {
         // Check that the package actually exists.
         if !metadata.packages.iter().any(|p| p.name == *name) {
-            println!(
+            tidy_error!(
+                bad,
                 "could not find exception package `{}`\n\
                 Remove from EXCEPTIONS list if it is no longer used.",
                 name
             );
-            *bad = true;
         }
         // Check that the license hasn't changed.
         for pkg in metadata.packages.iter().filter(|p| p.name == *name) {
@@ -230,11 +235,11 @@ fn check_exceptions(metadata: &Metadata, bad: &mut bool) {
             }
             match &pkg.license {
                 None => {
-                    println!(
+                    tidy_error!(
+                        bad,
                         "dependency exception `{}` does not declare a license expression",
                         pkg.id
                     );
-                    *bad = true;
                 }
                 Some(pkg_license) => {
                     if pkg_license.as_str() != *license {
@@ -271,8 +276,7 @@ fn check_exceptions(metadata: &Metadata, bad: &mut bool) {
         let license = match &pkg.license {
             Some(license) => license,
             None => {
-                println!("dependency `{}` does not define a license expression", pkg.id,);
-                *bad = true;
+                tidy_error!(bad, "dependency `{}` does not define a license expression", pkg.id);
                 continue;
             }
         };
@@ -284,8 +288,7 @@ fn check_exceptions(metadata: &Metadata, bad: &mut bool) {
                 // general, these should never be added.
                 continue;
             }
-            println!("invalid license `{}` in `{}`", license, pkg.id);
-            *bad = true;
+            tidy_error!(bad, "invalid license `{}` in `{}`", license, pkg.id);
         }
     }
 }
@@ -298,12 +301,12 @@ fn check_dependencies(metadata: &Metadata, bad: &mut bool) {
     // Check that the PERMITTED_DEPENDENCIES does not have unused entries.
     for name in PERMITTED_DEPENDENCIES {
         if !metadata.packages.iter().any(|p| p.name == *name) {
-            println!(
+            tidy_error!(
+                bad,
                 "could not find allowed package `{}`\n\
                 Remove from PERMITTED_DEPENDENCIES list if it is no longer used.",
                 name
             );
-            *bad = true;
         }
     }
     // Get the list in a convenient form.
@@ -320,11 +323,10 @@ fn check_dependencies(metadata: &Metadata, bad: &mut bool) {
     }
 
     if !unapproved.is_empty() {
-        println!("Dependencies not explicitly permitted:");
+        tidy_error!(bad, "Dependencies not explicitly permitted:");
         for dep in unapproved {
             println!("* {}", dep);
         }
-        *bad = true;
     }
 }
 
@@ -379,16 +381,17 @@ fn check_crate_duplicate(metadata: &Metadata, bad: &mut bool) {
         let matches: Vec<_> = metadata.packages.iter().filter(|pkg| pkg.name == name).collect();
         match matches.len() {
             0 => {
-                println!(
+                tidy_error!(
+                    bad,
                     "crate `{}` is missing, update `check_crate_duplicate` \
                     if it is no longer used",
                     name
                 );
-                *bad = true;
             }
             1 => {}
             _ => {
-                println!(
+                tidy_error!(
+                    bad,
                     "crate `{}` is duplicated in `Cargo.lock`, \
                     it is too expensive to build multiple times, \
                     so make sure only one version appears across all dependencies",
@@ -397,7 +400,6 @@ fn check_crate_duplicate(metadata: &Metadata, bad: &mut bool) {
                 for pkg in matches {
                     println!("  * {}", pkg.id);
                 }
-                *bad = true;
             }
         }
     }

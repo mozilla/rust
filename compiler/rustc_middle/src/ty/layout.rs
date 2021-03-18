@@ -4,7 +4,7 @@ use crate::mir::{GeneratorLayout, GeneratorSavedLocal};
 use crate::ty::subst::Subst;
 use crate::ty::{self, subst::SubstsRef, ReprOptions, Ty, TyCtxt, TypeFoldable};
 
-use rustc_ast::{self as ast, IntTy, UintTy};
+use rustc_ast as ast;
 use rustc_attr as attr;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_hir as hir;
@@ -15,7 +15,7 @@ use rustc_session::{DataTypeKind, FieldInfo, SizeKind, VariantInfo};
 use rustc_span::symbol::{Ident, Symbol};
 use rustc_span::DUMMY_SP;
 use rustc_target::abi::call::{
-    ArgAbi, ArgAttribute, ArgAttributes, Conv, FnAbi, PassMode, Reg, RegKind,
+    ArgAbi, ArgAttribute, ArgAttributes, ArgExtension, Conv, FnAbi, PassMode, Reg, RegKind,
 };
 use rustc_target::abi::*;
 use rustc_target::spec::{abi::Abi as SpecAbi, HasTargetSpec, PanicStrategy};
@@ -30,6 +30,8 @@ use std::ops::Bound;
 pub trait IntegerExt {
     fn to_ty<'tcx>(&self, tcx: TyCtxt<'tcx>, signed: bool) -> Ty<'tcx>;
     fn from_attr<C: HasDataLayout>(cx: &C, ity: attr::IntType) -> Integer;
+    fn from_int_ty<C: HasDataLayout>(cx: &C, ity: ty::IntTy) -> Integer;
+    fn from_uint_ty<C: HasDataLayout>(cx: &C, uty: ty::UintTy) -> Integer;
     fn repr_discr<'tcx>(
         tcx: TyCtxt<'tcx>,
         ty: Ty<'tcx>,
@@ -60,14 +62,35 @@ impl IntegerExt for Integer {
         let dl = cx.data_layout();
 
         match ity {
-            attr::SignedInt(IntTy::I8) | attr::UnsignedInt(UintTy::U8) => I8,
-            attr::SignedInt(IntTy::I16) | attr::UnsignedInt(UintTy::U16) => I16,
-            attr::SignedInt(IntTy::I32) | attr::UnsignedInt(UintTy::U32) => I32,
-            attr::SignedInt(IntTy::I64) | attr::UnsignedInt(UintTy::U64) => I64,
-            attr::SignedInt(IntTy::I128) | attr::UnsignedInt(UintTy::U128) => I128,
-            attr::SignedInt(IntTy::Isize) | attr::UnsignedInt(UintTy::Usize) => {
+            attr::SignedInt(ast::IntTy::I8) | attr::UnsignedInt(ast::UintTy::U8) => I8,
+            attr::SignedInt(ast::IntTy::I16) | attr::UnsignedInt(ast::UintTy::U16) => I16,
+            attr::SignedInt(ast::IntTy::I32) | attr::UnsignedInt(ast::UintTy::U32) => I32,
+            attr::SignedInt(ast::IntTy::I64) | attr::UnsignedInt(ast::UintTy::U64) => I64,
+            attr::SignedInt(ast::IntTy::I128) | attr::UnsignedInt(ast::UintTy::U128) => I128,
+            attr::SignedInt(ast::IntTy::Isize) | attr::UnsignedInt(ast::UintTy::Usize) => {
                 dl.ptr_sized_integer()
             }
+        }
+    }
+
+    fn from_int_ty<C: HasDataLayout>(cx: &C, ity: ty::IntTy) -> Integer {
+        match ity {
+            ty::IntTy::I8 => I8,
+            ty::IntTy::I16 => I16,
+            ty::IntTy::I32 => I32,
+            ty::IntTy::I64 => I64,
+            ty::IntTy::I128 => I128,
+            ty::IntTy::Isize => cx.data_layout().ptr_sized_integer(),
+        }
+    }
+    fn from_uint_ty<C: HasDataLayout>(cx: &C, ity: ty::UintTy) -> Integer {
+        match ity {
+            ty::UintTy::U8 => I8,
+            ty::UintTy::U16 => I16,
+            ty::UintTy::U32 => I32,
+            ty::UintTy::U64 => I64,
+            ty::UintTy::U128 => I128,
+            ty::UintTy::Usize => cx.data_layout().ptr_sized_integer(),
         }
     }
 
@@ -107,6 +130,7 @@ impl IntegerExt for Integer {
 
         if repr.c() {
             match &tcx.sess.target.arch[..] {
+                "hexagon" => min_from_extern = Some(I8),
                 // WARNING: the ARM EABI has two variants; the one corresponding
                 // to `at_least == I32` appears to be used on Linux and NetBSD,
                 // but some systems may use the variant corresponding to no
@@ -165,6 +189,13 @@ pub const FAT_PTR_ADDR: usize = 0;
 /// - For a slice, this is the length.
 pub const FAT_PTR_EXTRA: usize = 1;
 
+/// The maximum supported number of lanes in a SIMD vector.
+///
+/// This value is selected based on backend support:
+/// * LLVM does not appear to have a vector width limit.
+/// * Cranelift stores the base-2 log of the lane count in a 4 bit integer.
+pub const MAX_SIMD_LANES: u64 = 1 << 0xF;
+
 #[derive(Copy, Clone, Debug, TyEncodable, TyDecodable)]
 pub enum LayoutError<'tcx> {
     Unknown(Ty<'tcx>),
@@ -176,7 +207,7 @@ impl<'tcx> fmt::Display for LayoutError<'tcx> {
         match *self {
             LayoutError::Unknown(ty) => write!(f, "the type `{}` has an unknown layout", ty),
             LayoutError::SizeOverflow(ty) => {
-                write!(f, "the type `{}` is too big for the current architecture", ty)
+                write!(f, "values of the type `{}` are too big for the current architecture", ty)
             }
         }
     }
@@ -201,7 +232,7 @@ fn layout_raw<'tcx>(
             let layout = cx.layout_raw_uncached(ty);
             // Type-level uninhabitedness should always imply ABI uninhabitedness.
             if let Ok(layout) = layout {
-                if ty.conservative_is_privately_uninhabited(tcx) {
+                if tcx.conservative_is_privately_uninhabited(param_env.and(ty)) {
                     assert!(layout.abi.is_uninhabited());
                 }
             }
@@ -487,11 +518,11 @@ impl<'tcx> LayoutCx<'tcx, TyCtxt<'tcx>> {
                 self,
                 Scalar { value: Int(I32, false), valid_range: 0..=0x10FFFF },
             )),
-            ty::Int(ity) => scalar(Int(Integer::from_attr(dl, attr::SignedInt(ity)), true)),
-            ty::Uint(ity) => scalar(Int(Integer::from_attr(dl, attr::UnsignedInt(ity)), false)),
+            ty::Int(ity) => scalar(Int(Integer::from_int_ty(dl, ity), true)),
+            ty::Uint(ity) => scalar(Int(Integer::from_uint_ty(dl, ity), false)),
             ty::Float(fty) => scalar(match fty {
-                ast::FloatTy::F32 => F32,
-                ast::FloatTy::F64 => F64,
+                ty::FloatTy::F32 => F32,
+                ty::FloatTy::F64 => F64,
             }),
             ty::FnPtr(_) => {
                 let mut ptr = scalar_unit(Pointer);
@@ -553,11 +584,12 @@ impl<'tcx> LayoutCx<'tcx, TyCtxt<'tcx>> {
                 let size =
                     element.size.checked_mul(count, dl).ok_or(LayoutError::SizeOverflow(ty))?;
 
-                let abi = if count != 0 && ty.conservative_is_privately_uninhabited(tcx) {
-                    Abi::Uninhabited
-                } else {
-                    Abi::Aggregate { sized: true }
-                };
+                let abi =
+                    if count != 0 && tcx.conservative_is_privately_uninhabited(param_env.and(ty)) {
+                        Abi::Uninhabited
+                    } else {
+                        Abi::Aggregate { sized: true }
+                    };
 
                 let largest_niche = if count != 0 { element.largest_niche.clone() } else { None };
 
@@ -631,30 +663,113 @@ impl<'tcx> LayoutCx<'tcx, TyCtxt<'tcx>> {
             }
 
             // SIMD vector types.
-            ty::Adt(def, ..) if def.repr.simd() => {
-                let element = self.layout_of(ty.simd_type(tcx))?;
-                let count = ty.simd_size(tcx);
-                assert!(count > 0);
-                let scalar = match element.abi {
-                    Abi::Scalar(ref scalar) => scalar.clone(),
-                    _ => {
+            ty::Adt(def, substs) if def.repr.simd() => {
+                // Supported SIMD vectors are homogeneous ADTs with at least one field:
+                //
+                // * #[repr(simd)] struct S(T, T, T, T);
+                // * #[repr(simd)] struct S { x: T, y: T, z: T, w: T }
+                // * #[repr(simd)] struct S([T; 4])
+                //
+                // where T is a primitive scalar (integer/float/pointer).
+
+                // SIMD vectors with zero fields are not supported.
+                // (should be caught by typeck)
+                if def.non_enum_variant().fields.is_empty() {
+                    tcx.sess.fatal(&format!("monomorphising SIMD type `{}` of zero length", ty));
+                }
+
+                // Type of the first ADT field:
+                let f0_ty = def.non_enum_variant().fields[0].ty(tcx, substs);
+
+                // Heterogeneous SIMD vectors are not supported:
+                // (should be caught by typeck)
+                for fi in &def.non_enum_variant().fields {
+                    if fi.ty(tcx, substs) != f0_ty {
+                        tcx.sess.fatal(&format!("monomorphising heterogeneous SIMD type `{}`", ty));
+                    }
+                }
+
+                // The element type and number of elements of the SIMD vector
+                // are obtained from:
+                //
+                // * the element type and length of the single array field, if
+                // the first field is of array type, or
+                //
+                // * the homogenous field type and the number of fields.
+                let (e_ty, e_len, is_array) = if let ty::Array(e_ty, _) = f0_ty.kind() {
+                    // First ADT field is an array:
+
+                    // SIMD vectors with multiple array fields are not supported:
+                    // (should be caught by typeck)
+                    if def.non_enum_variant().fields.len() != 1 {
                         tcx.sess.fatal(&format!(
-                            "monomorphising SIMD type `{}` with \
-                                                 a non-machine element type `{}`",
-                            ty, element.ty
+                            "monomorphising SIMD type `{}` with more than one array field",
+                            ty
                         ));
                     }
+
+                    // Extract the number of elements from the layout of the array field:
+                    let len = if let Ok(TyAndLayout {
+                        layout: Layout { fields: FieldsShape::Array { count, .. }, .. },
+                        ..
+                    }) = self.layout_of(f0_ty)
+                    {
+                        count
+                    } else {
+                        return Err(LayoutError::Unknown(ty));
+                    };
+
+                    (*e_ty, *len, true)
+                } else {
+                    // First ADT field is not an array:
+                    (f0_ty, def.non_enum_variant().fields.len() as _, false)
                 };
-                let size =
-                    element.size.checked_mul(count, dl).ok_or(LayoutError::SizeOverflow(ty))?;
+
+                // SIMD vectors of zero length are not supported.
+                // Additionally, lengths are capped at 2^16 as a fixed maximum backends must
+                // support.
+                //
+                // Can't be caught in typeck if the array length is generic.
+                if e_len == 0 {
+                    tcx.sess.fatal(&format!("monomorphising SIMD type `{}` of zero length", ty));
+                } else if e_len > MAX_SIMD_LANES {
+                    tcx.sess.fatal(&format!(
+                        "monomorphising SIMD type `{}` of length greater than {}",
+                        ty, MAX_SIMD_LANES,
+                    ));
+                }
+
+                // Compute the ABI of the element type:
+                let e_ly = self.layout_of(e_ty)?;
+                let e_abi = if let Abi::Scalar(ref scalar) = e_ly.abi {
+                    scalar.clone()
+                } else {
+                    // This error isn't caught in typeck, e.g., if
+                    // the element type of the vector is generic.
+                    tcx.sess.fatal(&format!(
+                        "monomorphising SIMD type `{}` with a non-primitive-scalar \
+                        (integer/float/pointer) element type `{}`",
+                        ty, e_ty
+                    ))
+                };
+
+                // Compute the size and alignment of the vector:
+                let size = e_ly.size.checked_mul(e_len, dl).ok_or(LayoutError::SizeOverflow(ty))?;
                 let align = dl.vector_align(size);
                 let size = size.align_to(align.abi);
 
+                // Compute the placement of the vector fields:
+                let fields = if is_array {
+                    FieldsShape::Arbitrary { offsets: vec![Size::ZERO], memory_index: vec![0] }
+                } else {
+                    FieldsShape::Array { stride: e_ly.size, count: e_len }
+                };
+
                 tcx.intern_layout(Layout {
                     variants: Variants::Single { index: VariantIdx::new(0) },
-                    fields: FieldsShape::Array { stride: element.size, count },
-                    abi: Abi::Vector { element: scalar, count },
-                    largest_niche: element.largest_niche.clone(),
+                    fields,
+                    abi: Abi::Vector { element: e_abi, count: e_len },
+                    largest_niche: e_ly.largest_niche.clone(),
                     size,
                     align,
                 })
@@ -1390,10 +1505,12 @@ impl<'tcx> LayoutCx<'tcx, TyCtxt<'tcx>> {
     ) -> Result<&'tcx Layout, LayoutError<'tcx>> {
         use SavedLocalEligibility::*;
         let tcx = self.tcx;
-
         let subst_field = |ty: Ty<'tcx>| ty.subst(tcx, substs);
 
-        let info = tcx.generator_layout(def_id);
+        let info = match tcx.generator_layout(def_id) {
+            None => return Err(LayoutError::Unknown(ty)),
+            Some(info) => info,
+        };
         let (ineligible_locals, assignments) = self.generator_saved_local_eligibility(&info);
 
         // Build a prefix layout, including "promoting" all ineligible
@@ -1558,7 +1675,7 @@ impl<'tcx> LayoutCx<'tcx, TyCtxt<'tcx>> {
 
         let layout = tcx.intern_layout(Layout {
             variants: Variants::Multiple {
-                tag: tag,
+                tag,
                 tag_encoding: TagEncoding::Direct,
                 tag_field: tag_index,
                 variants,
@@ -1756,7 +1873,7 @@ impl<'tcx> SizeSkeleton<'tcx> {
                 match tail.kind() {
                     ty::Param(_) | ty::Projection(_) => {
                         debug_assert!(tail.has_param_types_or_consts());
-                        Ok(SizeSkeleton::Pointer { non_zero, tail: tcx.erase_regions(&tail) })
+                        Ok(SizeSkeleton::Pointer { non_zero, tail: tcx.erase_regions(tail) })
                     }
                     _ => bug!(
                         "SizeSkeleton::compute({}): layout errored ({}), yet \
@@ -2029,121 +2146,148 @@ where
     }
 
     fn field(this: TyAndLayout<'tcx>, cx: &C, i: usize) -> C::TyAndLayout {
-        let tcx = cx.tcx();
-        let tag_layout = |tag: &Scalar| -> C::TyAndLayout {
-            let layout = Layout::scalar(cx, tag.clone());
-            MaybeResult::from(Ok(TyAndLayout {
-                layout: tcx.intern_layout(layout),
-                ty: tag.value.to_ty(tcx),
-            }))
-        };
+        enum TyMaybeWithLayout<C: LayoutOf> {
+            Ty(C::Ty),
+            TyAndLayout(C::TyAndLayout),
+        }
 
-        cx.layout_of(match *this.ty.kind() {
-            ty::Bool
-            | ty::Char
-            | ty::Int(_)
-            | ty::Uint(_)
-            | ty::Float(_)
-            | ty::FnPtr(_)
-            | ty::Never
-            | ty::FnDef(..)
-            | ty::GeneratorWitness(..)
-            | ty::Foreign(..)
-            | ty::Dynamic(..) => bug!("TyAndLayout::field_type({:?}): not applicable", this),
+        fn ty_and_layout_kind<
+            C: LayoutOf<Ty = Ty<'tcx>, TyAndLayout: MaybeResult<TyAndLayout<'tcx>>>
+                + HasTyCtxt<'tcx>
+                + HasParamEnv<'tcx>,
+        >(
+            this: TyAndLayout<'tcx>,
+            cx: &C,
+            i: usize,
+            ty: C::Ty,
+        ) -> TyMaybeWithLayout<C> {
+            let tcx = cx.tcx();
+            let tag_layout = |tag: &Scalar| -> C::TyAndLayout {
+                let layout = Layout::scalar(cx, tag.clone());
+                MaybeResult::from(Ok(TyAndLayout {
+                    layout: tcx.intern_layout(layout),
+                    ty: tag.value.to_ty(tcx),
+                }))
+            };
 
-            // Potentially-fat pointers.
-            ty::Ref(_, pointee, _) | ty::RawPtr(ty::TypeAndMut { ty: pointee, .. }) => {
-                assert!(i < this.fields.count());
+            match *ty.kind() {
+                ty::Bool
+                | ty::Char
+                | ty::Int(_)
+                | ty::Uint(_)
+                | ty::Float(_)
+                | ty::FnPtr(_)
+                | ty::Never
+                | ty::FnDef(..)
+                | ty::GeneratorWitness(..)
+                | ty::Foreign(..)
+                | ty::Dynamic(..) => bug!("TyAndLayout::field_type({:?}): not applicable", this),
 
-                // Reuse the fat `*T` type as its own thin pointer data field.
-                // This provides information about, e.g., DST struct pointees
-                // (which may have no non-DST form), and will work as long
-                // as the `Abi` or `FieldsShape` is checked by users.
-                if i == 0 {
-                    let nil = tcx.mk_unit();
-                    let ptr_ty = if this.ty.is_unsafe_ptr() {
-                        tcx.mk_mut_ptr(nil)
-                    } else {
-                        tcx.mk_mut_ref(tcx.lifetimes.re_static, nil)
-                    };
-                    return MaybeResult::from(cx.layout_of(ptr_ty).to_result().map(
-                        |mut ptr_layout| {
-                            ptr_layout.ty = this.ty;
-                            ptr_layout
-                        },
-                    ));
-                }
+                // Potentially-fat pointers.
+                ty::Ref(_, pointee, _) | ty::RawPtr(ty::TypeAndMut { ty: pointee, .. }) => {
+                    assert!(i < this.fields.count());
 
-                match tcx.struct_tail_erasing_lifetimes(pointee, cx.param_env()).kind() {
-                    ty::Slice(_) | ty::Str => tcx.types.usize,
-                    ty::Dynamic(_, _) => {
-                        tcx.mk_imm_ref(tcx.lifetimes.re_static, tcx.mk_array(tcx.types.usize, 3))
-                        /* FIXME: use actual fn pointers
-                        Warning: naively computing the number of entries in the
-                        vtable by counting the methods on the trait + methods on
-                        all parent traits does not work, because some methods can
-                        be not object safe and thus excluded from the vtable.
-                        Increase this counter if you tried to implement this but
-                        failed to do it without duplicating a lot of code from
-                        other places in the compiler: 2
-                        tcx.mk_tup(&[
-                            tcx.mk_array(tcx.types.usize, 3),
-                            tcx.mk_array(Option<fn()>),
-                        ])
-                        */
+                    // Reuse the fat `*T` type as its own thin pointer data field.
+                    // This provides information about, e.g., DST struct pointees
+                    // (which may have no non-DST form), and will work as long
+                    // as the `Abi` or `FieldsShape` is checked by users.
+                    if i == 0 {
+                        let nil = tcx.mk_unit();
+                        let ptr_ty = if ty.is_unsafe_ptr() {
+                            tcx.mk_mut_ptr(nil)
+                        } else {
+                            tcx.mk_mut_ref(tcx.lifetimes.re_static, nil)
+                        };
+                        return TyMaybeWithLayout::TyAndLayout(MaybeResult::from(
+                            cx.layout_of(ptr_ty).to_result().map(|mut ptr_layout| {
+                                ptr_layout.ty = ty;
+                                ptr_layout
+                            }),
+                        ));
                     }
-                    _ => bug!("TyAndLayout::field_type({:?}): not applicable", this),
+
+                    match tcx.struct_tail_erasing_lifetimes(pointee, cx.param_env()).kind() {
+                        ty::Slice(_) | ty::Str => TyMaybeWithLayout::Ty(tcx.types.usize),
+                        ty::Dynamic(_, _) => {
+                            TyMaybeWithLayout::Ty(tcx.mk_imm_ref(
+                                tcx.lifetimes.re_static,
+                                tcx.mk_array(tcx.types.usize, 3),
+                            ))
+                            /* FIXME: use actual fn pointers
+                            Warning: naively computing the number of entries in the
+                            vtable by counting the methods on the trait + methods on
+                            all parent traits does not work, because some methods can
+                            be not object safe and thus excluded from the vtable.
+                            Increase this counter if you tried to implement this but
+                            failed to do it without duplicating a lot of code from
+                            other places in the compiler: 2
+                            tcx.mk_tup(&[
+                                tcx.mk_array(tcx.types.usize, 3),
+                                tcx.mk_array(Option<fn()>),
+                            ])
+                            */
+                        }
+                        _ => bug!("TyAndLayout::field_type({:?}): not applicable", this),
+                    }
                 }
+
+                // Arrays and slices.
+                ty::Array(element, _) | ty::Slice(element) => TyMaybeWithLayout::Ty(element),
+                ty::Str => TyMaybeWithLayout::Ty(tcx.types.u8),
+
+                // Tuples, generators and closures.
+                ty::Closure(_, ref substs) => {
+                    ty_and_layout_kind(this, cx, i, substs.as_closure().tupled_upvars_ty())
+                }
+
+                ty::Generator(def_id, ref substs, _) => match this.variants {
+                    Variants::Single { index } => TyMaybeWithLayout::Ty(
+                        substs
+                            .as_generator()
+                            .state_tys(def_id, tcx)
+                            .nth(index.as_usize())
+                            .unwrap()
+                            .nth(i)
+                            .unwrap(),
+                    ),
+                    Variants::Multiple { ref tag, tag_field, .. } => {
+                        if i == tag_field {
+                            return TyMaybeWithLayout::TyAndLayout(tag_layout(tag));
+                        }
+                        TyMaybeWithLayout::Ty(substs.as_generator().prefix_tys().nth(i).unwrap())
+                    }
+                },
+
+                ty::Tuple(tys) => TyMaybeWithLayout::Ty(tys[i].expect_ty()),
+
+                // ADTs.
+                ty::Adt(def, substs) => {
+                    match this.variants {
+                        Variants::Single { index } => {
+                            TyMaybeWithLayout::Ty(def.variants[index].fields[i].ty(tcx, substs))
+                        }
+
+                        // Discriminant field for enums (where applicable).
+                        Variants::Multiple { ref tag, .. } => {
+                            assert_eq!(i, 0);
+                            return TyMaybeWithLayout::TyAndLayout(tag_layout(tag));
+                        }
+                    }
+                }
+
+                ty::Projection(_)
+                | ty::Bound(..)
+                | ty::Placeholder(..)
+                | ty::Opaque(..)
+                | ty::Param(_)
+                | ty::Infer(_)
+                | ty::Error(_) => bug!("TyAndLayout::field_type: unexpected type `{}`", this.ty),
             }
+        }
 
-            // Arrays and slices.
-            ty::Array(element, _) | ty::Slice(element) => element,
-            ty::Str => tcx.types.u8,
-
-            // Tuples, generators and closures.
-            ty::Closure(_, ref substs) => substs.as_closure().upvar_tys().nth(i).unwrap(),
-
-            ty::Generator(def_id, ref substs, _) => match this.variants {
-                Variants::Single { index } => substs
-                    .as_generator()
-                    .state_tys(def_id, tcx)
-                    .nth(index.as_usize())
-                    .unwrap()
-                    .nth(i)
-                    .unwrap(),
-                Variants::Multiple { ref tag, tag_field, .. } => {
-                    if i == tag_field {
-                        return tag_layout(tag);
-                    }
-                    substs.as_generator().prefix_tys().nth(i).unwrap()
-                }
-            },
-
-            ty::Tuple(tys) => tys[i].expect_ty(),
-
-            // SIMD vector types.
-            ty::Adt(def, ..) if def.repr.simd() => this.ty.simd_type(tcx),
-
-            // ADTs.
-            ty::Adt(def, substs) => {
-                match this.variants {
-                    Variants::Single { index } => def.variants[index].fields[i].ty(tcx, substs),
-
-                    // Discriminant field for enums (where applicable).
-                    Variants::Multiple { ref tag, .. } => {
-                        assert_eq!(i, 0);
-                        return tag_layout(tag);
-                    }
-                }
-            }
-
-            ty::Projection(_)
-            | ty::Bound(..)
-            | ty::Placeholder(..)
-            | ty::Opaque(..)
-            | ty::Param(_)
-            | ty::Infer(_)
-            | ty::Error(_) => bug!("TyAndLayout::field_type: unexpected type `{}`", this.ty),
+        cx.layout_of(match ty_and_layout_kind(this, cx, i, this.ty) {
+            TyMaybeWithLayout::Ty(result) => result,
+            TyMaybeWithLayout::TyAndLayout(result) => return result,
         })
     }
 
@@ -2352,7 +2496,8 @@ impl<'tcx> ty::Instance<'tcx> {
             ty::Generator(_, substs, _) => {
                 let sig = substs.as_generator().poly_sig();
 
-                let env_region = ty::ReLateBound(ty::INNERMOST, ty::BrEnv);
+                let br = ty::BoundRegion { kind: ty::BrEnv };
+                let env_region = ty::ReLateBound(ty::INNERMOST, br);
                 let env_ty = tcx.mk_mut_ref(tcx.mk_region(env_region), ty);
 
                 let pin_did = tcx.require_lang_item(LangItem::Pin, None);
@@ -2408,7 +2553,7 @@ where
         extra_args: &[Ty<'tcx>],
         caller_location: Option<Ty<'tcx>>,
         codegen_fn_attr_flags: CodegenFnAttrFlags,
-        mk_arg_type: impl Fn(Ty<'tcx>, Option<usize>) -> ArgAbi<'tcx, Ty<'tcx>>,
+        make_self_ptr_thin: bool,
     ) -> Self;
     fn adjust_for_abi(&mut self, cx: &C, abi: SpecAbi);
 }
@@ -2417,6 +2562,7 @@ fn fn_can_unwind(
     panic_strategy: PanicStrategy,
     codegen_fn_attr_flags: CodegenFnAttrFlags,
     call_conv: Conv,
+    abi: SpecAbi,
 ) -> bool {
     if panic_strategy != PanicStrategy::Unwind {
         // In panic=abort mode we assume nothing can unwind anywhere, so
@@ -2441,17 +2587,34 @@ fn fn_can_unwind(
             //
             //  2. A Rust item using a non-Rust ABI (like `extern "C" fn foo() { ... }`).
             //
-            // Foreign items (case 1) are assumed to not unwind; it is
-            // UB otherwise. (At least for now; see also
-            // rust-lang/rust#63909 and Rust RFC 2753.)
-            //
-            // Items defined in Rust with non-Rust ABIs (case 2) are also
-            // not supposed to unwind. Whether this should be enforced
-            // (versus stating it is UB) and *how* it would be enforced
-            // is currently under discussion; see rust-lang/rust#58794.
-            //
-            // In either case, we mark item as explicitly nounwind.
-            false
+            // In both of these cases, we should refer to the ABI to determine whether or not we
+            // should unwind. See Rust RFC 2945 for more information on this behavior, here:
+            // https://github.com/rust-lang/rfcs/blob/master/text/2945-c-unwind-abi.md
+            use SpecAbi::*;
+            match abi {
+                C { unwind } | Stdcall { unwind } | System { unwind } | Thiscall { unwind } => {
+                    unwind
+                }
+                Cdecl
+                | Fastcall
+                | Vectorcall
+                | Aapcs
+                | Win64
+                | SysV64
+                | PtxKernel
+                | Msp430Interrupt
+                | X86Interrupt
+                | AmdGpuKernel
+                | EfiApi
+                | AvrInterrupt
+                | AvrNonBlockingInterrupt
+                | CCmseNonSecureCall
+                | RustIntrinsic
+                | PlatformIntrinsic
+                | Unadjusted => false,
+                // In the `if` above, we checked for functions with the Rust calling convention.
+                Rust | RustCall => unreachable!(),
+            }
         }
     }
 }
@@ -2468,9 +2631,7 @@ where
         // Assume that fn pointers may always unwind
         let codegen_fn_attr_flags = CodegenFnAttrFlags::UNWIND;
 
-        call::FnAbi::new_internal(cx, sig, extra_args, None, codegen_fn_attr_flags, |ty, _| {
-            ArgAbi::new(cx.layout_of(ty))
-        })
+        call::FnAbi::new_internal(cx, sig, extra_args, None, codegen_fn_attr_flags, false)
     }
 
     fn of_instance(cx: &C, instance: ty::Instance<'tcx>, extra_args: &[Ty<'tcx>]) -> Self {
@@ -2484,55 +2645,14 @@ where
 
         let attrs = cx.tcx().codegen_fn_attrs(instance.def_id()).flags;
 
-        call::FnAbi::new_internal(cx, sig, extra_args, caller_location, attrs, |ty, arg_idx| {
-            let mut layout = cx.layout_of(ty);
-            // Don't pass the vtable, it's not an argument of the virtual fn.
-            // Instead, pass just the data pointer, but give it the type `*const/mut dyn Trait`
-            // or `&/&mut dyn Trait` because this is special-cased elsewhere in codegen
-            if let (ty::InstanceDef::Virtual(..), Some(0)) = (&instance.def, arg_idx) {
-                let fat_pointer_ty = if layout.is_unsized() {
-                    // unsized `self` is passed as a pointer to `self`
-                    // FIXME (mikeyhew) change this to use &own if it is ever added to the language
-                    cx.tcx().mk_mut_ptr(layout.ty)
-                } else {
-                    match layout.abi {
-                        Abi::ScalarPair(..) => (),
-                        _ => bug!("receiver type has unsupported layout: {:?}", layout),
-                    }
-
-                    // In the case of Rc<Self>, we need to explicitly pass a *mut RcBox<Self>
-                    // with a Scalar (not ScalarPair) ABI. This is a hack that is understood
-                    // elsewhere in the compiler as a method on a `dyn Trait`.
-                    // To get the type `*mut RcBox<Self>`, we just keep unwrapping newtypes until we
-                    // get a built-in pointer type
-                    let mut fat_pointer_layout = layout;
-                    'descend_newtypes: while !fat_pointer_layout.ty.is_unsafe_ptr()
-                        && !fat_pointer_layout.ty.is_region_ptr()
-                    {
-                        for i in 0..fat_pointer_layout.fields.count() {
-                            let field_layout = fat_pointer_layout.field(cx, i);
-
-                            if !field_layout.is_zst() {
-                                fat_pointer_layout = field_layout;
-                                continue 'descend_newtypes;
-                            }
-                        }
-
-                        bug!("receiver has no non-zero-sized fields {:?}", fat_pointer_layout);
-                    }
-
-                    fat_pointer_layout.ty
-                };
-
-                // we now have a type like `*mut RcBox<dyn Trait>`
-                // change its layout to that of `*mut ()`, a thin pointer, but keep the same type
-                // this is understood as a special case elsewhere in the compiler
-                let unit_pointer_ty = cx.tcx().mk_mut_ptr(cx.tcx().mk_unit());
-                layout = cx.layout_of(unit_pointer_ty);
-                layout.ty = fat_pointer_ty;
-            }
-            ArgAbi::new(layout)
-        })
+        call::FnAbi::new_internal(
+            cx,
+            sig,
+            extra_args,
+            caller_location,
+            attrs,
+            matches!(instance.def, ty::InstanceDef::Virtual(..)),
+        )
     }
 
     fn new_internal(
@@ -2541,29 +2661,30 @@ where
         extra_args: &[Ty<'tcx>],
         caller_location: Option<Ty<'tcx>>,
         codegen_fn_attr_flags: CodegenFnAttrFlags,
-        mk_arg_type: impl Fn(Ty<'tcx>, Option<usize>) -> ArgAbi<'tcx, Ty<'tcx>>,
+        force_thin_self_ptr: bool,
     ) -> Self {
         debug!("FnAbi::new_internal({:?}, {:?})", sig, extra_args);
 
-        let sig = cx.tcx().normalize_erasing_late_bound_regions(ty::ParamEnv::reveal_all(), &sig);
+        let sig = cx.tcx().normalize_erasing_late_bound_regions(ty::ParamEnv::reveal_all(), sig);
 
         use rustc_target::spec::abi::Abi::*;
         let conv = match cx.tcx().sess.target.adjust_abi(sig.abi) {
             RustIntrinsic | PlatformIntrinsic | Rust | RustCall => Conv::Rust,
 
             // It's the ABI's job to select this, not ours.
-            System => bug!("system abi should be selected elsewhere"),
+            System { .. } => bug!("system abi should be selected elsewhere"),
             EfiApi => bug!("eficall abi should be selected elsewhere"),
 
-            Stdcall => Conv::X86Stdcall,
+            Stdcall { .. } => Conv::X86Stdcall,
             Fastcall => Conv::X86Fastcall,
             Vectorcall => Conv::X86VectorCall,
-            Thiscall => Conv::X86ThisCall,
-            C => Conv::C,
+            Thiscall { .. } => Conv::X86ThisCall,
+            C { .. } => Conv::C,
             Unadjusted => Conv::C,
             Win64 => Conv::X86_64Win64,
             SysV64 => Conv::X86_64SysV,
             Aapcs => Conv::ArmAapcs,
+            CCmseNonSecureCall => Conv::CCmseNonSecureCall,
             PtxKernel => Conv::PtxKernel,
             Msp430Interrupt => Conv::Msp430Intr,
             X86Interrupt => Conv::X86Intr,
@@ -2601,15 +2722,14 @@ where
         };
 
         let target = &cx.tcx().sess.target;
-        let target_env_gnu_like = matches!(&target.target_env[..], "gnu" | "musl");
-        let win_x64_gnu =
-            target.target_os == "windows" && target.arch == "x86_64" && target.target_env == "gnu";
+        let target_env_gnu_like = matches!(&target.env[..], "gnu" | "musl");
+        let win_x64_gnu = target.os == "windows" && target.arch == "x86_64" && target.env == "gnu";
         let linux_s390x_gnu_like =
-            target.target_os == "linux" && target.arch == "s390x" && target_env_gnu_like;
+            target.os == "linux" && target.arch == "s390x" && target_env_gnu_like;
         let linux_sparc64_gnu_like =
-            target.target_os == "linux" && target.arch == "sparc64" && target_env_gnu_like;
+            target.os == "linux" && target.arch == "sparc64" && target_env_gnu_like;
         let linux_powerpc_gnu_like =
-            target.target_os == "linux" && target.arch == "powerpc" && target_env_gnu_like;
+            target.os == "linux" && target.arch == "powerpc" && target_env_gnu_like;
         let rust_abi = matches!(sig.abi, RustIntrinsic | PlatformIntrinsic | Rust | RustCall);
 
         // Handle safe Rust thin and fat pointers.
@@ -2620,7 +2740,7 @@ where
                                       is_return: bool| {
             // Booleans are always an i1 that needs to be zero-extended.
             if scalar.is_bool() {
-                attrs.set(ArgAttribute::ZExt);
+                attrs.ext(ArgExtension::Zext);
                 return;
             }
 
@@ -2673,7 +2793,23 @@ where
 
         let arg_of = |ty: Ty<'tcx>, arg_idx: Option<usize>| {
             let is_return = arg_idx.is_none();
-            let mut arg = mk_arg_type(ty, arg_idx);
+
+            let layout = cx.layout_of(ty);
+            let layout = if force_thin_self_ptr && arg_idx == Some(0) {
+                // Don't pass the vtable, it's not an argument of the virtual fn.
+                // Instead, pass just the data pointer, but give it the type `*const/mut dyn Trait`
+                // or `&/&mut dyn Trait` because this is special-cased elsewhere in codegen
+                make_thin_self_ptr(cx, layout)
+            } else {
+                layout
+            };
+
+            let mut arg = ArgAbi::new(cx, layout, |layout, scalar, offset| {
+                let mut attrs = ArgAttributes::new();
+                adjust_for_rust_scalar(&mut attrs, scalar, *layout, offset, is_return);
+                attrs
+            });
+
             if arg.layout.is_zst() {
                 // For some forsaken reason, x86_64-pc-windows-gnu
                 // doesn't ignore zero-sized struct arguments.
@@ -2686,30 +2822,6 @@ where
                         && !linux_powerpc_gnu_like)
                 {
                     arg.mode = PassMode::Ignore;
-                }
-            }
-
-            // FIXME(eddyb) other ABIs don't have logic for scalar pairs.
-            if !is_return && rust_abi {
-                if let Abi::ScalarPair(ref a, ref b) = arg.layout.abi {
-                    let mut a_attrs = ArgAttributes::new();
-                    let mut b_attrs = ArgAttributes::new();
-                    adjust_for_rust_scalar(&mut a_attrs, a, arg.layout, Size::ZERO, false);
-                    adjust_for_rust_scalar(
-                        &mut b_attrs,
-                        b,
-                        arg.layout,
-                        a.value.size(cx).align_to(b.value.align(cx).abi),
-                        false,
-                    );
-                    arg.mode = PassMode::Pair(a_attrs, b_attrs);
-                    return arg;
-                }
-            }
-
-            if let Abi::Scalar(ref scalar) = arg.layout.abi {
-                if let PassMode::Direct(ref mut attrs) = arg.mode {
-                    adjust_for_rust_scalar(attrs, scalar, arg.layout, Size::ZERO, is_return);
                 }
             }
 
@@ -2729,7 +2841,12 @@ where
             c_variadic: sig.c_variadic,
             fixed_count: inputs.len(),
             conv,
-            can_unwind: fn_can_unwind(cx.tcx().sess.panic_strategy(), codegen_fn_attr_flags, conv),
+            can_unwind: fn_can_unwind(
+                cx.tcx().sess.panic_strategy(),
+                codegen_fn_attr_flags,
+                conv,
+                sig.abi,
+            ),
         };
         fn_abi.adjust_for_abi(cx, sig.abi);
         debug!("FnAbi::new_internal = {:?}", fn_abi);
@@ -2746,7 +2863,7 @@ where
             || abi == SpecAbi::RustIntrinsic
             || abi == SpecAbi::PlatformIntrinsic
         {
-            let fixup = |arg: &mut ArgAbi<'tcx, Ty<'tcx>>, is_ret: bool| {
+            let fixup = |arg: &mut ArgAbi<'tcx, Ty<'tcx>>| {
                 if arg.is_ignore() {
                     return;
                 }
@@ -2775,7 +2892,7 @@ where
                     // anyway, we control all calls to it in libstd.
                     Abi::Vector { .. }
                         if abi != SpecAbi::PlatformIntrinsic
-                            && cx.tcx().sess.target.options.simd_types_indirect =>
+                            && cx.tcx().sess.target.simd_types_indirect =>
                     {
                         arg.make_indirect();
                         return;
@@ -2784,9 +2901,9 @@ where
                     _ => return,
                 }
 
-                // Return structures up to 2 pointers in size by value, matching `ScalarPair`. LLVM
-                // will usually return these in 2 registers, which is more efficient than by-ref.
-                let max_by_val_size = if is_ret { Pointer.size(cx) * 2 } else { Pointer.size(cx) };
+                // Pass and return structures up to 2 pointers in size by value, matching `ScalarPair`.
+                // LLVM will usually pass these in 2 registers, which is more efficient than by-ref.
+                let max_by_val_size = Pointer.size(cx) * 2;
                 let size = arg.layout.size;
 
                 if arg.layout.is_unsized() || size > max_by_val_size {
@@ -2798,12 +2915,9 @@ where
                     arg.cast_to(Reg { kind: RegKind::Integer, size });
                 }
             };
-            fixup(&mut self.ret, true);
+            fixup(&mut self.ret);
             for arg in &mut self.args {
-                fixup(arg, false);
-            }
-            if let PassMode::Indirect(ref mut attrs, _) = self.ret.mode {
-                attrs.set(ArgAttribute::StructRet);
+                fixup(arg);
             }
             return;
         }
@@ -2812,4 +2926,53 @@ where
             cx.tcx().sess.fatal(&msg);
         }
     }
+}
+
+fn make_thin_self_ptr<'tcx, C>(cx: &C, mut layout: TyAndLayout<'tcx>) -> TyAndLayout<'tcx>
+where
+    C: LayoutOf<Ty = Ty<'tcx>, TyAndLayout = TyAndLayout<'tcx>>
+        + HasTyCtxt<'tcx>
+        + HasParamEnv<'tcx>,
+{
+    let fat_pointer_ty = if layout.is_unsized() {
+        // unsized `self` is passed as a pointer to `self`
+        // FIXME (mikeyhew) change this to use &own if it is ever added to the language
+        cx.tcx().mk_mut_ptr(layout.ty)
+    } else {
+        match layout.abi {
+            Abi::ScalarPair(..) => (),
+            _ => bug!("receiver type has unsupported layout: {:?}", layout),
+        }
+
+        // In the case of Rc<Self>, we need to explicitly pass a *mut RcBox<Self>
+        // with a Scalar (not ScalarPair) ABI. This is a hack that is understood
+        // elsewhere in the compiler as a method on a `dyn Trait`.
+        // To get the type `*mut RcBox<Self>`, we just keep unwrapping newtypes until we
+        // get a built-in pointer type
+        let mut fat_pointer_layout = layout;
+        'descend_newtypes: while !fat_pointer_layout.ty.is_unsafe_ptr()
+            && !fat_pointer_layout.ty.is_region_ptr()
+        {
+            for i in 0..fat_pointer_layout.fields.count() {
+                let field_layout = fat_pointer_layout.field(cx, i);
+
+                if !field_layout.is_zst() {
+                    fat_pointer_layout = field_layout;
+                    continue 'descend_newtypes;
+                }
+            }
+
+            bug!("receiver has no non-zero-sized fields {:?}", fat_pointer_layout);
+        }
+
+        fat_pointer_layout.ty
+    };
+
+    // we now have a type like `*mut RcBox<dyn Trait>`
+    // change its layout to that of `*mut ()`, a thin pointer, but keep the same type
+    // this is understood as a special case elsewhere in the compiler
+    let unit_pointer_ty = cx.tcx().mk_mut_ptr(cx.tcx().mk_unit());
+    layout = cx.layout_of(unit_pointer_ty);
+    layout.ty = fat_pointer_ty;
+    layout
 }

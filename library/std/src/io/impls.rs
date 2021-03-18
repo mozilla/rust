@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests;
 
+use crate::alloc::Allocator;
 use crate::cmp;
 use crate::fmt;
 use crate::io::{
@@ -209,20 +210,6 @@ impl<B: BufRead + ?Sized> BufRead for Box<B> {
     }
 }
 
-// Used by panicking::default_hook
-#[cfg(test)]
-/// This impl is only used by printing logic, so any error returned is always
-/// of kind `Other`, and should be ignored.
-impl Write for dyn ::realstd::io::LocalOutput {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        (*self).write(buf).map_err(|_| ErrorKind::Other.into())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        (*self).flush().map_err(|_| ErrorKind::Other.into())
-    }
-}
-
 // =============================================================================
 // In-memory buffer implementations
 
@@ -320,6 +307,10 @@ impl BufRead for &[u8] {
 ///
 /// Note that writing updates the slice to point to the yet unwritten part.
 /// The slice will be empty when it has been completely overwritten.
+///
+/// If the number of bytes to be written exceeds the size of the slice, write operations will
+/// return short writes: ultimately, `Ok(0)`; in this situation, `write_all` returns an error of
+/// kind `ErrorKind::WriteZero`.
 #[stable(feature = "rust1", since = "1.0.0")]
 impl Write for &mut [u8] {
     #[inline]
@@ -367,7 +358,7 @@ impl Write for &mut [u8] {
 /// Write is implemented for `Vec<u8>` by appending to the vector.
 /// The vector will grow as needed.
 #[stable(feature = "rust1", since = "1.0.0")]
-impl Write for Vec<u8> {
+impl<A: Allocator> Write for Vec<u8, A> {
     #[inline]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.extend_from_slice(buf);

@@ -28,7 +28,7 @@ pub trait InferCtxtExt<'tcx> {
         span: Span,
         body_id: hir::HirId,
         param_env: ty::ParamEnv<'tcx>,
-        value: &T,
+        value: T,
     ) -> InferOk<'tcx, T>
     where
         T: TypeFoldable<'tcx>;
@@ -41,7 +41,7 @@ impl<'cx, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'cx, 'tcx> {
         ty: Ty<'tcx>,
         span: Span,
     ) -> bool {
-        let ty = self.resolve_vars_if_possible(&ty);
+        let ty = self.resolve_vars_if_possible(ty);
 
         if !(param_env, ty).needs_infer() {
             return ty.is_copy_modulo_regions(self.tcx.at(span), param_env);
@@ -63,7 +63,7 @@ impl<'cx, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'cx, 'tcx> {
         span: Span,
         body_id: hir::HirId,
         param_env: ty::ParamEnv<'tcx>,
-        value: &T,
+        value: T,
     ) -> InferOk<'tcx, T>
     where
         T: TypeFoldable<'tcx>,
@@ -124,7 +124,7 @@ impl<'tcx> InferCtxtBuilderExt<'tcx> for InferCtxtBuilder<'tcx> {
             DUMMY_SP,
             canonical_key,
             |ref infcx, key, canonical_inference_vars| {
-                let mut fulfill_cx = TraitEngine::new(infcx.tcx);
+                let mut fulfill_cx = <dyn TraitEngine<'_>>::new(infcx.tcx);
                 let value = operation(infcx, &mut *fulfill_cx, key)?;
                 infcx.make_canonicalized_query_response(
                     canonical_inference_vars,
@@ -162,7 +162,7 @@ impl<'tcx> OutlivesEnvironmentExt<'tcx> for OutlivesEnvironment<'tcx> {
     /// 'b` (and hence, transitively, that `T: 'a`). This method would
     /// add those assumptions into the outlives-environment.
     ///
-    /// Tests: `src/test/compile-fail/regions-free-region-ordering-*.rs`
+    /// Tests: `src/test/ui/regions/regions-free-region-ordering-*.rs`
     fn add_implied_bounds(
         &mut self,
         infcx: &InferCtxt<'a, 'tcx>,
@@ -173,7 +173,7 @@ impl<'tcx> OutlivesEnvironmentExt<'tcx> for OutlivesEnvironment<'tcx> {
         debug!("add_implied_bounds()");
 
         for &ty in fn_sig_tys {
-            let ty = infcx.resolve_vars_if_possible(&ty);
+            let ty = infcx.resolve_vars_if_possible(ty);
             debug!("add_implied_bounds: ty = {}", ty);
             let implied_bounds = infcx.implied_outlives_bounds(self.param_env, body_id, ty, span);
             self.add_outlives_bounds(Some(infcx), implied_bounds)

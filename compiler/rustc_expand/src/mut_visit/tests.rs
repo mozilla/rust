@@ -1,25 +1,25 @@
 use crate::tests::{matches_codepattern, string_to_crate};
 
 use rustc_ast as ast;
-use rustc_ast::mut_visit::{self, MutVisitor};
+use rustc_ast::mut_visit::MutVisitor;
 use rustc_ast_pretty::pprust;
 use rustc_span::symbol::Ident;
 use rustc_span::with_default_session_globals;
 
 // This version doesn't care about getting comments or doc-strings in.
-fn fake_print_crate(s: &mut pprust::State<'_>, krate: &ast::Crate) {
-    s.print_mod(&krate.module, &krate.attrs)
+fn print_crate_items(krate: &ast::Crate) -> String {
+    krate.items.iter().map(|i| pprust::item_to_string(i)).collect::<Vec<_>>().join(" ")
 }
 
 // Change every identifier to "zz".
 struct ToZzIdentMutVisitor;
 
 impl MutVisitor for ToZzIdentMutVisitor {
+    fn token_visiting_enabled(&self) -> bool {
+        true
+    }
     fn visit_ident(&mut self, ident: &mut Ident) {
         *ident = Ident::from_str("zz");
-    }
-    fn visit_mac(&mut self, mac: &mut ast::MacCall) {
-        mut_visit::noop_visit_mac(mac, self)
     }
 }
 
@@ -46,7 +46,7 @@ fn ident_transformation() {
         assert_pred!(
             matches_codepattern,
             "matches_codepattern",
-            pprust::to_string(|s| fake_print_crate(s, &krate)),
+            print_crate_items(&krate),
             "#[zz]mod zz{fn zz(zz:zz,zz:zz){zz!(zz,zz,zz);zz;zz}}".to_string()
         );
     })
@@ -66,7 +66,7 @@ fn ident_transformation_in_defs() {
         assert_pred!(
             matches_codepattern,
             "matches_codepattern",
-            pprust::to_string(|s| fake_print_crate(s, &krate)),
+            print_crate_items(&krate),
             "macro_rules! zz{(zz$zz:zz$(zz $zz:zz)zz+=>(zz$(zz$zz$zz)+))}".to_string()
         );
     })

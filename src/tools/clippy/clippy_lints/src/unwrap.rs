@@ -1,6 +1,5 @@
 use crate::utils::{
-    differing_macro_contexts, higher::if_block, is_type_diagnostic_item, span_lint_and_then,
-    usage::is_potentially_mutated,
+    differing_macro_contexts, is_type_diagnostic_item, span_lint_and_then, usage::is_potentially_mutated,
 };
 use if_chain::if_chain;
 use rustc_hir::intravisit::{walk_expr, walk_fn, FnKind, NestedVisitorMap, Visitor};
@@ -11,6 +10,7 @@ use rustc_middle::lint::in_external_macro;
 use rustc_middle::ty::Ty;
 use rustc_session::{declare_lint_pass, declare_tool_lint};
 use rustc_span::source_map::Span;
+use rustc_span::sym;
 
 declare_clippy_lint! {
     /// **What it does:** Checks for calls of `unwrap[_err]()` that cannot fail.
@@ -92,11 +92,11 @@ fn collect_unwrap_info<'tcx>(
     invert: bool,
 ) -> Vec<UnwrapInfo<'tcx>> {
     fn is_relevant_option_call(cx: &LateContext<'_>, ty: Ty<'_>, method_name: &str) -> bool {
-        is_type_diagnostic_item(cx, ty, sym!(option_type)) && ["is_some", "is_none"].contains(&method_name)
+        is_type_diagnostic_item(cx, ty, sym::option_type) && ["is_some", "is_none"].contains(&method_name)
     }
 
     fn is_relevant_result_call(cx: &LateContext<'_>, ty: Ty<'_>, method_name: &str) -> bool {
-        is_type_diagnostic_item(cx, ty, sym!(result_type)) && ["is_ok", "is_err"].contains(&method_name)
+        is_type_diagnostic_item(cx, ty, sym::result_type) && ["is_ok", "is_err"].contains(&method_name)
     }
 
     if let ExprKind::Binary(op, left, right) = &expr.kind {
@@ -108,7 +108,7 @@ fn collect_unwrap_info<'tcx>(
             },
             _ => (),
         }
-    } else if let ExprKind::Unary(UnOp::UnNot, expr) = &expr.kind {
+    } else if let ExprKind::Unary(UnOp::Not, expr) = &expr.kind {
         return collect_unwrap_info(cx, expr, branch, !invert);
     } else {
         if_chain! {
@@ -157,7 +157,7 @@ impl<'a, 'tcx> Visitor<'tcx> for UnwrappableVariablesVisitor<'a, 'tcx> {
         if in_external_macro(self.cx.tcx.sess, expr.span) {
             return;
         }
-        if let Some((cond, then, els)) = if_block(&expr) {
+        if let ExprKind::If(cond, then, els) = &expr.kind {
             walk_expr(self, cond);
             self.visit_branch(cond, then, false);
             if let Some(els) = els {
@@ -168,8 +168,8 @@ impl<'a, 'tcx> Visitor<'tcx> for UnwrappableVariablesVisitor<'a, 'tcx> {
             if_chain! {
                 if let ExprKind::MethodCall(ref method_name, _, ref args, _) = expr.kind;
                 if let ExprKind::Path(QPath::Resolved(None, ref path)) = args[0].kind;
-                if [sym!(unwrap), sym!(unwrap_err)].contains(&method_name.ident.name);
-                let call_to_unwrap = method_name.ident.name == sym!(unwrap);
+                if [sym::unwrap, sym!(unwrap_err)].contains(&method_name.ident.name);
+                let call_to_unwrap = method_name.ident.name == sym::unwrap;
                 if let Some(unwrappable) = self.unwrappables.iter()
                     .find(|u| u.ident.res == path.res);
                 // Span contexts should not differ with the conditional branch

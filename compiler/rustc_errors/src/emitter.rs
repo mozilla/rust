@@ -9,14 +9,15 @@
 
 use Destination::*;
 
+use rustc_lint_defs::FutureBreakage;
 use rustc_span::source_map::SourceMap;
 use rustc_span::{MultiSpan, SourceFile, Span};
 
 use crate::snippet::{Annotation, AnnotationType, Line, MultilineAnnotation, Style, StyledString};
 use crate::styled_buffer::StyledBuffer;
-use crate::{
-    pluralize, CodeSuggestion, Diagnostic, DiagnosticId, Level, SubDiagnostic, SuggestionStyle,
-};
+use crate::{CodeSuggestion, Diagnostic, DiagnosticId, Level, SubDiagnostic, SuggestionStyle};
+
+use rustc_lint_defs::pluralize;
 
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::sync::Lrc;
@@ -192,9 +193,16 @@ pub trait Emitter {
     /// other formats can, and will, simply ignore it.
     fn emit_artifact_notification(&mut self, _path: &Path, _artifact_type: &str) {}
 
+    fn emit_future_breakage_report(&mut self, _diags: Vec<(FutureBreakage, Diagnostic)>) {}
+
     /// Checks if should show explanations about "rustc --explain"
     fn should_show_explain(&self) -> bool {
         true
+    }
+
+    /// Checks if we can use colors in the current output stream.
+    fn supports_color(&self) -> bool {
+        false
     }
 
     fn source_map(&self) -> Option<&Lrc<SourceMap>>;
@@ -296,7 +304,7 @@ pub trait Emitter {
 
                     // Skip past non-macro entries, just in case there
                     // are some which do actually involve macros.
-                    ExpnKind::Desugaring(..) | ExpnKind::AstPass(..) => None,
+                    ExpnKind::Inlined | ExpnKind::Desugaring(..) | ExpnKind::AstPass(..) => None,
 
                     ExpnKind::Macro(macro_kind, _) => Some(macro_kind),
                 }
@@ -356,7 +364,10 @@ pub trait Emitter {
                     continue;
                 }
 
-                if always_backtrace {
+                if matches!(trace.kind, ExpnKind::Inlined) {
+                    new_labels
+                        .push((trace.call_site, "in the inlined copy of this code".to_string()));
+                } else if always_backtrace {
                     new_labels.push((
                         trace.def_site,
                         format!(
@@ -498,6 +509,10 @@ impl Emitter for EmitterWriter {
     fn should_show_explain(&self) -> bool {
         !self.short_message
     }
+
+    fn supports_color(&self) -> bool {
+        self.dst.supports_color()
+    }
 }
 
 /// An emitter that does nothing when emitting a diagnostic.
@@ -513,7 +528,7 @@ impl Emitter for SilentEmitter {
 /// Maximum number of lines we will print for a multiline suggestion; arbitrary.
 ///
 /// This should be replaced with a more involved mechanism to output multiline suggestions that
-/// more closely mimmics the regular diagnostic output, where irrelevant code lines are elided.
+/// more closely mimics the regular diagnostic output, where irrelevant code lines are elided.
 pub const MAX_SUGGESTION_HIGHLIGHT_LINES: usize = 6;
 /// Maximum number of suggestions to be shown
 ///
@@ -629,6 +644,8 @@ impl EmitterWriter {
         code_offset: usize,
         margin: Margin,
     ) {
+        // Tabs are assumed to have been replaced by spaces in calling code.
+        debug_assert!(!source_string.contains('\t'));
         let line_len = source_string.len();
         // Create the source line we will highlight.
         let left = margin.left(line_len);
@@ -692,7 +709,7 @@ impl EmitterWriter {
         }
 
         let source_string = match file.get_line(line.line_index - 1) {
-            Some(s) => s,
+            Some(s) => replace_tabs(&*s),
             None => return Vec::new(),
         };
 
@@ -887,7 +904,7 @@ impl EmitterWriter {
                                                      // or the next are vertical line placeholders.
                         || (annotation.takes_space() // If either this or the next annotation is
                             && next.has_label())     // multiline start/end, move it to a new line
-                        || (annotation.has_label()   // so as not to overlap the orizontal lines.
+                        || (annotation.has_label()   // so as not to overlap the horizontal lines.
                             && next.takes_space())
                         || (annotation.takes_space() && next.takes_space())
                         || (overlaps(next, annotation, l)
@@ -1361,8 +1378,17 @@ impl EmitterWriter {
                     let file = annotated_file.file.clone();
                     let line = &annotated_file.lines[line_idx];
                     if let Some(source_string) = file.get_line(line.line_index - 1) {
-                        let leading_whitespace =
-                            source_string.chars().take_while(|c| c.is_whitespace()).count();
+                        let leading_whitespace = source_string
+                            .chars()
+                            .take_while(|c| c.is_whitespace())
+                            .map(|c| {
+                                match c {
+                                    // Tabs are displayed as 4 spaces
+                                    '\t' => 4,
+                                    _ => 1,
+                                }
+                            })
+                            .sum();
                         if source_string.chars().any(|c| !c.is_whitespace()) {
                             whitespace_margin = min(whitespace_margin, leading_whitespace);
                         }
@@ -1487,7 +1513,7 @@ impl EmitterWriter {
 
                             self.draw_line(
                                 &mut buffer,
-                                &unannotated_line,
+                                &replace_tabs(&unannotated_line),
                                 annotated_file.lines[line_idx + 1].line_index - 1,
                                 last_buffer_line_num,
                                 width_offset,
@@ -1583,7 +1609,7 @@ impl EmitterWriter {
                 );
                 // print the suggestion
                 draw_col_separator(&mut buffer, row_num, max_line_num_len + 1);
-                buffer.append(row_num, line, Style::NoStyle);
+                buffer.append(row_num, &replace_tabs(line), Style::NoStyle);
                 row_num += 1;
             }
 
@@ -1687,7 +1713,8 @@ impl EmitterWriter {
         let max_line_num_len = if self.ui_testing {
             ANONYMIZED_LINE_NUM.len()
         } else {
-            self.get_max_line_num(span, children).to_string().len()
+            let n = self.get_max_line_num(span, children);
+            num_decimal_digits(n)
         };
 
         match self.emit_message_default(span, message, code, level, max_line_num_len, false) {
@@ -1915,6 +1942,34 @@ impl FileWithAnnotatedLines {
     }
 }
 
+// instead of taking the String length or dividing by 10 while > 0, we multiply a limit by 10 until
+// we're higher. If the loop isn't exited by the `return`, the last multiplication will wrap, which
+// is OK, because while we cannot fit a higher power of 10 in a usize, the loop will end anyway.
+// This is also why we need the max number of decimal digits within a `usize`.
+fn num_decimal_digits(num: usize) -> usize {
+    #[cfg(target_pointer_width = "64")]
+    const MAX_DIGITS: usize = 20;
+
+    #[cfg(target_pointer_width = "32")]
+    const MAX_DIGITS: usize = 10;
+
+    #[cfg(target_pointer_width = "16")]
+    const MAX_DIGITS: usize = 5;
+
+    let mut lim = 10;
+    for num_digits in 1..MAX_DIGITS {
+        if num < lim {
+            return num_digits;
+        }
+        lim = lim.wrapping_mul(10);
+    }
+    MAX_DIGITS
+}
+
+fn replace_tabs(str: &str) -> String {
+    str.replace('\t', "    ")
+}
+
 fn draw_col_separator(buffer: &mut StyledBuffer, line: usize, col: usize) {
     buffer.puts(line, col, "| ", Style::LineNumber);
 }
@@ -2049,6 +2104,14 @@ impl Destination {
             }
             Destination::Raw(ref mut t, false) => WritableDst::Raw(t),
             Destination::Raw(ref mut t, true) => WritableDst::ColoredRaw(Ansi::new(t)),
+        }
+    }
+
+    fn supports_color(&self) -> bool {
+        match *self {
+            Self::Terminal(ref stream) => stream.supports_color(),
+            Self::Buffered(ref buffer) => buffer.buffer().supports_color(),
+            Self::Raw(_, supports_color) => supports_color,
         }
     }
 }

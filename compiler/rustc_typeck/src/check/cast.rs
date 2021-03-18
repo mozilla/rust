@@ -32,7 +32,6 @@ use super::FnCtxt;
 
 use crate::hir::def_id::DefId;
 use crate::type_error_struct;
-use rustc_ast as ast;
 use rustc_errors::{struct_span_err, Applicability, DiagnosticBuilder, ErrorReported};
 use rustc_hir as hir;
 use rustc_hir::lang_items::LangItem;
@@ -87,7 +86,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     ) -> Result<Option<PointerKind<'tcx>>, ErrorReported> {
         debug!("pointer_kind({:?}, {:?})", t, span);
 
-        let t = self.resolve_vars_if_possible(&t);
+        let t = self.resolve_vars_if_possible(t);
 
         if t.references_error() {
             return Err(ErrorReported);
@@ -377,12 +376,12 @@ impl<'a, 'tcx> CastCheck<'tcx> {
                     // Check `impl From<self.expr_ty> for self.cast_ty {}` for accurate suggestion:
                     if let Ok(snippet) = fcx.tcx.sess.source_map().span_to_snippet(self.expr.span) {
                         if let Some(from_trait) = fcx.tcx.get_diagnostic_item(sym::from_trait) {
-                            let ty = fcx.resolve_vars_if_possible(&self.cast_ty);
+                            let ty = fcx.resolve_vars_if_possible(self.cast_ty);
                             // Erase regions to avoid panic in `prove_value` when calling
                             // `type_implements_trait`.
-                            let ty = fcx.tcx.erase_regions(&ty);
-                            let expr_ty = fcx.resolve_vars_if_possible(&self.expr_ty);
-                            let expr_ty = fcx.tcx.erase_regions(&expr_ty);
+                            let ty = fcx.tcx.erase_regions(ty);
+                            let expr_ty = fcx.resolve_vars_if_possible(self.expr_ty);
+                            let expr_ty = fcx.tcx.erase_regions(expr_ty);
                             let ty_params = fcx.tcx.mk_substs_trait(expr_ty, &[]);
                             // Check for infer types because cases like `Option<{integer}>` would
                             // panic otherwise.
@@ -418,13 +417,14 @@ impl<'a, 'tcx> CastCheck<'tcx> {
                 err.emit();
             }
             CastError::SizedUnsizedCast => {
-                use crate::structured_errors::{SizedUnsizedCastError, StructuredDiagnostic};
-                SizedUnsizedCastError::new(
-                    &fcx.tcx.sess,
-                    self.span,
-                    self.expr_ty,
-                    fcx.ty_to_string(self.cast_ty),
-                )
+                use crate::structured_errors::{SizedUnsizedCast, StructuredDiagnostic};
+
+                SizedUnsizedCast {
+                    sess: &fcx.tcx.sess,
+                    span: self.span,
+                    expr_ty: self.expr_ty,
+                    cast_ty: fcx.ty_to_string(self.cast_ty),
+                }
                 .diagnostic()
                 .emit();
             }
@@ -471,7 +471,7 @@ impl<'a, 'tcx> CastCheck<'tcx> {
             self.expr_ty,
             E0620,
             "cast to unsized type: `{}` as `{}`",
-            fcx.resolve_vars_if_possible(&self.expr_ty),
+            fcx.resolve_vars_if_possible(self.expr_ty),
             tstr
         );
         match self.expr_ty.kind() {
@@ -607,7 +607,7 @@ impl<'a, 'tcx> CastCheck<'tcx> {
                         // Attempt a coercion to a fn pointer type.
                         let f = fcx.normalize_associated_types_in(
                             self.expr.span,
-                            &self.expr_ty.fn_sig(fcx.tcx),
+                            self.expr_ty.fn_sig(fcx.tcx),
                         );
                         let res = fcx.try_coerce(
                             self.expr,
@@ -659,7 +659,7 @@ impl<'a, 'tcx> CastCheck<'tcx> {
             (_, Int(Bool)) => Err(CastError::CastToBool),
 
             // * -> Char
-            (Int(U(ast::UintTy::U8)), Int(Char)) => Ok(CastKind::U8CharCast), // u8-char-cast
+            (Int(U(ty::UintTy::U8)), Int(Char)) => Ok(CastKind::U8CharCast), // u8-char-cast
             (_, Int(Char)) => Err(CastError::CastToChar),
 
             // prim -> float,ptr
@@ -765,9 +765,8 @@ impl<'a, 'tcx> CastCheck<'tcx> {
         m_expr: ty::TypeAndMut<'tcx>,
         m_cast: ty::TypeAndMut<'tcx>,
     ) -> Result<CastKind, CastError> {
-        // array-ptr-cast.
-
-        if m_expr.mutbl == hir::Mutability::Not && m_cast.mutbl == hir::Mutability::Not {
+        // array-ptr-cast: allow mut-to-mut, mut-to-const, const-to-const
+        if m_expr.mutbl == hir::Mutability::Mut || m_cast.mutbl == hir::Mutability::Not {
             if let ty::Array(ety, _) = m_expr.ty.kind() {
                 // Due to the limitations of LLVM global constants,
                 // region pointers end up pointing at copies of

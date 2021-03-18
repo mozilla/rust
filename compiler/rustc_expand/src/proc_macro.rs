@@ -1,14 +1,14 @@
 use crate::base::{self, *};
 use crate::proc_macro_server;
 
+use rustc_ast as ast;
+use rustc_ast::ptr::P;
 use rustc_ast::token;
-use rustc_ast::tokenstream::{TokenStream, TokenTree};
-use rustc_ast::{self as ast, *};
+use rustc_ast::tokenstream::{CanSynthesizeMissingTokens, TokenStream, TokenTree};
 use rustc_data_structures::sync::Lrc;
-use rustc_errors::{struct_span_err, Applicability, ErrorReported};
-use rustc_lexer::is_ident;
+use rustc_errors::ErrorReported;
 use rustc_parse::nt_to_tokenstream;
-use rustc_span::symbol::sym;
+use rustc_parse::parser::ForceCollect;
 use rustc_span::{Span, DUMMY_SP};
 
 const EXEC_STRATEGY: pm::bridge::server::SameThread = pm::bridge::server::SameThread;
@@ -74,43 +74,27 @@ impl MultiItemModifier for ProcMacroDerive {
         _meta_item: &ast::MetaItem,
         item: Annotatable,
     ) -> ExpandResult<Vec<Annotatable>, Annotatable> {
+        // We need special handling for statement items
+        // (e.g. `fn foo() { #[derive(Debug)] struct Bar; }`)
+        let mut is_stmt = false;
         let item = match item {
-            Annotatable::Arm(..)
-            | Annotatable::Field(..)
-            | Annotatable::FieldPat(..)
-            | Annotatable::GenericParam(..)
-            | Annotatable::Param(..)
-            | Annotatable::StructField(..)
-            | Annotatable::Variant(..) => panic!("unexpected annotatable"),
-            Annotatable::Item(item) => item,
-            Annotatable::ImplItem(_)
-            | Annotatable::TraitItem(_)
-            | Annotatable::ForeignItem(_)
-            | Annotatable::Stmt(_)
-            | Annotatable::Expr(_) => {
-                ecx.span_err(
-                    span,
-                    "proc-macro derives may only be applied to a struct, enum, or union",
-                );
-                return ExpandResult::Ready(Vec::new());
-            }
-        };
-        match item.kind {
-            ItemKind::Struct(..) | ItemKind::Enum(..) | ItemKind::Union(..) => {}
-            _ => {
-                ecx.span_err(
-                    span,
-                    "proc-macro derives may only be applied to a struct, enum, or union",
-                );
-                return ExpandResult::Ready(Vec::new());
-            }
-        }
+            Annotatable::Item(item) => token::NtItem(item),
+            Annotatable::Stmt(stmt) => {
+                is_stmt = true;
+                assert!(stmt.is_item());
 
-        let item = token::NtItem(item);
-        let input = if item.pretty_printing_compatibility_hack() {
+                // A proc macro can't observe the fact that we're passing
+                // them an `NtStmt` - it can only see the underlying tokens
+                // of the wrapped item
+                token::NtStmt(stmt.into_inner())
+            }
+            _ => unreachable!(),
+        };
+        let input = if crate::base::pretty_printing_compatibility_hack(&item, &ecx.sess.parse_sess)
+        {
             TokenTree::token(token::Interpolated(Lrc::new(item)), DUMMY_SP).into()
         } else {
-            nt_to_tokenstream(&item, &ecx.sess.parse_sess, DUMMY_SP)
+            nt_to_tokenstream(&item, &ecx.sess.parse_sess, CanSynthesizeMissingTokens::Yes)
         };
 
         let server = proc_macro_server::Rustc::new(ecx);
@@ -133,9 +117,15 @@ impl MultiItemModifier for ProcMacroDerive {
         let mut items = vec![];
 
         loop {
-            match parser.parse_item() {
+            match parser.parse_item(ForceCollect::No) {
                 Ok(None) => break,
-                Ok(Some(item)) => items.push(Annotatable::Item(item)),
+                Ok(Some(item)) => {
+                    if is_stmt {
+                        items.push(Annotatable::Stmt(P(ecx.stmt_item(span, item))));
+                    } else {
+                        items.push(Annotatable::Item(item));
+                    }
+                }
                 Err(mut err) => {
                     err.emit();
                     break;
@@ -150,92 +140,4 @@ impl MultiItemModifier for ProcMacroDerive {
 
         ExpandResult::Ready(items)
     }
-}
-
-crate fn collect_derives(cx: &mut ExtCtxt<'_>, attrs: &mut Vec<ast::Attribute>) -> Vec<ast::Path> {
-    let mut result = Vec::new();
-    attrs.retain(|attr| {
-        if !attr.has_name(sym::derive) {
-            return true;
-        }
-
-        // 1) First let's ensure that it's a meta item.
-        let nmis = match attr.meta_item_list() {
-            None => {
-                cx.struct_span_err(attr.span, "malformed `derive` attribute input")
-                    .span_suggestion(
-                        attr.span,
-                        "missing traits to be derived",
-                        "#[derive(Trait1, Trait2, ...)]".to_owned(),
-                        Applicability::HasPlaceholders,
-                    )
-                    .emit();
-                return false;
-            }
-            Some(x) => x,
-        };
-
-        let mut error_reported_filter_map = false;
-        let mut error_reported_map = false;
-        let traits = nmis
-            .into_iter()
-            // 2) Moreover, let's ensure we have a path and not `#[derive("foo")]`.
-            .filter_map(|nmi| match nmi {
-                NestedMetaItem::Literal(lit) => {
-                    error_reported_filter_map = true;
-                    let mut err = struct_span_err!(
-                        cx.sess,
-                        lit.span,
-                        E0777,
-                        "expected path to a trait, found literal",
-                    );
-                    let token = lit.token.to_string();
-                    if token.starts_with('"')
-                        && token.len() > 2
-                        && is_ident(&token[1..token.len() - 1])
-                    {
-                        err.help(&format!("try using `#[derive({})]`", &token[1..token.len() - 1]));
-                    } else {
-                        err.help("for example, write `#[derive(Debug)]` for `Debug`");
-                    }
-                    err.emit();
-                    None
-                }
-                NestedMetaItem::MetaItem(mi) => Some(mi),
-            })
-            // 3) Finally, we only accept `#[derive($path_0, $path_1, ..)]`
-            // but not e.g. `#[derive($path_0 = "value", $path_1(abc))]`.
-            // In this case we can still at least determine that the user
-            // wanted this trait to be derived, so let's keep it.
-            .map(|mi| {
-                let mut traits_dont_accept = |title, action| {
-                    error_reported_map = true;
-                    let sp = mi.span.with_lo(mi.path.span.hi());
-                    cx.struct_span_err(sp, title)
-                        .span_suggestion(
-                            sp,
-                            action,
-                            String::new(),
-                            Applicability::MachineApplicable,
-                        )
-                        .emit();
-                };
-                match &mi.kind {
-                    MetaItemKind::List(..) => traits_dont_accept(
-                        "traits in `#[derive(...)]` don't accept arguments",
-                        "remove the arguments",
-                    ),
-                    MetaItemKind::NameValue(..) => traits_dont_accept(
-                        "traits in `#[derive(...)]` don't accept values",
-                        "remove the value",
-                    ),
-                    MetaItemKind::Word => {}
-                }
-                mi.path
-            });
-
-        result.extend(traits);
-        !error_reported_filter_map && !error_reported_map
-    });
-    result
 }

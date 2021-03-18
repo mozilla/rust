@@ -5,15 +5,18 @@ use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_errors::{DiagnosticBuilder, DiagnosticId};
 use rustc_hir::HirId;
-use rustc_session::lint::{builtin, Level, Lint, LintId};
+use rustc_session::lint::{
+    builtin::{self, FORBIDDEN_LINT_GROUPS},
+    Level, Lint, LintId,
+};
 use rustc_session::{DiagnosticMessageId, Session};
 use rustc_span::hygiene::MacroKind;
 use rustc_span::source_map::{DesugaringKind, ExpnKind, MultiSpan};
 use rustc_span::{symbol, Span, Symbol, DUMMY_SP};
 
 /// How a lint level was set.
-#[derive(Clone, Copy, PartialEq, Eq, HashStable)]
-pub enum LintSource {
+#[derive(Clone, Copy, PartialEq, Eq, HashStable, Debug)]
+pub enum LintLevelSource {
     /// Lint is at the default level as declared
     /// in rustc or a plugin.
     Default,
@@ -22,43 +25,48 @@ pub enum LintSource {
     Node(Symbol, Span, Option<Symbol> /* RFC 2383 reason */),
 
     /// Lint level was set by a command-line flag.
-    CommandLine(Symbol),
+    /// The provided `Level` is the level specified on the command line.
+    /// (The actual level may be lower due to `--cap-lints`.)
+    CommandLine(Symbol, Level),
 }
 
-impl LintSource {
+impl LintLevelSource {
     pub fn name(&self) -> Symbol {
         match *self {
-            LintSource::Default => symbol::kw::Default,
-            LintSource::Node(name, _, _) => name,
-            LintSource::CommandLine(name) => name,
+            LintLevelSource::Default => symbol::kw::Default,
+            LintLevelSource::Node(name, _, _) => name,
+            LintLevelSource::CommandLine(name, _) => name,
         }
     }
 
     pub fn span(&self) -> Span {
         match *self {
-            LintSource::Default => DUMMY_SP,
-            LintSource::Node(_, span, _) => span,
-            LintSource::CommandLine(_) => DUMMY_SP,
+            LintLevelSource::Default => DUMMY_SP,
+            LintLevelSource::Node(_, span, _) => span,
+            LintLevelSource::CommandLine(_, _) => DUMMY_SP,
         }
     }
 }
 
-pub type LevelSource = (Level, LintSource);
+/// A tuple of a lint level and its source.
+pub type LevelAndSource = (Level, LintLevelSource);
 
+#[derive(Debug)]
 pub struct LintLevelSets {
     pub list: Vec<LintSet>,
     pub lint_cap: Level,
 }
 
+#[derive(Debug)]
 pub enum LintSet {
     CommandLine {
         // -A,-W,-D flags, a `Symbol` for the flag itself and `Level` for which
         // flag.
-        specs: FxHashMap<LintId, LevelSource>,
+        specs: FxHashMap<LintId, LevelAndSource>,
     },
 
     Node {
-        specs: FxHashMap<LintId, LevelSource>,
+        specs: FxHashMap<LintId, LevelAndSource>,
         parent: u32,
     },
 }
@@ -72,9 +80,9 @@ impl LintLevelSets {
         &self,
         lint: &'static Lint,
         idx: u32,
-        aux: Option<&FxHashMap<LintId, LevelSource>>,
+        aux: Option<&FxHashMap<LintId, LevelAndSource>>,
         sess: &Session,
-    ) -> LevelSource {
+    ) -> LevelAndSource {
         let (level, mut src) = self.get_lint_id_level(LintId::of(lint), idx, aux);
 
         // If `level` is none then we actually assume the default level for this
@@ -84,7 +92,12 @@ impl LintLevelSets {
         // If we're about to issue a warning, check at the last minute for any
         // directives against the warnings "lint". If, for example, there's an
         // `allow(warnings)` in scope then we want to respect that instead.
-        if level == Level::Warn {
+        //
+        // We exempt `FORBIDDEN_LINT_GROUPS` from this because it specifically
+        // triggers in cases (like #80988) where you have `forbid(warnings)`,
+        // and so if we turned that into an error, it'd defeat the purpose of the
+        // future compatibility warning.
+        if level == Level::Warn && LintId::of(lint) != LintId::of(FORBIDDEN_LINT_GROUPS) {
             let (warnings_level, warnings_src) =
                 self.get_lint_id_level(LintId::of(builtin::WARNINGS), idx, aux);
             if let Some(configured_warning_level) = warnings_level {
@@ -110,8 +123,8 @@ impl LintLevelSets {
         &self,
         id: LintId,
         mut idx: u32,
-        aux: Option<&FxHashMap<LintId, LevelSource>>,
-    ) -> (Option<Level>, LintSource) {
+        aux: Option<&FxHashMap<LintId, LevelAndSource>>,
+    ) -> (Option<Level>, LintLevelSource) {
         if let Some(specs) = aux {
             if let Some(&(level, src)) = specs.get(&id) {
                 return (Some(level), src);
@@ -123,7 +136,7 @@ impl LintLevelSets {
                     if let Some(&(level, src)) = specs.get(&id) {
                         return (Some(level), src);
                     }
-                    return (None, LintSource::Default);
+                    return (None, LintLevelSource::Default);
                 }
                 LintSet::Node { ref specs, parent } => {
                     if let Some(&(level, src)) = specs.get(&id) {
@@ -136,6 +149,7 @@ impl LintLevelSets {
     }
 }
 
+#[derive(Debug)]
 pub struct LintLevelMap {
     pub sets: LintLevelSets,
     pub id_to_set: FxHashMap<HirId, u32>,
@@ -154,7 +168,7 @@ impl LintLevelMap {
         lint: &'static Lint,
         id: HirId,
         session: &Session,
-    ) -> Option<LevelSource> {
+    ) -> Option<LevelAndSource> {
         self.id_to_set.get(&id).map(|idx| self.sets.get_lint_level(lint, *idx, None, session))
     }
 }
@@ -211,7 +225,7 @@ pub fn struct_lint_level<'s, 'd>(
     sess: &'s Session,
     lint: &'static Lint,
     level: Level,
-    src: LintSource,
+    src: LintLevelSource,
     span: Option<MultiSpan>,
     decorate: impl for<'a> FnOnce(LintDiagnosticBuilder<'a>) + 'd,
 ) {
@@ -221,23 +235,34 @@ pub fn struct_lint_level<'s, 'd>(
         sess: &'s Session,
         lint: &'static Lint,
         level: Level,
-        src: LintSource,
+        src: LintLevelSource,
         span: Option<MultiSpan>,
         decorate: Box<dyn for<'b> FnOnce(LintDiagnosticBuilder<'b>) + 'd>,
     ) {
+        // Check for future incompatibility lints and issue a stronger warning.
+        let lint_id = LintId::of(lint);
+        let future_incompatible = lint.future_incompatible;
+
+        let has_future_breakage =
+            future_incompatible.map_or(false, |incompat| incompat.future_breakage.is_some());
+
         let mut err = match (level, span) {
-            (Level::Allow, _) => {
-                return;
+            (Level::Allow, span) => {
+                if has_future_breakage {
+                    if let Some(span) = span {
+                        sess.struct_span_allow(span, "")
+                    } else {
+                        sess.struct_allow("")
+                    }
+                } else {
+                    return;
+                }
             }
             (Level::Warn, Some(span)) => sess.struct_span_warn(span, ""),
             (Level::Warn, None) => sess.struct_warn(""),
             (Level::Deny | Level::Forbid, Some(span)) => sess.struct_span_err(span, ""),
             (Level::Deny | Level::Forbid, None) => sess.struct_err(""),
         };
-
-        // Check for future incompatibility lints and issue a stronger warning.
-        let lint_id = LintId::of(lint);
-        let future_incompatible = lint.future_incompatible;
 
         // If this code originates in a foreign macro, aka something that this crate
         // did not itself author, then it's likely that there's nothing this crate
@@ -261,19 +286,19 @@ pub fn struct_lint_level<'s, 'd>(
 
         let name = lint.name_lower();
         match src {
-            LintSource::Default => {
+            LintLevelSource::Default => {
                 sess.diag_note_once(
                     &mut err,
                     DiagnosticMessageId::from(lint),
                     &format!("`#[{}({})]` on by default", level.as_str(), name),
                 );
             }
-            LintSource::CommandLine(lint_flag_val) => {
-                let flag = match level {
+            LintLevelSource::CommandLine(lint_flag_val, orig_level) => {
+                let flag = match orig_level {
                     Level::Warn => "-W",
                     Level::Deny => "-D",
                     Level::Forbid => "-F",
-                    Level::Allow => panic!(),
+                    Level::Allow => "-A",
                 };
                 let hyphen_case_lint_name = name.replace("_", "-");
                 if lint_flag_val.as_str() == name {
@@ -297,7 +322,7 @@ pub fn struct_lint_level<'s, 'd>(
                     );
                 }
             }
-            LintSource::Node(lint_attr_name, src, reason) => {
+            LintLevelSource::Node(lint_attr_name, src, reason) => {
                 if let Some(rationale) = reason {
                     err.note(&rationale.as_str());
                 }
@@ -321,19 +346,19 @@ pub fn struct_lint_level<'s, 'd>(
             }
         }
 
-        err.code(DiagnosticId::Lint(name));
+        err.code(DiagnosticId::Lint { name, has_future_breakage });
 
         if let Some(future_incompatible) = future_incompatible {
             const STANDARD_MESSAGE: &str = "this was previously accepted by the compiler but is being phased out; \
                  it will become a hard error";
 
             let explanation = if lint_id == LintId::of(builtin::UNSTABLE_NAME_COLLISIONS) {
-                "once this method is added to the standard library, \
-                 the ambiguity may cause an error or change in behavior!"
+                "once this associated item is added to the standard library, the ambiguity may \
+                 cause an error or change in behavior!"
                     .to_owned()
             } else if lint_id == LintId::of(builtin::MUTABLE_BORROW_RESERVATION_CONFLICT) {
-                "this borrowing pattern was not meant to be accepted, \
-                 and may become a hard error in the future"
+                "this borrowing pattern was not meant to be accepted, and may become a hard error \
+                 in the future"
                     .to_owned()
             } else if let Some(edition) = future_incompatible.edition {
                 format!("{} in the {} edition!", STANDARD_MESSAGE, edition)
@@ -358,7 +383,9 @@ pub fn struct_lint_level<'s, 'd>(
 pub fn in_external_macro(sess: &Session, span: Span) -> bool {
     let expn_data = span.ctxt().outer_expn_data();
     match expn_data.kind {
-        ExpnKind::Root | ExpnKind::Desugaring(DesugaringKind::ForLoop(_)) => false,
+        ExpnKind::Inlined | ExpnKind::Root | ExpnKind::Desugaring(DesugaringKind::ForLoop(_)) => {
+            false
+        }
         ExpnKind::AstPass(_) | ExpnKind::Desugaring(_) => true, // well, it's "external"
         ExpnKind::Macro(MacroKind::Bang, _) => {
             // Dummy span for the `def_site` means it's an external macro.

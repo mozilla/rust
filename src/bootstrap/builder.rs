@@ -19,7 +19,7 @@ use crate::compile;
 use crate::config::TargetSelection;
 use crate::dist;
 use crate::doc;
-use crate::flags::Subcommand;
+use crate::flags::{Color, Subcommand};
 use crate::install;
 use crate::native;
 use crate::run;
@@ -264,7 +264,7 @@ impl<'a> ShouldRun<'a> {
     /// `all_krates` should probably be removed at some point.
     pub fn all_krates(mut self, name: &str) -> Self {
         let mut set = BTreeSet::new();
-        for krate in self.builder.in_tree_crates(name) {
+        for krate in self.builder.in_tree_crates(name, None) {
             let path = krate.local_path(self.builder);
             set.insert(path);
         }
@@ -277,7 +277,7 @@ impl<'a> ShouldRun<'a> {
     ///
     /// `make_run` will be called separately for each matching command-line path.
     pub fn krate(mut self, name: &str) -> Self {
-        for krate in self.builder.in_tree_crates(name) {
+        for krate in self.builder.in_tree_crates(name, None) {
             let path = krate.local_path(self.builder);
             self.paths.insert(PathSet::one(path));
         }
@@ -371,7 +371,7 @@ impl<'a> Builder<'a> {
                 tool::CargoMiri,
                 native::Lld
             ),
-            Kind::Check | Kind::Clippy | Kind::Fix | Kind::Format => describe!(
+            Kind::Check | Kind::Clippy { .. } | Kind::Fix | Kind::Format => describe!(
                 check::Std,
                 check::Rustc,
                 check::Rustdoc,
@@ -384,7 +384,6 @@ impl<'a> Builder<'a> {
                 test::ExpandYamlAnchors,
                 test::Tidy,
                 test::Ui,
-                test::CompileFail,
                 test::RunPassValgrind,
                 test::MirOpt,
                 test::Codegen,
@@ -398,6 +397,7 @@ impl<'a> Builder<'a> {
                 test::Crate,
                 test::CrateLibrustc,
                 test::CrateRustdoc,
+                test::CrateRustdocJsonTypes,
                 test::Linkcheck,
                 test::TierCheck,
                 test::Cargotest,
@@ -413,6 +413,7 @@ impl<'a> Builder<'a> {
                 test::TheBook,
                 test::UnstableBook,
                 test::RustcBook,
+                test::LintDocs,
                 test::RustcGuide,
                 test::EmbeddedBook,
                 test::EditionGuide,
@@ -422,8 +423,10 @@ impl<'a> Builder<'a> {
                 test::CompiletestTest,
                 test::RustdocJSStd,
                 test::RustdocJSNotStd,
+                test::RustdocGUI,
                 test::RustdocTheme,
                 test::RustdocUi,
+                test::RustdocJson,
                 // Run bootstrap close to the end as it's unlikely to fail
                 test::Bootstrap,
                 // Run run-make last, since these won't pass without make on Windows
@@ -469,7 +472,7 @@ impl<'a> Builder<'a> {
                 dist::RustDev,
                 dist::Extended,
                 dist::BuildManifest,
-                dist::HashSign
+                dist::ReproducibleArtifacts,
             ),
             Kind::Install => describe!(
                 install::Docs,
@@ -540,7 +543,7 @@ impl<'a> Builder<'a> {
         let (kind, paths) = match build.config.cmd {
             Subcommand::Build { ref paths } => (Kind::Build, &paths[..]),
             Subcommand::Check { ref paths, all_targets: _ } => (Kind::Check, &paths[..]),
-            Subcommand::Clippy { ref paths } => (Kind::Clippy, &paths[..]),
+            Subcommand::Clippy { ref paths, .. } => (Kind::Clippy, &paths[..]),
             Subcommand::Fix { ref paths } => (Kind::Fix, &paths[..]),
             Subcommand::Doc { ref paths, .. } => (Kind::Doc, &paths[..]),
             Subcommand::Test { ref paths, .. } => (Kind::Test, &paths[..]),
@@ -560,8 +563,7 @@ impl<'a> Builder<'a> {
         self.run_step_descriptions(&Builder::get_step_descriptions(self.kind), &self.paths);
     }
 
-    pub fn default_doc(&self, paths: Option<&[PathBuf]>) {
-        let paths = paths.unwrap_or(&[]);
+    pub fn default_doc(&self, paths: &[PathBuf]) {
         self.run_step_descriptions(&Builder::get_step_descriptions(Kind::Doc), paths);
     }
 
@@ -628,8 +630,12 @@ impl<'a> Builder<'a> {
                     .join("rustlib")
                     .join(self.target.triple)
                     .join("lib");
-                let _ = fs::remove_dir_all(&sysroot);
-                t!(fs::create_dir_all(&sysroot));
+                // Avoid deleting the rustlib/ directory we just copied
+                // (in `impl Step for Sysroot`).
+                if !builder.config.download_rustc {
+                    let _ = fs::remove_dir_all(&sysroot);
+                    t!(fs::create_dir_all(&sysroot));
+                }
                 INTERNER.intern_path(sysroot)
             }
         }
@@ -730,11 +736,19 @@ impl<'a> Builder<'a> {
             .env("RUSTDOC_LIBDIR", self.rustc_libdir(compiler))
             .env("CFG_RELEASE_CHANNEL", &self.config.channel)
             .env("RUSTDOC_REAL", self.rustdoc(compiler))
-            .env("RUSTC_BOOTSTRAP", "1")
-            .arg("-Winvalid_codeblock_attributes");
+            .env("RUSTC_BOOTSTRAP", "1");
+
+        // cfg(bootstrap), can be removed on the next beta bump
+        if compiler.stage == 0 {
+            cmd.arg("-Winvalid_codeblock_attributes");
+        } else {
+            cmd.arg("-Wrustdoc::invalid_codeblock_attributes");
+        }
+
         if self.config.deny_warnings {
             cmd.arg("-Dwarnings");
         }
+        cmd.arg("-Znormalize-docs");
 
         // Remove make-related flags that can cause jobserver problems.
         cmd.env_remove("MAKEFLAGS");
@@ -812,6 +826,26 @@ impl<'a> Builder<'a> {
             cargo.env("REAL_LIBRARY_PATH", e);
         }
 
+        // Found with `rg "init_env_logger\("`. If anyone uses `init_env_logger`
+        // from out of tree it shouldn't matter, since x.py is only used for
+        // building in-tree.
+        let color_logs = ["RUSTDOC_LOG_COLOR", "RUSTC_LOG_COLOR", "RUST_LOG_COLOR"];
+        match self.build.config.color {
+            Color::Always => {
+                cargo.arg("--color=always");
+                for log in &color_logs {
+                    cargo.env(log, "always");
+                }
+            }
+            Color::Never => {
+                cargo.arg("--color=never");
+                for log in &color_logs {
+                    cargo.env(log, "never");
+                }
+            }
+            Color::Auto => {} // nothing to do
+        }
+
         if cmd != "install" {
             cargo.arg("--target").arg(target.rustc_target_arg());
         } else {
@@ -850,7 +884,41 @@ impl<'a> Builder<'a> {
                 cargo.args(s.split_whitespace());
             }
             rustflags.env("RUSTFLAGS_BOOTSTRAP");
-            rustflags.arg("--cfg=bootstrap");
+            if cmd == "clippy" {
+                // clippy overwrites sysroot if we pass it to cargo.
+                // Pass it directly to clippy instead.
+                // NOTE: this can't be fixed in clippy because we explicitly don't set `RUSTC`,
+                // so it has no way of knowing the sysroot.
+                rustflags.arg("--sysroot");
+                rustflags.arg(
+                    self.sysroot(compiler)
+                        .as_os_str()
+                        .to_str()
+                        .expect("sysroot must be valid UTF-8"),
+                );
+                // Only run clippy on a very limited subset of crates (in particular, not build scripts).
+                cargo.arg("-Zunstable-options");
+                // Explicitly does *not* set `--cfg=bootstrap`, since we're using a nightly clippy.
+                let host_version = Command::new("rustc").arg("--version").output().map_err(|_| ());
+                let output = host_version.and_then(|output| {
+                    if output.status.success() {
+                        Ok(output)
+                    } else {
+                        Err(())
+                    }
+                }).unwrap_or_else(|_| {
+                    eprintln!(
+                        "error: `x.py clippy` requires a host `rustc` toolchain with the `clippy` component"
+                    );
+                    eprintln!("help: try `rustup component add clippy`");
+                    std::process::exit(1);
+                });
+                if !t!(std::str::from_utf8(&output.stdout)).contains("nightly") {
+                    rustflags.arg("--cfg=bootstrap");
+                }
+            } else {
+                rustflags.arg("--cfg=bootstrap");
+            }
         }
 
         if self.config.rust_new_symbol_mangling {
@@ -861,6 +929,12 @@ impl<'a> Builder<'a> {
         // but this breaks CI. At the very least, stage0 `rustdoc` needs `--cfg bootstrap`. See
         // #71458.
         let mut rustdocflags = rustflags.clone();
+        rustdocflags.propagate_cargo_env("RUSTDOCFLAGS");
+        if stage == 0 {
+            rustdocflags.env("RUSTDOCFLAGS_BOOTSTRAP");
+        } else {
+            rustdocflags.env("RUSTDOCFLAGS_NOT_BOOTSTRAP");
+        }
 
         if let Ok(s) = env::var("CARGOFLAGS") {
             cargo.args(s.split_whitespace());
@@ -975,7 +1049,6 @@ impl<'a> Builder<'a> {
         // src/bootstrap/bin/{rustc.rs,rustdoc.rs}
         cargo
             .env("RUSTBUILD_NATIVE_DIR", self.native_dir(target))
-            .env("RUSTC", self.out.join("bootstrap/debug/rustc"))
             .env("RUSTC_REAL", self.rustc(compiler))
             .env("RUSTC_STAGE", stage.to_string())
             .env("RUSTC_SYSROOT", &sysroot)
@@ -991,6 +1064,11 @@ impl<'a> Builder<'a> {
             )
             .env("RUSTC_ERROR_METADATA_DST", self.extended_error_dir())
             .env("RUSTC_BREAK_ON_ICE", "1");
+        // Clippy support is a hack and uses the default `cargo-clippy` in path.
+        // Don't override RUSTC so that the `cargo-clippy` in path will be run.
+        if cmd != "clippy" {
+            cargo.env("RUSTC", self.out.join("bootstrap/debug/rustc"));
+        }
 
         // Dealing with rpath here is a little special, so let's go into some
         // detail. First off, `-rpath` is a linker option on Unix platforms
@@ -1073,6 +1151,19 @@ impl<'a> Builder<'a> {
             },
         );
 
+        // `dsymutil` adds time to builds on Apple platforms for no clear benefit, and also makes
+        // it more difficult for debuggers to find debug info. The compiler currently defaults to
+        // running `dsymutil` to preserve its historical default, but when compiling the compiler
+        // itself, we skip it by default since we know it's safe to do so in that case.
+        // See https://github.com/rust-lang/rust/issues/79361 for more info on this flag.
+        if target.contains("apple") {
+            if self.config.rust_run_dsymutil {
+                rustflags.arg("-Csplit-debuginfo=packed");
+            } else {
+                rustflags.arg("-Csplit-debuginfo=unpacked");
+            }
+        }
+
         if self.config.cmd.bless() {
             // Bless `expect!` tests.
             cargo.env("UPDATE_EXPECT", "1");
@@ -1141,6 +1232,14 @@ impl<'a> Builder<'a> {
             }
         }
 
+        // Compile everything except libraries and proc macros with the more
+        // efficient initial-exec TLS model. This doesn't work with `dlopen`,
+        // so we can't use it by default in general, but we can use it for tools
+        // and our own internal libraries.
+        if !mode.must_support_dlopen() {
+            rustflags.arg("-Ztls-model=initial-exec");
+        }
+
         if self.config.incremental {
             cargo.env("CARGO_INCREMENTAL", "1");
         } else {
@@ -1156,6 +1255,10 @@ impl<'a> Builder<'a> {
             cargo.env("RUSTC_PRINT_STEP_TIMINGS", "1");
         }
 
+        if self.config.print_step_rusage {
+            cargo.env("RUSTC_PRINT_STEP_RUSAGE", "1");
+        }
+
         if self.config.backtrace_on_ice {
             cargo.env("RUSTC_BACKTRACE_ON_ICE", "1");
         }
@@ -1169,6 +1272,12 @@ impl<'a> Builder<'a> {
             // some code doesn't go through this `rustc` wrapper.
             lint_flags.push("-Wrust_2018_idioms");
             lint_flags.push("-Wunused_lifetimes");
+            // cfg(bootstrap): unconditionally enable this warning after the next beta bump
+            // This is currently disabled for the stage1 libstd, since build scripts
+            // will end up using the bootstrap compiler (which doesn't yet support this lint)
+            if compiler.stage != 0 && mode != Mode::Std {
+                lint_flags.push("-Wsemicolon_in_expressions_from_macros");
+            }
 
             if self.config.deny_warnings {
                 lint_flags.push("-Dwarnings");
@@ -1191,7 +1300,12 @@ impl<'a> Builder<'a> {
             // fixed via better support from Cargo.
             cargo.env("RUSTC_LINT_FLAGS", lint_flags.join(" "));
 
-            rustdocflags.arg("-Winvalid_codeblock_attributes");
+            // cfg(bootstrap), can be removed on the next beta bump
+            if compiler.stage == 0 {
+                rustdocflags.arg("-Winvalid_codeblock_attributes");
+            } else {
+                rustdocflags.arg("-Wrustdoc::invalid_codeblock_attributes");
+            }
         }
 
         if mode == Mode::Rustc {
@@ -1395,7 +1509,7 @@ impl<'a> Builder<'a> {
                 for el in stack.iter().rev() {
                     out += &format!("\t{:?}\n", el);
                 }
-                panic!(out);
+                panic!("{}", out);
             }
             if let Some(out) = self.cache.get(&step) {
                 self.verbose(&format!("{}c {:?}", "  ".repeat(stack.len()), step));
@@ -1435,21 +1549,27 @@ impl<'a> Builder<'a> {
 mod tests;
 
 #[derive(Debug, Clone)]
-struct Rustflags(String);
+struct Rustflags(String, TargetSelection);
 
 impl Rustflags {
     fn new(target: TargetSelection) -> Rustflags {
-        let mut ret = Rustflags(String::new());
-
-        // Inherit `RUSTFLAGS` by default ...
-        ret.env("RUSTFLAGS");
-
-        // ... and also handle target-specific env RUSTFLAGS if they're
-        // configured.
-        let target_specific = format!("CARGO_TARGET_{}_RUSTFLAGS", crate::envify(&target.triple));
-        ret.env(&target_specific);
-
+        let mut ret = Rustflags(String::new(), target);
+        ret.propagate_cargo_env("RUSTFLAGS");
         ret
+    }
+
+    /// By default, cargo will pick up on various variables in the environment. However, bootstrap
+    /// reuses those variables to pass additional flags to rustdoc, so by default they get overriden.
+    /// Explicitly add back any previous value in the environment.
+    ///
+    /// `prefix` is usually `RUSTFLAGS` or `RUSTDOCFLAGS`.
+    fn propagate_cargo_env(&mut self, prefix: &str) {
+        // Inherit `RUSTFLAGS` by default ...
+        self.env(prefix);
+
+        // ... and also handle target-specific env RUSTFLAGS if they're configured.
+        let target_specific = format!("CARGO_TARGET_{}_{}", crate::envify(&self.1.triple), prefix);
+        self.env(&target_specific);
     }
 
     fn env(&mut self, env: &str) {
@@ -1463,7 +1583,7 @@ impl Rustflags {
     fn arg(&mut self, arg: &str) -> &mut Self {
         assert_eq!(arg.split(' ').count(), 1);
         if !self.0.is_empty() {
-            self.0.push_str(" ");
+            self.0.push(' ');
         }
         self.0.push_str(arg);
         self

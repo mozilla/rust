@@ -16,6 +16,7 @@ use crate::ty::{self, AdtKind, Ty, TyCtxt};
 use rustc_errors::{Applicability, DiagnosticBuilder};
 use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
+use rustc_hir::Constness;
 use rustc_span::symbol::Symbol;
 use rustc_span::{Span, DUMMY_SP};
 use smallvec::SmallVec;
@@ -70,7 +71,7 @@ pub enum Reveal {
     /// be observable directly by the user, `Reveal::All`
     /// should not be used by checks which may expose
     /// type equality or type contents to the user.
-    /// There are some exceptions, e.g., around OIBITS and
+    /// There are some exceptions, e.g., around auto traits and
     /// transmute-checking, which expose some details, but
     /// not the whole concrete type of the `impl Trait`.
     All,
@@ -227,7 +228,9 @@ pub enum ObligationCauseCode<'tcx> {
     /// Inline asm operand type must be `Sized`.
     InlineAsmSized,
     /// `[T, ..n]` implies that `T` must be `Copy`.
-    /// If `true`, suggest `const_in_array_repeat_expressions` feature flag.
+    /// If the function in the array repeat expression is a `const fn`,
+    /// display a help message suggesting to move the function call to a
+    /// new `const` item while saying that `T` doesn't implement `Copy`.
     RepeatVec(bool),
 
     /// Types of fields (other than the last, except for packed structs) in a struct must be sized.
@@ -337,7 +340,7 @@ impl ObligationCauseCode<'_> {
 }
 
 // `ObligationCauseCode` is used a lot. Make sure it doesn't unintentionally get bigger.
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
 static_assert_size!(ObligationCauseCode<'_>, 32);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -457,7 +460,7 @@ pub enum ImplSource<'tcx, N> {
     /// for some type parameter. The `Vec<N>` represents the
     /// obligations incurred from normalizing the where-clause (if
     /// any).
-    Param(Vec<N>),
+    Param(Vec<N>, Constness),
 
     /// Virtual calls through an object.
     Object(ImplSourceObjectData<'tcx, N>),
@@ -476,6 +479,9 @@ pub enum ImplSource<'tcx, N> {
     /// ImplSource for a builtin `DeterminantKind` trait implementation.
     DiscriminantKind(ImplSourceDiscriminantKindData),
 
+    /// ImplSource for a builtin `Pointee` trait implementation.
+    Pointee(ImplSourcePointeeData),
+
     /// ImplSource automatically generated for a generator.
     Generator(ImplSourceGeneratorData<'tcx, N>),
 
@@ -487,14 +493,15 @@ impl<'tcx, N> ImplSource<'tcx, N> {
     pub fn nested_obligations(self) -> Vec<N> {
         match self {
             ImplSource::UserDefined(i) => i.nested,
-            ImplSource::Param(n) => n,
+            ImplSource::Param(n, _) => n,
             ImplSource::Builtin(i) => i.nested,
             ImplSource::AutoImpl(d) => d.nested,
             ImplSource::Closure(c) => c.nested,
             ImplSource::Generator(c) => c.nested,
             ImplSource::Object(d) => d.nested,
             ImplSource::FnPointer(d) => d.nested,
-            ImplSource::DiscriminantKind(ImplSourceDiscriminantKindData) => Vec::new(),
+            ImplSource::DiscriminantKind(ImplSourceDiscriminantKindData)
+            | ImplSource::Pointee(ImplSourcePointeeData) => Vec::new(),
             ImplSource::TraitAlias(d) => d.nested,
         }
     }
@@ -502,14 +509,15 @@ impl<'tcx, N> ImplSource<'tcx, N> {
     pub fn borrow_nested_obligations(&self) -> &[N] {
         match &self {
             ImplSource::UserDefined(i) => &i.nested[..],
-            ImplSource::Param(n) => &n[..],
+            ImplSource::Param(n, _) => &n[..],
             ImplSource::Builtin(i) => &i.nested[..],
             ImplSource::AutoImpl(d) => &d.nested[..],
             ImplSource::Closure(c) => &c.nested[..],
             ImplSource::Generator(c) => &c.nested[..],
             ImplSource::Object(d) => &d.nested[..],
             ImplSource::FnPointer(d) => &d.nested[..],
-            ImplSource::DiscriminantKind(ImplSourceDiscriminantKindData) => &[],
+            ImplSource::DiscriminantKind(ImplSourceDiscriminantKindData)
+            | ImplSource::Pointee(ImplSourcePointeeData) => &[],
             ImplSource::TraitAlias(d) => &d.nested[..],
         }
     }
@@ -524,7 +532,7 @@ impl<'tcx, N> ImplSource<'tcx, N> {
                 substs: i.substs,
                 nested: i.nested.into_iter().map(f).collect(),
             }),
-            ImplSource::Param(n) => ImplSource::Param(n.into_iter().map(f).collect()),
+            ImplSource::Param(n, ct) => ImplSource::Param(n.into_iter().map(f).collect(), ct),
             ImplSource::Builtin(i) => ImplSource::Builtin(ImplSourceBuiltinData {
                 nested: i.nested.into_iter().map(f).collect(),
             }),
@@ -553,6 +561,9 @@ impl<'tcx, N> ImplSource<'tcx, N> {
             }),
             ImplSource::DiscriminantKind(ImplSourceDiscriminantKindData) => {
                 ImplSource::DiscriminantKind(ImplSourceDiscriminantKindData)
+            }
+            ImplSource::Pointee(ImplSourcePointeeData) => {
+                ImplSource::Pointee(ImplSourcePointeeData)
             }
             ImplSource::TraitAlias(d) => ImplSource::TraitAlias(ImplSourceTraitAliasData {
                 alias_def_id: d.alias_def_id,
@@ -631,6 +642,9 @@ pub struct ImplSourceFnPointerData<'tcx, N> {
 // FIXME(@lcnr): This should be  refactored and merged with other builtin vtables.
 #[derive(Clone, Debug, PartialEq, Eq, TyEncodable, TyDecodable, HashStable)]
 pub struct ImplSourceDiscriminantKindData;
+
+#[derive(Clone, Debug, PartialEq, Eq, TyEncodable, TyDecodable, HashStable)]
+pub struct ImplSourcePointeeData;
 
 #[derive(Clone, PartialEq, Eq, TyEncodable, TyDecodable, HashStable, TypeFoldable, Lift)]
 pub struct ImplSourceTraitAliasData<'tcx, N> {

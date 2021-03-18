@@ -12,8 +12,8 @@ use rustc_codegen_ssa::mir::place::PlaceRef;
 use rustc_codegen_ssa::traits::*;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_hir as hir;
-use rustc_middle::span_bug;
 use rustc_middle::ty::layout::TyAndLayout;
+use rustc_middle::{bug, span_bug};
 use rustc_span::{Pos, Span};
 use rustc_target::abi::*;
 use rustc_target::asm::*;
@@ -61,9 +61,9 @@ impl AsmBuilderMethods<'tcx> for Builder<'a, 'll, 'tcx> {
         // Default per-arch clobbers
         // Basically what clang does
         let arch_clobbers = match &self.sess().target.arch[..] {
-            "x86" | "x86_64" => vec!["~{dirflag}", "~{fpsr}", "~{flags}"],
-            "mips" | "mips64" => vec!["~{$1}"],
-            _ => Vec::new(),
+            "x86" | "x86_64" => &["~{dirflag}", "~{fpsr}", "~{flags}"][..],
+            "mips" | "mips64" => &["~{$1}"],
+            _ => &[],
         };
 
         let all_constraints = ia
@@ -260,6 +260,8 @@ impl AsmBuilderMethods<'tcx> for Builder<'a, 'll, 'tcx> {
                 InlineAsmArch::Nvptx64 => {}
                 InlineAsmArch::Hexagon => {}
                 InlineAsmArch::Mips | InlineAsmArch::Mips64 => {}
+                InlineAsmArch::SpirV => {}
+                InlineAsmArch::Wasm32 => {}
             }
         }
         if !options.contains(InlineAsmOptions::NOMEM) {
@@ -302,13 +304,12 @@ impl AsmBuilderMethods<'tcx> for Builder<'a, 'll, 'tcx> {
             } else if options.contains(InlineAsmOptions::READONLY) {
                 llvm::Attribute::ReadOnly.apply_callsite(llvm::AttributePlace::Function, result);
             }
+            llvm::Attribute::WillReturn.apply_callsite(llvm::AttributePlace::Function, result);
+        } else if options.contains(InlineAsmOptions::NOMEM) {
+            llvm::Attribute::InaccessibleMemOnly
+                .apply_callsite(llvm::AttributePlace::Function, result);
         } else {
-            if options.contains(InlineAsmOptions::NOMEM) {
-                llvm::Attribute::InaccessibleMemOnly
-                    .apply_callsite(llvm::AttributePlace::Function, result);
-            } else {
-                // LLVM doesn't have an attribute to represent ReadOnly + SideEffect
-            }
+            // LLVM doesn't have an attribute to represent ReadOnly + SideEffect
         }
 
         // Write results to outputs
@@ -487,6 +488,9 @@ fn reg_to_llvm(reg: InlineAsmRegOrRegClass, layout: Option<&TyAndLayout<'tcx>>) 
             } else if reg == InlineAsmReg::AArch64(AArch64InlineAsmReg::x30) {
                 // LLVM doesn't recognize x30
                 "{lr}".to_string()
+            } else if reg == InlineAsmReg::Arm(ArmInlineAsmReg::r14) {
+                // LLVM doesn't recognize r14
+                "{lr}".to_string()
             } else {
                 format!("{{{}}}", reg.name())
             }
@@ -520,6 +524,11 @@ fn reg_to_llvm(reg: InlineAsmRegOrRegClass, layout: Option<&TyAndLayout<'tcx>>) 
             | InlineAsmRegClass::X86(X86InlineAsmRegClass::ymm_reg) => "x",
             InlineAsmRegClass::X86(X86InlineAsmRegClass::zmm_reg) => "v",
             InlineAsmRegClass::X86(X86InlineAsmRegClass::kreg) => "^Yk",
+            InlineAsmRegClass::Wasm(WasmInlineAsmRegClass::local) => "r",
+            InlineAsmRegClass::SpirV(SpirVInlineAsmRegClass::reg) => {
+                bug!("LLVM backend does not support SPIR-V")
+            }
+            InlineAsmRegClass::Err => unreachable!(),
         }
         .to_string(),
     }
@@ -582,6 +591,11 @@ fn modifier_to_llvm(
             _ => unreachable!(),
         },
         InlineAsmRegClass::X86(X86InlineAsmRegClass::kreg) => None,
+        InlineAsmRegClass::Wasm(WasmInlineAsmRegClass::local) => None,
+        InlineAsmRegClass::SpirV(SpirVInlineAsmRegClass::reg) => {
+            bug!("LLVM backend does not support SPIR-V")
+        }
+        InlineAsmRegClass::Err => unreachable!(),
     }
 }
 
@@ -621,6 +635,11 @@ fn dummy_output_type(cx: &CodegenCx<'ll, 'tcx>, reg: InlineAsmRegClass) -> &'ll 
         | InlineAsmRegClass::X86(X86InlineAsmRegClass::ymm_reg)
         | InlineAsmRegClass::X86(X86InlineAsmRegClass::zmm_reg) => cx.type_f32(),
         InlineAsmRegClass::X86(X86InlineAsmRegClass::kreg) => cx.type_i16(),
+        InlineAsmRegClass::Wasm(WasmInlineAsmRegClass::local) => cx.type_i32(),
+        InlineAsmRegClass::SpirV(SpirVInlineAsmRegClass::reg) => {
+            bug!("LLVM backend does not support SPIR-V")
+        }
+        InlineAsmRegClass::Err => unreachable!(),
     }
 }
 

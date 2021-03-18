@@ -96,6 +96,15 @@ fn test_unwrap_or() {
 }
 
 #[test]
+fn test_ok_or_err() {
+    let ok: Result<isize, isize> = Ok(100);
+    let err: Result<isize, isize> = Err(200);
+
+    assert_eq!(ok.into_ok_or_err(), 100);
+    assert_eq!(err.into_ok_or_err(), 200);
+}
+
+#[test]
 fn test_unwrap_or_else() {
     fn handler(msg: &'static str) -> isize {
         if msg == "I got this." { 50 } else { panic!("BadBad") }
@@ -117,6 +126,18 @@ pub fn test_unwrap_or_else_panic() {
 
     let bad_err: Result<isize, &'static str> = Err("Unrecoverable mess.");
     let _: isize = bad_err.unwrap_or_else(handler);
+}
+
+#[test]
+fn test_unwrap_unchecked() {
+    let ok: Result<isize, &'static str> = Ok(100);
+    assert_eq!(unsafe { ok.unwrap_unchecked() }, 100);
+}
+
+#[test]
+fn test_unwrap_err_unchecked() {
+    let ok_err: Result<isize, &'static str> = Err("Err");
+    assert_eq!(unsafe { ok_err.unwrap_err_unchecked() }, "Err");
 }
 
 #[test]
@@ -319,4 +340,42 @@ fn result_const() {
 
     const IS_ERR: bool = RESULT.is_err();
     assert!(!IS_ERR)
+}
+
+#[test]
+fn result_opt_conversions() {
+    #[derive(Copy, Clone, Debug, PartialEq)]
+    struct BadNumErr;
+
+    fn try_num(x: i32) -> Result<i32, BadNumErr> {
+        if x <= 5 { Ok(x + 1) } else { Err(BadNumErr) }
+    }
+
+    type ResOpt = Result<Option<i32>, BadNumErr>;
+    type OptRes = Option<Result<i32, BadNumErr>>;
+
+    let mut x: ResOpt = Ok(Some(5));
+    let mut y: OptRes = Some(Ok(5));
+    assert_eq!(x, y.transpose());
+    assert_eq!(x.transpose(), y);
+
+    x = Ok(None);
+    y = None;
+    assert_eq!(x, y.transpose());
+    assert_eq!(x.transpose(), y);
+
+    x = Err(BadNumErr);
+    y = Some(Err(BadNumErr));
+    assert_eq!(x, y.transpose());
+    assert_eq!(x.transpose(), y);
+
+    let res: Result<Vec<i32>, BadNumErr> = (0..10)
+        .map(|x| {
+            let y = try_num(x)?;
+            Ok(if y % 2 == 0 { Some(y - 1) } else { None })
+        })
+        .filter_map(Result::transpose)
+        .collect();
+
+    assert_eq!(res, Err(BadNumErr))
 }

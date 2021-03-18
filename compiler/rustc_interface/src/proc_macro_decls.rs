@@ -25,14 +25,17 @@ struct Finder<'tcx> {
 
 impl<'v> ItemLikeVisitor<'v> for Finder<'_> {
     fn visit_item(&mut self, item: &hir::Item<'_>) {
-        if self.tcx.sess.contains_name(&item.attrs, sym::rustc_proc_macro_decls) {
-            self.decls = Some(item.hir_id);
+        let attrs = self.tcx.hir().attrs(item.hir_id());
+        if self.tcx.sess.contains_name(attrs, sym::rustc_proc_macro_decls) {
+            self.decls = Some(item.hir_id());
         }
     }
 
     fn visit_trait_item(&mut self, _trait_item: &hir::TraitItem<'_>) {}
 
     fn visit_impl_item(&mut self, _impl_item: &hir::ImplItem<'_>) {}
+
+    fn visit_foreign_item(&mut self, _foreign_item: &hir::ForeignItem<'_>) {}
 }
 
 pub(crate) fn provide(providers: &mut Providers) {

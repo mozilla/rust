@@ -10,7 +10,6 @@ use crate::{CrateLint, Module, ModuleOrUniformRoot, ParentScope, PerNS, ScopeSet
 use crate::{NameBinding, NameBindingKind, PathResult, PrivacyError, ToNameBinding};
 
 use rustc_ast::unwrap_or;
-use rustc_ast::util::lev_distance::find_best_match_for_name;
 use rustc_ast::NodeId;
 use rustc_ast_lowering::ResolverAstLowering;
 use rustc_data_structures::fx::FxHashSet;
@@ -19,12 +18,12 @@ use rustc_errors::{pluralize, struct_span_err, Applicability};
 use rustc_hir::def::{self, PartialRes};
 use rustc_hir::def_id::DefId;
 use rustc_middle::hir::exports::Export;
+use rustc_middle::span_bug;
 use rustc_middle::ty;
-use rustc_middle::{bug, span_bug};
 use rustc_session::lint::builtin::{PUB_USE_OF_PRIVATE_EXTERN_CRATE, UNUSED_IMPORTS};
 use rustc_session::lint::BuiltinLintDiagnostics;
-use rustc_session::DiagnosticMessageId;
 use rustc_span::hygiene::ExpnId;
+use rustc_span::lev_distance::find_best_match_for_name;
 use rustc_span::symbol::{kw, Ident, Symbol};
 use rustc_span::{MultiSpan, Span};
 
@@ -114,10 +113,7 @@ crate struct Import<'a> {
 
 impl<'a> Import<'a> {
     pub fn is_glob(&self) -> bool {
-        match self.kind {
-            ImportKind::Glob { .. } => true,
-            _ => false,
-        }
+        matches!(self.kind, ImportKind::Glob { .. })
     }
 
     pub fn is_nested(&self) -> bool {
@@ -157,6 +153,21 @@ impl<'a> NameResolution<'a> {
 
     crate fn add_single_import(&mut self, import: &'a Import<'a>) {
         self.single_imports.insert(PtrKey(import));
+    }
+}
+
+// Reexports of the form `pub use foo as bar;` where `foo` is `extern crate foo;`
+// are permitted for backward-compatibility under a deprecation lint.
+fn pub_use_of_private_extern_crate_hack(import: &Import<'_>, binding: &NameBinding<'_>) -> bool {
+    match (&import.kind, &binding.kind) {
+        (
+            ImportKind::Single { .. },
+            NameBindingKind::Import {
+                import: Import { kind: ImportKind::ExternCrate { .. }, .. },
+                ..
+            },
+        ) => import.vis.get() == ty::Visibility::Public,
+        _ => false,
     }
 }
 
@@ -267,10 +278,7 @@ impl<'a> Resolver<'a> {
                     return Err((Determined, Weak::No));
                 }
             }
-            // `extern crate` are always usable for backwards compatibility, see issue #37020,
-            // remove this together with `PUB_USE_OF_PRIVATE_EXTERN_CRATE`.
-            let usable = this.is_accessible_from(binding.vis, parent_scope.module)
-                || binding.is_extern_crate();
+            let usable = this.is_accessible_from(binding.vis, parent_scope.module);
             if usable { Ok(binding) } else { Err((Determined, Weak::No)) }
         };
 
@@ -313,10 +321,7 @@ impl<'a> Resolver<'a> {
                             }
                         }
 
-                        if !(self.is_accessible_from(binding.vis, parent_scope.module) ||
-                       // Remove this together with `PUB_USE_OF_PRIVATE_EXTERN_CRATE`
-                       (self.last_import_segment && binding.is_extern_crate()))
-                        {
+                        if !self.is_accessible_from(binding.vis, parent_scope.module) {
                             self.privacy_errors.push(PrivacyError {
                                 ident,
                                 binding,
@@ -459,13 +464,12 @@ impl<'a> Resolver<'a> {
         binding: &'a NameBinding<'a>,
         import: &'a Import<'a>,
     ) -> &'a NameBinding<'a> {
-        let vis = if binding.pseudo_vis().is_at_least(import.vis.get(), self) ||
-                     // cf. `PUB_USE_OF_PRIVATE_EXTERN_CRATE`
-                     !import.is_glob() && binding.is_extern_crate()
+        let vis = if binding.vis.is_at_least(import.vis.get(), self)
+            || pub_use_of_private_extern_crate_hack(import, binding)
         {
             import.vis.get()
         } else {
-            binding.pseudo_vis()
+            binding.vis
         };
 
         if let ImportKind::Glob { ref max_vis, .. } = import.kind {
@@ -875,6 +879,12 @@ impl<'a, 'b> ImportResolver<'a, 'b> {
     /// consolidate multiple unresolved import errors into a single diagnostic.
     fn finalize_import(&mut self, import: &'b Import<'b>) -> Option<UnresolvedImportError> {
         let orig_vis = import.vis.replace(ty::Visibility::Invisible);
+        let orig_unusable_binding = match &import.kind {
+            ImportKind::Single { target_bindings, .. } => {
+                Some(mem::replace(&mut self.r.unusable_binding, target_bindings[TypeNS].get()))
+            }
+            _ => None,
+        };
         let prev_ambiguity_errors_len = self.r.ambiguity_errors.len();
         let path_res = self.r.resolve_path(
             &import.module_path,
@@ -885,6 +895,9 @@ impl<'a, 'b> ImportResolver<'a, 'b> {
             import.crate_lint(),
         );
         let no_ambiguity = self.r.ambiguity_errors.len() == prev_ambiguity_errors_len;
+        if let Some(orig_unusable_binding) = orig_unusable_binding {
+            self.r.unusable_binding = orig_unusable_binding;
+        }
         import.vis.set(orig_vis);
         if let PathResult::Failed { .. } | PathResult::NonModule(..) = path_res {
             // Consider erroneous imports used to avoid duplicate diagnostics.
@@ -895,15 +908,12 @@ impl<'a, 'b> ImportResolver<'a, 'b> {
                 // Consistency checks, analogous to `finalize_macro_resolutions`.
                 if let Some(initial_module) = import.imported_module.get() {
                     if !ModuleOrUniformRoot::same_def(module, initial_module) && no_ambiguity {
-                        let msg = "inconsistent resolution for an import";
-                        self.r.session.span_err(import.span, msg);
+                        span_bug!(import.span, "inconsistent resolution for an import");
                     }
-                } else {
-                    if self.r.privacy_errors.is_empty() {
-                        let msg = "cannot determine resolution for the import";
-                        let msg_note = "import resolution is stuck, try simplifying other imports";
-                        self.r.session.struct_span_err(import.span, msg).note(msg_note).emit();
-                    }
+                } else if self.r.privacy_errors.is_empty() {
+                    let msg = "cannot determine resolution for the import";
+                    let msg_note = "import resolution is stuck, try simplifying other imports";
+                    self.r.session.struct_span_err(import.span, msg).note(msg_note).emit();
                 }
 
                 module
@@ -918,6 +928,7 @@ impl<'a, 'b> ImportResolver<'a, 'b> {
             }
             PathResult::Failed { is_error_from_last_segment: true, span, label, suggestion } => {
                 if no_ambiguity {
+                    assert!(import.imported_module.get().is_none());
                     let err = match self.make_path_suggestion(
                         span,
                         import.module_path.clone(),
@@ -1044,19 +1055,14 @@ impl<'a, 'b> ImportResolver<'a, 'b> {
                             if res != initial_res && this.ambiguity_errors.is_empty() {
                                 span_bug!(import.span, "inconsistent resolution for an import");
                             }
-                        } else {
-                            if res != Res::Err
-                                && this.ambiguity_errors.is_empty()
-                                && this.privacy_errors.is_empty()
-                            {
-                                let msg = "cannot determine resolution for the import";
-                                let msg_note =
-                                    "import resolution is stuck, try simplifying other imports";
-                                this.session
-                                    .struct_span_err(import.span, msg)
-                                    .note(msg_note)
-                                    .emit();
-                            }
+                        } else if res != Res::Err
+                            && this.ambiguity_errors.is_empty()
+                            && this.privacy_errors.is_empty()
+                        {
+                            let msg = "cannot determine resolution for the import";
+                            let msg_note =
+                                "import resolution is stuck, try simplifying other imports";
+                            this.session.struct_span_err(import.span, msg).note(msg_note).emit();
                         }
                     }
                     Err(..) => {
@@ -1097,33 +1103,37 @@ impl<'a, 'b> ImportResolver<'a, 'b> {
                     _ => None,
                 };
                 let resolutions = resolutions.as_ref().into_iter().flat_map(|r| r.iter());
-                let names = resolutions.filter_map(|(BindingKey { ident: i, .. }, resolution)| {
-                    if *i == ident {
-                        return None;
-                    } // Never suggest the same name
-                    match *resolution.borrow() {
-                        NameResolution { binding: Some(name_binding), .. } => {
-                            match name_binding.kind {
-                                NameBindingKind::Import { binding, .. } => {
-                                    match binding.kind {
-                                        // Never suggest the name that has binding error
-                                        // i.e., the name that cannot be previously resolved
-                                        NameBindingKind::Res(Res::Err, _) => None,
-                                        _ => Some(&i.name),
+                let names = resolutions
+                    .filter_map(|(BindingKey { ident: i, .. }, resolution)| {
+                        if *i == ident {
+                            return None;
+                        } // Never suggest the same name
+                        match *resolution.borrow() {
+                            NameResolution { binding: Some(name_binding), .. } => {
+                                match name_binding.kind {
+                                    NameBindingKind::Import { binding, .. } => {
+                                        match binding.kind {
+                                            // Never suggest the name that has binding error
+                                            // i.e., the name that cannot be previously resolved
+                                            NameBindingKind::Res(Res::Err, _) => None,
+                                            _ => Some(i.name),
+                                        }
                                     }
+                                    _ => Some(i.name),
                                 }
-                                _ => Some(&i.name),
                             }
+                            NameResolution { ref single_imports, .. }
+                                if single_imports.is_empty() =>
+                            {
+                                None
+                            }
+                            _ => Some(i.name),
                         }
-                        NameResolution { ref single_imports, .. } if single_imports.is_empty() => {
-                            None
-                        }
-                        _ => Some(&i.name),
-                    }
-                });
+                    })
+                    .collect::<Vec<Symbol>>();
 
                 let lev_suggestion =
-                    find_best_match_for_name(names, ident.name, None).map(|suggestion| {
+                    find_best_match_for_name(&names, ident.name, None).map(|suggestion| {
                         (
                             vec![(ident.span, suggestion.to_string())],
                             String::from("a similar name exists in the module"),
@@ -1175,7 +1185,7 @@ impl<'a, 'b> ImportResolver<'a, 'b> {
         self.r.per_ns(|this, ns| {
             if let Ok(binding) = source_bindings[ns].get() {
                 let vis = import.vis.get();
-                if !binding.pseudo_vis().is_at_least(vis, &*this) {
+                if !binding.vis.is_at_least(vis, &*this) {
                     reexport_error = Some((ns, binding));
                 } else {
                     any_successful_reexport = true;
@@ -1186,7 +1196,7 @@ impl<'a, 'b> ImportResolver<'a, 'b> {
         // All namespaces must be re-exported with extra visibility for an error to occur.
         if !any_successful_reexport {
             let (ns, binding) = reexport_error.unwrap();
-            if ns == TypeNS && binding.is_extern_crate() {
+            if pub_use_of_private_extern_crate_hack(import, binding) {
                 let msg = format!(
                     "extern crate `{}` is private, and cannot be \
                                    re-exported (error E0365), consider declaring with \
@@ -1359,7 +1369,7 @@ impl<'a, 'b> ImportResolver<'a, 'b> {
                 Some(None) => import.parent_scope.module,
                 None => continue,
             };
-            if self.r.is_accessible_from(binding.pseudo_vis(), scope) {
+            if self.r.is_accessible_from(binding.vis, scope) {
                 let imported_binding = self.r.import(binding, import);
                 let _ = self.r.try_define(import.parent_scope.module, key, imported_binding);
             }
@@ -1377,9 +1387,8 @@ impl<'a, 'b> ImportResolver<'a, 'b> {
 
         let mut reexports = Vec::new();
 
-        module.for_each_child(self.r, |this, ident, ns, binding| {
-            // Filter away ambiguous imports and anything that has def-site
-            // hygiene.
+        module.for_each_child(self.r, |this, ident, _, binding| {
+            // Filter away ambiguous imports and anything that has def-site hygiene.
             // FIXME: Implement actual cross-crate hygiene.
             let is_good_import =
                 binding.is_import() && !binding.is_ambiguity() && !ident.span.from_expansion();
@@ -1387,71 +1396,6 @@ impl<'a, 'b> ImportResolver<'a, 'b> {
                 let res = binding.res().map_id(|id| this.local_def_id(id));
                 if res != def::Res::Err {
                     reexports.push(Export { ident, res, span: binding.span, vis: binding.vis });
-                }
-            }
-
-            if let NameBindingKind::Import { binding: orig_binding, import, .. } = binding.kind {
-                if ns == TypeNS
-                    && orig_binding.is_variant()
-                    && !orig_binding.vis.is_at_least(binding.vis, &*this)
-                {
-                    let msg = match import.kind {
-                        ImportKind::Single { .. } => {
-                            format!("variant `{}` is private and cannot be re-exported", ident)
-                        }
-                        ImportKind::Glob { .. } => {
-                            let msg = "enum is private and its variants \
-                                           cannot be re-exported"
-                                .to_owned();
-                            let error_id = (
-                                DiagnosticMessageId::ErrorId(0), // no code?!
-                                Some(binding.span),
-                                msg.clone(),
-                            );
-                            let fresh =
-                                this.session.one_time_diagnostics.borrow_mut().insert(error_id);
-                            if !fresh {
-                                return;
-                            }
-                            msg
-                        }
-                        ref s => bug!("unexpected import kind {:?}", s),
-                    };
-                    let mut err = this.session.struct_span_err(binding.span, &msg);
-
-                    let imported_module = match import.imported_module.get() {
-                        Some(ModuleOrUniformRoot::Module(module)) => module,
-                        _ => bug!("module should exist"),
-                    };
-                    let parent_module = imported_module.parent.expect("parent should exist");
-                    let resolutions = this.resolutions(parent_module).borrow();
-                    let enum_path_segment_index = import.module_path.len() - 1;
-                    let enum_ident = import.module_path[enum_path_segment_index].ident;
-
-                    let key = this.new_key(enum_ident, TypeNS);
-                    let enum_resolution = resolutions.get(&key).expect("resolution should exist");
-                    let enum_span =
-                        enum_resolution.borrow().binding.expect("binding should exist").span;
-                    let enum_def_span = this.session.source_map().guess_head_span(enum_span);
-                    let enum_def_snippet = this
-                        .session
-                        .source_map()
-                        .span_to_snippet(enum_def_span)
-                        .expect("snippet should exist");
-                    // potentially need to strip extant `crate`/`pub(path)` for suggestion
-                    let after_vis_index = enum_def_snippet
-                        .find("enum")
-                        .expect("`enum` keyword should exist in snippet");
-                    let suggestion = format!("pub {}", &enum_def_snippet[after_vis_index..]);
-
-                    this.session.diag_span_suggestion_once(
-                        &mut err,
-                        DiagnosticMessageId::ErrorId(0),
-                        enum_def_span,
-                        "consider making the enum public",
-                        suggestion,
-                    );
-                    err.emit();
                 }
             }
         });

@@ -31,20 +31,21 @@ crate enum RvalueFunc {
 /// Determines the category for a given expression. Note that scope
 /// and paren expressions have no category.
 impl Category {
-    crate fn of(ek: &ExprKind<'_>) -> Option<Category> {
+    crate fn of(ek: &ExprKind<'_, '_>) -> Option<Category> {
         match *ek {
             ExprKind::Scope { .. } => None,
 
             ExprKind::Field { .. }
             | ExprKind::Deref { .. }
             | ExprKind::Index { .. }
-            | ExprKind::SelfRef
+            | ExprKind::UpvarRef { .. }
             | ExprKind::VarRef { .. }
             | ExprKind::PlaceTypeAscription { .. }
             | ExprKind::ValueTypeAscription { .. } => Some(Category::Place),
 
             ExprKind::LogicalOp { .. }
             | ExprKind::Match { .. }
+            | ExprKind::If { .. }
             | ExprKind::NeverToAny { .. }
             | ExprKind::Use { .. }
             | ExprKind::Adt { .. }

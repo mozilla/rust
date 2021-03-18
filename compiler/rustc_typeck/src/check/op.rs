@@ -19,6 +19,8 @@ use rustc_span::symbol::{sym, Ident};
 use rustc_span::Span;
 use rustc_trait_selection::infer::InferCtxtExt;
 
+use std::ops::ControlFlow;
+
 impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// Checks a `a <op>= b`
     pub fn check_binop_assign(
@@ -501,8 +503,14 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             if !self.tcx.has_typeck_results(def_id) {
                 return false;
             }
-            // We're emitting a suggestion, so we can just ignore regions
-            let fn_sig = self.tcx.fn_sig(def_id).skip_binder();
+            // FIXME: Instead of exiting early when encountering bound vars in
+            // the function signature, consider keeping the binder here and
+            // propagating it downwards.
+            let fn_sig = if let Some(fn_sig) = self.tcx.fn_sig(def_id).no_bound_vars() {
+                fn_sig
+            } else {
+                return false;
+            };
 
             let other_ty = if let FnDef(def_id, _) = *other_ty.kind() {
                 if !self.tcx.has_typeck_results(def_id) {
@@ -658,7 +666,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 method.sig.output()
             }
             Err(()) => {
-                let actual = self.resolve_vars_if_possible(&operand_ty);
+                let actual = self.resolve_vars_if_possible(operand_ty);
                 if !actual.references_error() {
                     let mut err = struct_span_err!(
                         self.tcx.sess,
@@ -673,7 +681,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         format!("cannot apply unary operator `{}`", op.as_str()),
                     );
                     match actual.kind() {
-                        Uint(_) if op == hir::UnOp::UnNeg => {
+                        Uint(_) if op == hir::UnOp::Neg => {
                             err.note("unsigned values cannot be negated");
 
                             if let hir::ExprKind::Unary(
@@ -703,9 +711,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         Ref(_, ref lty, _) if *lty.kind() == Str => {}
                         _ => {
                             let missing_trait = match op {
-                                hir::UnOp::UnNeg => "std::ops::Neg",
-                                hir::UnOp::UnNot => "std::ops::Not",
-                                hir::UnOp::UnDeref => "std::ops::UnDerf",
+                                hir::UnOp::Neg => "std::ops::Neg",
+                                hir::UnOp::Not => "std::ops::Not",
+                                hir::UnOp::Deref => "std::ops::UnDerf",
                             };
                             suggest_impl_missing(&mut err, operand_ty, &missing_trait);
                         }
@@ -774,9 +782,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     span_bug!(span, "&& and || are not overloadable")
                 }
             }
-        } else if let Op::Unary(hir::UnOp::UnNot, _) = op {
+        } else if let Op::Unary(hir::UnOp::Not, _) = op {
             (sym::not, lang.not_trait())
-        } else if let Op::Unary(hir::UnOp::UnNeg, _) = op {
+        } else if let Op::Unary(hir::UnOp::Neg, _) = op {
             (sym::neg, lang.neg_trait())
         } else {
             bug!("lookup_op_method: op not supported: {:?}", op)
@@ -981,7 +989,7 @@ fn suggest_constraining_param(
 struct TypeParamVisitor<'tcx>(Vec<Ty<'tcx>>);
 
 impl<'tcx> TypeVisitor<'tcx> for TypeParamVisitor<'tcx> {
-    fn visit_ty(&mut self, ty: Ty<'tcx>) -> bool {
+    fn visit_ty(&mut self, ty: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {
         if let ty::Param(_) = ty.kind() {
             self.0.push(ty);
         }

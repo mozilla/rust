@@ -2,7 +2,7 @@
 //! Clippy.
 
 use crate::{EarlyContext, EarlyLintPass, LateContext, LateLintPass, LintContext};
-use rustc_ast::{Item, ItemKind};
+use rustc_ast::{ImplKind, Item, ItemKind};
 use rustc_data_structures::fx::FxHashMap;
 use rustc_errors::Applicability;
 use rustc_hir::def::Res;
@@ -10,7 +10,7 @@ use rustc_hir::{GenericArg, HirId, MutTy, Mutability, Path, PathSegment, QPath, 
 use rustc_middle::ty;
 use rustc_session::{declare_lint_pass, declare_tool_lint, impl_lint_pass};
 use rustc_span::hygiene::{ExpnKind, MacroKind};
-use rustc_span::symbol::{sym, Ident, Symbol};
+use rustc_span::symbol::{kw, sym, Ident, Symbol};
 
 declare_tool_lint! {
     pub rustc::DEFAULT_HASH_TYPES,
@@ -243,7 +243,7 @@ declare_lint_pass!(LintPassImpl => [LINT_PASS_IMPL_WITHOUT_MACRO]);
 
 impl EarlyLintPass for LintPassImpl {
     fn check_item(&mut self, cx: &EarlyContext<'_>, item: &Item) {
-        if let ItemKind::Impl { of_trait: Some(lint_pass), .. } = &item.kind {
+        if let ItemKind::Impl(box ImplKind { of_trait: Some(lint_pass), .. }) = &item.kind {
             if let Some(last) = lint_pass.path.segments.last() {
                 if last.ident.name == sym::LintPass {
                     let expn_data = lint_pass.path.span.ctxt().outer_expn_data();
@@ -261,6 +261,50 @@ impl EarlyLintPass for LintPassImpl {
                                     .emit();
                             },
                         )
+                    }
+                }
+            }
+        }
+    }
+}
+
+declare_tool_lint! {
+    pub rustc::EXISTING_DOC_KEYWORD,
+    Allow,
+    "Check that documented keywords in std and core actually exist",
+    report_in_external_macro: true
+}
+
+declare_lint_pass!(ExistingDocKeyword => [EXISTING_DOC_KEYWORD]);
+
+fn is_doc_keyword(s: Symbol) -> bool {
+    s <= kw::Union
+}
+
+impl<'tcx> LateLintPass<'tcx> for ExistingDocKeyword {
+    fn check_item(&mut self, cx: &LateContext<'_>, item: &rustc_hir::Item<'_>) {
+        for attr in cx.tcx.hir().attrs(item.hir_id()) {
+            if !attr.has_name(sym::doc) {
+                continue;
+            }
+            if let Some(list) = attr.meta_item_list() {
+                for nested in list {
+                    if nested.has_name(sym::keyword) {
+                        let v = nested
+                            .value_str()
+                            .expect("#[doc(keyword = \"...\")] expected a value!");
+                        if is_doc_keyword(v) {
+                            return;
+                        }
+                        cx.struct_span_lint(EXISTING_DOC_KEYWORD, attr.span, |lint| {
+                            lint.build(&format!(
+                                "Found non-existing keyword `{}` used in \
+                                     `#[doc(keyword = \"...\")]`",
+                                v,
+                            ))
+                            .help("only existing keywords are allowed in core/std")
+                            .emit();
+                        });
                     }
                 }
             }

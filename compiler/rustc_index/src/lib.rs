@@ -1,5 +1,4 @@
 #![feature(allow_internal_unstable)]
-#![feature(bool_to_option)]
 #![feature(const_fn)]
 #![feature(const_panic)]
 #![feature(extend_one)]
@@ -9,3 +8,7 @@
 
 pub mod bit_set;
 pub mod vec;
+
+// FIXME(#56935): Work around ICEs during cross-compilation.
+#[allow(unused)]
+extern crate rustc_macros;

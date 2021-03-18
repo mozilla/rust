@@ -13,8 +13,10 @@ use rustc_span::source_map::{FilePathMapping, SourceMap};
 
 use crate::emitter::{Emitter, HumanReadableErrorType};
 use crate::registry::Registry;
-use crate::{Applicability, DiagnosticId};
+use crate::DiagnosticId;
+use crate::ToolMetadata;
 use crate::{CodeSuggestion, SubDiagnostic};
+use rustc_lint_defs::{Applicability, FutureBreakage};
 
 use rustc_data_structures::sync::Lrc;
 use rustc_span::hygiene::ExpnData;
@@ -25,6 +27,7 @@ use std::sync::{Arc, Mutex};
 use std::vec;
 
 use rustc_serialize::json::{as_json, as_pretty_json};
+use rustc_serialize::{Encodable, Encoder};
 
 #[cfg(test)]
 mod tests;
@@ -131,21 +134,44 @@ impl Emitter for JsonEmitter {
         }
     }
 
+    fn emit_future_breakage_report(&mut self, diags: Vec<(FutureBreakage, crate::Diagnostic)>) {
+        let data: Vec<FutureBreakageItem> = diags
+            .into_iter()
+            .map(|(breakage, mut diag)| {
+                if diag.level == crate::Level::Allow {
+                    diag.level = crate::Level::Warning;
+                }
+                FutureBreakageItem {
+                    future_breakage_date: breakage.date,
+                    diagnostic: Diagnostic::from_errors_diagnostic(&diag, self),
+                }
+            })
+            .collect();
+        let report = FutureIncompatReport { future_incompat_report: data };
+        let result = if self.pretty {
+            writeln!(&mut self.dst, "{}", as_pretty_json(&report))
+        } else {
+            writeln!(&mut self.dst, "{}", as_json(&report))
+        }
+        .and_then(|_| self.dst.flush());
+        if let Err(e) = result {
+            panic!("failed to print future breakage report: {:?}", e);
+        }
+    }
+
     fn source_map(&self) -> Option<&Lrc<SourceMap>> {
         Some(&self.sm)
     }
 
     fn should_show_explain(&self) -> bool {
-        match self.json_rendered {
-            HumanReadableErrorType::Short(_) => false,
-            _ => true,
-        }
+        !matches!(self.json_rendered, HumanReadableErrorType::Short(_))
     }
 }
 
 // The following data types are provided just for serialisation.
 
-#[derive(Encodable)]
+// NOTE: this has a manual implementation of Encodable which needs to be updated in
+// parallel.
 struct Diagnostic {
     /// The primary error message.
     message: String,
@@ -157,6 +183,65 @@ struct Diagnostic {
     children: Vec<Diagnostic>,
     /// The message as rustc would render it.
     rendered: Option<String>,
+    /// Extra tool metadata
+    tool_metadata: ToolMetadata,
+}
+
+macro_rules! encode_fields {
+    (
+        $enc:expr,                  // encoder
+        $idx:expr,                  // starting field index
+        $struct:expr,               // struct we're serializing
+        $struct_name:ident,         // struct name
+        [ $($name:ident),+$(,)? ],  // fields to encode
+        [ $($ignore:ident),+$(,)? ] // fields we're skipping
+    ) => {
+        {
+            // Pattern match to make sure all fields are accounted for
+            let $struct_name { $($name,)+ $($ignore: _,)+ } = $struct;
+            let mut idx = $idx;
+            $(
+                $enc.emit_struct_field(
+                    stringify!($name),
+                    idx,
+                    |enc| $name.encode(enc),
+                )?;
+                idx += 1;
+            )+
+            idx
+        }
+    };
+}
+
+// Special-case encoder to skip tool_metadata if not set
+impl<E: Encoder> Encodable<E> for Diagnostic {
+    fn encode(&self, s: &mut E) -> Result<(), E::Error> {
+        s.emit_struct("diagnostic", 7, |s| {
+            let mut idx = 0;
+
+            idx = encode_fields!(
+                s,
+                idx,
+                self,
+                Self,
+                [message, code, level, spans, children, rendered],
+                [tool_metadata]
+            );
+            if self.tool_metadata.is_set() {
+                idx = encode_fields!(
+                    s,
+                    idx,
+                    self,
+                    Self,
+                    [tool_metadata],
+                    [message, code, level, spans, children, rendered]
+                );
+            }
+
+            let _ = idx;
+            Ok(())
+        })
+    }
 }
 
 #[derive(Encodable)]
@@ -226,6 +311,17 @@ struct ArtifactNotification<'a> {
     emit: &'a str,
 }
 
+#[derive(Encodable)]
+struct FutureBreakageItem {
+    future_breakage_date: Option<&'static str>,
+    diagnostic: Diagnostic,
+}
+
+#[derive(Encodable)]
+struct FutureIncompatReport {
+    future_incompat_report: Vec<FutureBreakageItem>,
+}
+
 impl Diagnostic {
     fn from_errors_diagnostic(diag: &crate::Diagnostic, je: &JsonEmitter) -> Diagnostic {
         let sugg = diag.suggestions.iter().map(|sugg| Diagnostic {
@@ -235,6 +331,7 @@ impl Diagnostic {
             spans: DiagnosticSpan::from_suggestion(sugg, je),
             children: vec![],
             rendered: None,
+            tool_metadata: sugg.tool_metadata.clone(),
         });
 
         // generate regular command line output and store it in the json
@@ -278,6 +375,7 @@ impl Diagnostic {
                 .chain(sugg)
                 .collect(),
             rendered: Some(output),
+            tool_metadata: ToolMetadata::default(),
         }
     }
 
@@ -293,6 +391,7 @@ impl Diagnostic {
                 .unwrap_or_else(|| DiagnosticSpan::from_multispan(&diag.span, je)),
             children: vec![],
             rendered: None,
+            tool_metadata: ToolMetadata::default(),
         }
     }
 }
@@ -435,7 +534,7 @@ impl DiagnosticCode {
         s.map(|s| {
             let s = match s {
                 DiagnosticId::Error(s) => s,
-                DiagnosticId::Lint(s) => s,
+                DiagnosticId::Lint { name, has_future_breakage: _ } => name,
             };
             let je_result =
                 je.registry.as_ref().map(|registry| registry.try_find_description(&s)).unwrap();

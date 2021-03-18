@@ -48,6 +48,17 @@ const MICROS_PER_SEC: u64 = 1_000_000;
 ///
 /// let ten_millis = Duration::from_millis(10);
 /// ```
+///
+/// # Formatting `Duration` values
+///
+/// `Duration` intentionally does not have a `Display` impl, as there are a
+/// variety of ways to format spans of time for human readability. `Duration`
+/// provides a `Debug` impl that shows the full precision of the value.
+///
+/// The `Debug` output uses the non-ASCII "µs" suffix for microseconds. If your
+/// program output may appear in contexts that cannot rely on full Unicode
+/// compatibility, you may wish to format `Duration` objects yourself or use a
+/// crate to do so.
 #[stable(feature = "duration", since = "1.3.0")]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Duration {
@@ -108,18 +119,20 @@ impl Duration {
     #[unstable(feature = "duration_constants", issue = "57391")]
     pub const NANOSECOND: Duration = Duration::from_nanos(1);
 
-    /// The minimum duration.
+    /// A duration of zero time.
     ///
     /// # Examples
     ///
     /// ```
-    /// #![feature(duration_constants)]
+    /// #![feature(duration_zero)]
     /// use std::time::Duration;
     ///
-    /// assert_eq!(Duration::MIN, Duration::new(0, 0));
+    /// let duration = Duration::ZERO;
+    /// assert!(duration.is_zero());
+    /// assert_eq!(duration.as_nanos(), 0);
     /// ```
-    #[unstable(feature = "duration_constants", issue = "57391")]
-    pub const MIN: Duration = Duration::from_nanos(0);
+    #[unstable(feature = "duration_zero", issue = "73544")]
+    pub const ZERO: Duration = Duration::from_nanos(0);
 
     /// The maximum duration.
     ///
@@ -164,24 +177,6 @@ impl Duration {
         };
         let nanos = nanos % NANOS_PER_SEC;
         Duration { secs, nanos }
-    }
-
-    /// Creates a new `Duration` that spans no time.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// #![feature(duration_zero)]
-    /// use std::time::Duration;
-    ///
-    /// let duration = Duration::zero();
-    /// assert!(duration.is_zero());
-    /// assert_eq!(duration.as_nanos(), 0);
-    /// ```
-    #[unstable(feature = "duration_zero", issue = "73544")]
-    #[inline]
-    pub const fn zero() -> Duration {
-        Duration { secs: 0, nanos: 0 }
     }
 
     /// Creates a new `Duration` from the specified number of whole seconds.
@@ -277,7 +272,7 @@ impl Duration {
     /// #![feature(duration_zero)]
     /// use std::time::Duration;
     ///
-    /// assert!(Duration::zero().is_zero());
+    /// assert!(Duration::ZERO.is_zero());
     /// assert!(Duration::new(0, 0).is_zero());
     /// assert!(Duration::from_nanos(0).is_zero());
     /// assert!(Duration::from_secs(0).is_zero());
@@ -536,18 +531,18 @@ impl Duration {
         }
     }
 
-    /// Saturating `Duration` subtraction. Computes `self - other`, returning [`Duration::MIN`]
+    /// Saturating `Duration` subtraction. Computes `self - other`, returning [`Duration::ZERO`]
     /// if the result would be negative or if overflow occurred.
     ///
     /// # Examples
     ///
     /// ```
     /// #![feature(duration_saturating_ops)]
-    /// #![feature(duration_constants)]
+    /// #![feature(duration_zero)]
     /// use std::time::Duration;
     ///
     /// assert_eq!(Duration::new(0, 1).saturating_sub(Duration::new(0, 0)), Duration::new(0, 1));
-    /// assert_eq!(Duration::new(0, 0).saturating_sub(Duration::new(0, 1)), Duration::MIN);
+    /// assert_eq!(Duration::new(0, 0).saturating_sub(Duration::new(0, 1)), Duration::ZERO);
     /// ```
     #[unstable(feature = "duration_saturating_ops", issue = "76416")]
     #[inline]
@@ -555,7 +550,7 @@ impl Duration {
     pub const fn saturating_sub(self, rhs: Duration) -> Duration {
         match self.checked_sub(rhs) {
             Some(res) => res,
-            None => Duration::MIN,
+            None => Duration::ZERO,
         }
     }
 
@@ -1083,13 +1078,23 @@ impl fmt::Debug for Duration {
         }
 
         if self.secs > 0 {
-            fmt_decimal(f, self.secs, self.nanos, 100_000_000)?;
+            fmt_decimal(f, self.secs, self.nanos, NANOS_PER_SEC / 10)?;
             f.write_str("s")
-        } else if self.nanos >= 1_000_000 {
-            fmt_decimal(f, self.nanos as u64 / 1_000_000, self.nanos % 1_000_000, 100_000)?;
+        } else if self.nanos >= NANOS_PER_MILLI {
+            fmt_decimal(
+                f,
+                (self.nanos / NANOS_PER_MILLI) as u64,
+                self.nanos % NANOS_PER_MILLI,
+                NANOS_PER_MILLI / 10,
+            )?;
             f.write_str("ms")
-        } else if self.nanos >= 1_000 {
-            fmt_decimal(f, self.nanos as u64 / 1_000, self.nanos % 1_000, 100)?;
+        } else if self.nanos >= NANOS_PER_MICRO {
+            fmt_decimal(
+                f,
+                (self.nanos / NANOS_PER_MICRO) as u64,
+                self.nanos % NANOS_PER_MICRO,
+                NANOS_PER_MICRO / 10,
+            )?;
             f.write_str("µs")
         } else {
             fmt_decimal(f, self.nanos as u64, 0, 1)?;

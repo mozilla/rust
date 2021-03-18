@@ -264,6 +264,9 @@ fn main() {
     assert_eq!(f2 as i8, -128);
     assert_eq!(f2 as u8, 0);
 
+    let amount = 0;
+    assert_eq!(1u128 << amount, 1);
+
     static ANOTHER_STATIC: &u8 = &A_STATIC;
     assert_eq!(*ANOTHER_STATIC, 42);
 
@@ -286,6 +289,8 @@ fn main() {
     let repeat = [Some(42); 2];
     assert_eq!(repeat[0], Some(42));
     assert_eq!(repeat[1], Some(42));
+
+    from_decimal_string();
 
     #[cfg(not(jit))]
     test_tls();
@@ -445,4 +450,24 @@ fn check_niche_behavior () {
     if let E2::V1 { .. } = E2::V3::<Infallible> {
         intrinsics::abort();
     }
+}
+
+fn from_decimal_string() {
+    loop {
+        let multiplier = 1;
+
+        take_multiplier_ref(&multiplier);
+
+        if multiplier == 1 {
+            break;
+        }
+
+        unreachable();
+    }
+}
+
+fn take_multiplier_ref(_multiplier: &u128) {}
+
+fn unreachable() -> ! {
+    panic("unreachable")
 }

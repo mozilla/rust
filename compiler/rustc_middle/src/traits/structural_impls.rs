@@ -19,9 +19,13 @@ impl<'tcx, N: fmt::Debug> fmt::Debug for traits::ImplSource<'tcx, N> {
 
             super::ImplSource::DiscriminantKind(ref d) => write!(f, "{:?}", d),
 
+            super::ImplSource::Pointee(ref d) => write!(f, "{:?}", d),
+
             super::ImplSource::Object(ref d) => write!(f, "{:?}", d),
 
-            super::ImplSource::Param(ref n) => write!(f, "ImplSourceParamData({:?})", n),
+            super::ImplSource::Param(ref n, ct) => {
+                write!(f, "ImplSourceParamData({:?}, {:?})", n, ct)
+            }
 
             super::ImplSource::Builtin(ref d) => write!(f, "{:?}", d),
 
@@ -105,7 +109,8 @@ impl<'tcx, N: fmt::Debug> fmt::Debug for traits::ImplSourceTraitAliasData<'tcx, 
 ///////////////////////////////////////////////////////////////////////////
 // Lift implementations
 
-CloneTypeFoldableAndLiftImpls! {
+TrivialTypeFoldableAndLiftImpls! {
     super::IfExpressionCause,
     super::ImplSourceDiscriminantKindData,
+    super::ImplSourcePointeeData,
 }

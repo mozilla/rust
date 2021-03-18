@@ -3,13 +3,12 @@ use crate::llvm;
 use libc::c_int;
 use rustc_codegen_ssa::target_features::supported_target_features;
 use rustc_data_structures::fx::FxHashSet;
-use rustc_feature::UnstableFeatures;
 use rustc_middle::bug;
 use rustc_session::config::PrintRequest;
 use rustc_session::Session;
 use rustc_span::symbol::Symbol;
 use rustc_target::spec::{MergeFunctions, PanicStrategy};
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 
 use std::slice;
 use std::str;
@@ -46,7 +45,7 @@ fn require_inited() {
 }
 
 unsafe fn configure_llvm(sess: &Session) {
-    let n_args = sess.opts.cg.llvm_args.len() + sess.target.options.llvm_args.len();
+    let n_args = sess.opts.cg.llvm_args.len() + sess.target.llvm_args.len();
     let mut llvm_c_strs = Vec::with_capacity(n_args + 1);
     let mut llvm_args = Vec::with_capacity(n_args + 1);
 
@@ -57,7 +56,7 @@ unsafe fn configure_llvm(sess: &Session) {
     }
 
     let cg_opts = sess.opts.cg.llvm_args.iter();
-    let tg_opts = sess.target.options.llvm_args.iter();
+    let tg_opts = sess.target.llvm_args.iter();
     let sess_args = cg_opts.chain(tg_opts);
 
     let user_specified_args: FxHashSet<_> =
@@ -84,19 +83,14 @@ unsafe fn configure_llvm(sess: &Session) {
         if !sess.opts.debugging_opts.no_generate_arange_section {
             add("-generate-arange-section", false);
         }
-        match sess
-            .opts
-            .debugging_opts
-            .merge_functions
-            .unwrap_or(sess.target.options.merge_functions)
-        {
+        match sess.opts.debugging_opts.merge_functions.unwrap_or(sess.target.merge_functions) {
             MergeFunctions::Disabled | MergeFunctions::Trampolines => {}
             MergeFunctions::Aliases => {
                 add("-mergefunc-use-aliases", false);
             }
         }
 
-        if sess.target.target_os == "emscripten" && sess.panic_strategy() == PanicStrategy::Unwind {
+        if sess.target.os == "emscripten" && sess.panic_strategy() == PanicStrategy::Unwind {
             add("-enable-emscripten-cxx-exceptions", false);
         }
 
@@ -109,7 +103,7 @@ unsafe fn configure_llvm(sess: &Session) {
         }
     }
 
-    if sess.opts.debugging_opts.llvm_time_trace && get_major_version() >= 9 {
+    if sess.opts.debugging_opts.llvm_time_trace {
         // time-trace is not thread safe and running it in parallel will cause seg faults.
         if !sess.opts.debugging_opts.no_parallel_llvm {
             bug!("`-Z llvm-time-trace` requires `-Z no-parallel-llvm")
@@ -127,16 +121,21 @@ unsafe fn configure_llvm(sess: &Session) {
 
 pub fn time_trace_profiler_finish(file_name: &str) {
     unsafe {
-        if get_major_version() >= 9 {
-            let file_name = CString::new(file_name).unwrap();
-            llvm::LLVMTimeTraceProfilerFinish(file_name.as_ptr());
-        }
+        let file_name = CString::new(file_name).unwrap();
+        llvm::LLVMTimeTraceProfilerFinish(file_name.as_ptr());
     }
 }
 
 // WARNING: the features after applying `to_llvm_feature` must be known
 // to LLVM or the feature detection code will walk past the end of the feature
 // array, leading to crashes.
+// To find a list of LLVM's names, check llvm-project/llvm/include/llvm/Support/*TargetParser.def
+// where the * matches the architecture's name
+// Beware to not use the llvm github project for this, but check the git submodule
+// found in src/llvm-project
+// Though note that Rust can also be build with an external precompiled version of LLVM
+// which might lead to failures if the oldest tested / supported LLVM version
+// doesn't yet support the relevant intrinsics
 pub fn to_llvm_feature<'a>(sess: &Session, s: &'a str) -> &'a str {
     let arch = if sess.target.arch == "x86_64" { "x86" } else { &*sess.target.arch };
     match (arch, s) {
@@ -144,6 +143,9 @@ pub fn to_llvm_feature<'a>(sess: &Session, s: &'a str) -> &'a str {
         ("x86", "rdrand") => "rdrnd",
         ("x86", "bmi1") => "bmi",
         ("x86", "cmpxchg16b") => "cx16",
+        ("x86", "avx512vaes") => "vaes",
+        ("x86", "avx512gfni") => "gfni",
+        ("x86", "avx512vpclmulqdq") => "vpclmulqdq",
         ("aarch64", "fp") => "fp-armv8",
         ("aarch64", "fp16") => "fullfp16",
         (_, s) => s,
@@ -154,13 +156,11 @@ pub fn target_features(sess: &Session) -> Vec<Symbol> {
     let target_machine = create_informational_target_machine(sess);
     supported_target_features(sess)
         .iter()
-        .filter_map(|&(feature, gate)| {
-            if UnstableFeatures::from_environment().is_nightly_build() || gate.is_none() {
-                Some(feature)
-            } else {
-                None
-            }
-        })
+        .filter_map(
+            |&(feature, gate)| {
+                if sess.is_nightly_build() || gate.is_none() { Some(feature) } else { None }
+            },
+        )
         .filter(|feature| {
             let llvm_feature = to_llvm_feature(sess, feature);
             let cstr = CString::new(llvm_feature).unwrap();
@@ -171,14 +171,15 @@ pub fn target_features(sess: &Session) -> Vec<Symbol> {
 }
 
 pub fn print_version() {
-    // Can be called without initializing LLVM
-    unsafe {
-        println!("LLVM version: {}.{}", llvm::LLVMRustVersionMajor(), llvm::LLVMRustVersionMinor());
-    }
+    let (major, minor, patch) = get_version();
+    println!("LLVM version: {}.{}.{}", major, minor, patch);
 }
 
-pub fn get_major_version() -> u32 {
-    unsafe { llvm::LLVMRustVersionMajor() }
+pub fn get_version() -> (u32, u32, u32) {
+    // Can be called without initializing LLVM
+    unsafe {
+        (llvm::LLVMRustVersionMajor(), llvm::LLVMRustVersionMinor(), llvm::LLVMRustVersionPatch())
+    }
 }
 
 pub fn print_passes() {
@@ -213,17 +214,88 @@ fn handle_native(name: &str) -> &str {
 }
 
 pub fn target_cpu(sess: &Session) -> &str {
-    let name = match sess.opts.cg.target_cpu {
-        Some(ref s) => &**s,
-        None => &*sess.target.options.cpu,
-    };
-
+    let name = sess.opts.cg.target_cpu.as_ref().unwrap_or(&sess.target.cpu);
     handle_native(name)
 }
 
+/// The list of LLVM features computed from CLI flags (`-Ctarget-cpu`, `-Ctarget-feature`,
+/// `--target` and similar).
+// FIXME(nagisa): Cache the output of this somehow? Maybe make this a query? We're calling this
+// for every function that has `#[target_feature]` on it. The global features won't change between
+// the functions; only crates, maybe…
+pub fn llvm_global_features(sess: &Session) -> Vec<String> {
+    // FIXME(nagisa): this should definitely be available more centrally and to other codegen backends.
+    /// These features control behaviour of rustc rather than llvm.
+    const RUSTC_SPECIFIC_FEATURES: &[&str] = &["crt-static"];
+
+    // Features that come earlier are overriden by conflicting features later in the string.
+    // Typically we'll want more explicit settings to override the implicit ones, so:
+    //
+    // * Features from -Ctarget-cpu=*; are overriden by [^1]
+    // * Features implied by --target; are overriden by
+    // * Features from -Ctarget-feature; are overriden by
+    // * function specific features.
+    //
+    // [^1]: target-cpu=native is handled here, other target-cpu values are handled implicitly
+    // through LLVM TargetMachine implementation.
+    //
+    // FIXME(nagisa): it isn't clear what's the best interaction between features implied by
+    // `-Ctarget-cpu` and `--target` are. On one hand, you'd expect CLI arguments to always
+    // override anything that's implicit, so e.g. when there's no `--target` flag, features implied
+    // the host target are overriden by `-Ctarget-cpu=*`. On the other hand, what about when both
+    // `--target` and `-Ctarget-cpu=*` are specified? Both then imply some target features and both
+    // flags are specified by the user on the CLI. It isn't as clear-cut which order of precedence
+    // should be taken in cases like these.
+    let mut features = vec![];
+
+    // -Ctarget-cpu=native
+    match sess.opts.cg.target_cpu {
+        Some(ref s) if s == "native" => {
+            let features_string = unsafe {
+                let ptr = llvm::LLVMGetHostCPUFeatures();
+                let features_string = if !ptr.is_null() {
+                    CStr::from_ptr(ptr)
+                        .to_str()
+                        .unwrap_or_else(|e| {
+                            bug!("LLVM returned a non-utf8 features string: {}", e);
+                        })
+                        .to_owned()
+                } else {
+                    bug!("could not allocate host CPU features, LLVM returned a `null` string");
+                };
+
+                llvm::LLVMDisposeMessage(ptr);
+
+                features_string
+            };
+            features.extend(features_string.split(",").map(String::from));
+        }
+        Some(_) | None => {}
+    };
+
+    // Features implied by an implicit or explicit `--target`.
+    features.extend(
+        sess.target
+            .features
+            .split(',')
+            .filter(|f| !f.is_empty() && !RUSTC_SPECIFIC_FEATURES.iter().any(|s| f.contains(s)))
+            .map(String::from),
+    );
+
+    // -Ctarget-features
+    features.extend(
+        sess.opts
+            .cg
+            .target_feature
+            .split(',')
+            .filter(|f| !f.is_empty() && !RUSTC_SPECIFIC_FEATURES.iter().any(|s| f.contains(s)))
+            .map(String::from),
+    );
+
+    features
+}
+
 pub fn tune_cpu(sess: &Session) -> Option<&str> {
-    match sess.opts.debugging_opts.tune_cpu {
-        Some(ref s) => Some(handle_native(&**s)),
-        None => None,
-    }
+    let name = sess.opts.debugging_opts.tune_cpu.as_ref()?;
+    Some(handle_native(name))
 }

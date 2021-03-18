@@ -1,6 +1,6 @@
 //! Unicode string slices.
 //!
-//! *[See also the `str` primitive type](../../std/primitive.str.html).*
+//! *[See also the `str` primitive type](str).*
 //!
 //! The `&str` type is one of the two main string types, the other being `String`.
 //! Unlike its `String` counterpart, its contents are borrowed.
@@ -388,7 +388,7 @@ impl str {
         }
 
         fn case_ignoreable_then_cased<I: Iterator<Item = char>>(iter: I) -> bool {
-            use core::unicode::derived_property::{Case_Ignorable, Cased};
+            use core::unicode::{Case_Ignorable, Cased};
             match iter.skip_while(|&c| Case_Ignorable(c)).next() {
                 Some(c) => Cased(c),
                 None => false,
@@ -450,8 +450,6 @@ impl str {
     }
 
     /// Converts a [`Box<str>`] into a [`String`] without copying or allocating.
-    ///
-    /// [`Box<str>`]: Box
     ///
     /// # Examples
     ///

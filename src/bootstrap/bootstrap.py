@@ -187,9 +187,26 @@ def format_build_time(duration):
     return str(datetime.timedelta(seconds=int(duration)))
 
 
-def default_build_triple():
+def default_build_triple(verbose):
     """Build triple as in LLVM"""
+    # If the user already has a host build triple with an existing `rustc`
+    # install, use their preference. This fixes most issues with Windows builds
+    # being detected as GNU instead of MSVC.
     default_encoding = sys.getdefaultencoding()
+    try:
+        version = subprocess.check_output(["rustc", "--version", "--verbose"],
+                stderr=subprocess.DEVNULL)
+        version = version.decode(default_encoding)
+        host = next(x for x in version.split('\n') if x.startswith("host: "))
+        triple = host.split("host: ")[1]
+        if verbose:
+            print("detected default triple {}".format(triple))
+        return triple
+    except Exception as e:
+        if verbose:
+            print("rustup not detected: {}".format(e))
+            print("falling back to auto-detect")
+
     required = sys.platform != 'win32'
     ostype = require(["uname", "-s"], exit=required)
     cputype = require(['uname', '-m'], exit=required)
@@ -223,13 +240,16 @@ def default_build_triple():
         else:
             ostype = 'unknown-linux-gnu'
     elif ostype == 'SunOS':
-        ostype = 'sun-solaris'
+        ostype = 'pc-solaris'
         # On Solaris, uname -m will return a machine classification instead
         # of a cpu type, so uname -p is recommended instead.  However, the
         # output from that option is too generic for our purposes (it will
         # always emit 'i386' on x86/amd64 systems).  As such, isainfo -k
         # must be used instead.
         cputype = require(['isainfo', '-k']).decode(default_encoding)
+        # sparc cpus have sun as a target vendor
+        if 'sparc' in cputype:
+            ostype = 'sun-solaris'
     elif ostype.startswith('MINGW'):
         # msys' `uname` does not print gcc configuration, but prints msys
         # configuration. so we cannot believe `uname -m`:
@@ -335,17 +355,18 @@ def output(filepath):
     with open(tmp, 'w') as f:
         yield f
     try:
-        os.remove(filepath)  # PermissionError/OSError on Win32 if in use
-        os.rename(tmp, filepath)
+        if os.path.exists(filepath):
+            os.remove(filepath)  # PermissionError/OSError on Win32 if in use
     except OSError:
         shutil.copy2(tmp, filepath)
         os.remove(tmp)
+        return
+    os.rename(tmp, filepath)
 
 
 class RustBuild(object):
     """Provide all the methods required to build Rust"""
     def __init__(self):
-        self.cargo_channel = ''
         self.date = ''
         self._download_url = ''
         self.rustc_channel = ''
@@ -360,6 +381,7 @@ class RustBuild(object):
         self.verbose = False
         self.git_version = None
         self.nix_deps_dir = None
+        self.rustc_commit = None
 
     def download_stage0(self):
         """Fetch the build system for Rust, written in Rust
@@ -372,42 +394,40 @@ class RustBuild(object):
         will move all the content to the right place.
         """
         rustc_channel = self.rustc_channel
-        cargo_channel = self.cargo_channel
         rustfmt_channel = self.rustfmt_channel
 
         if self.rustc().startswith(self.bin_root()) and \
                 (not os.path.exists(self.rustc()) or
-                 self.program_out_of_date(self.rustc_stamp())):
+                 self.program_out_of_date(self.rustc_stamp(), self.date + str(self.rustc_commit))):
             if os.path.exists(self.bin_root()):
                 shutil.rmtree(self.bin_root())
+            download_rustc = self.rustc_commit is not None
             tarball_suffix = '.tar.xz' if support_xz() else '.tar.gz'
             filename = "rust-std-{}-{}{}".format(
                 rustc_channel, self.build, tarball_suffix)
             pattern = "rust-std-{}".format(self.build)
-            self._download_stage0_helper(filename, pattern, tarball_suffix)
-
+            self._download_component_helper(filename, pattern, tarball_suffix, download_rustc)
             filename = "rustc-{}-{}{}".format(rustc_channel, self.build,
                                               tarball_suffix)
-            self._download_stage0_helper(filename, "rustc", tarball_suffix)
+            self._download_component_helper(filename, "rustc", tarball_suffix, download_rustc)
+            filename = "cargo-{}-{}{}".format(rustc_channel, self.build,
+                                              tarball_suffix)
+            self._download_component_helper(filename, "cargo", tarball_suffix)
+            if self.rustc_commit is not None:
+                filename = "rustc-dev-{}-{}{}".format(rustc_channel, self.build, tarball_suffix)
+                self._download_component_helper(
+                    filename, "rustc-dev", tarball_suffix, download_rustc
+                )
+
             self.fix_bin_or_dylib("{}/bin/rustc".format(self.bin_root()))
             self.fix_bin_or_dylib("{}/bin/rustdoc".format(self.bin_root()))
+            self.fix_bin_or_dylib("{}/bin/cargo".format(self.bin_root()))
             lib_dir = "{}/lib".format(self.bin_root())
             for lib in os.listdir(lib_dir):
                 if lib.endswith(".so"):
-                    self.fix_bin_or_dylib("{}/{}".format(lib_dir, lib))
+                    self.fix_bin_or_dylib(os.path.join(lib_dir, lib), rpath_libz=True)
             with output(self.rustc_stamp()) as rust_stamp:
-                rust_stamp.write(self.date)
-
-        if self.cargo().startswith(self.bin_root()) and \
-                (not os.path.exists(self.cargo()) or
-                 self.program_out_of_date(self.cargo_stamp())):
-            tarball_suffix = '.tar.xz' if support_xz() else '.tar.gz'
-            filename = "cargo-{}-{}{}".format(cargo_channel, self.build,
-                                              tarball_suffix)
-            self._download_stage0_helper(filename, "cargo", tarball_suffix)
-            self.fix_bin_or_dylib("{}/bin/cargo".format(self.bin_root()))
-            with output(self.cargo_stamp()) as cargo_stamp:
-                cargo_stamp.write(self.date)
+                rust_stamp.write(self.date + str(self.rustc_commit))
 
         if self.rustfmt() and self.rustfmt().startswith(self.bin_root()) and (
             not os.path.exists(self.rustfmt())
@@ -417,11 +437,13 @@ class RustBuild(object):
                 tarball_suffix = '.tar.xz' if support_xz() else '.tar.gz'
                 [channel, date] = rustfmt_channel.split('-', 1)
                 filename = "rustfmt-{}-{}{}".format(channel, self.build, tarball_suffix)
-                self._download_stage0_helper(filename, "rustfmt-preview", tarball_suffix, date)
+                self._download_component_helper(
+                    filename, "rustfmt-preview", tarball_suffix, key=date
+                )
                 self.fix_bin_or_dylib("{}/bin/rustfmt".format(self.bin_root()))
                 self.fix_bin_or_dylib("{}/bin/cargo-fmt".format(self.bin_root()))
                 with output(self.rustfmt_stamp()) as rustfmt_stamp:
-                    rustfmt_stamp.write(self.date + self.rustfmt_channel)
+                    rustfmt_stamp.write(self.rustfmt_channel)
 
         if self.downloading_llvm():
             # We want the most recent LLVM submodule update to avoid downloading
@@ -432,38 +454,68 @@ class RustBuild(object):
             #
             # This works even in a repository that has not yet initialized
             # submodules.
+            top_level = subprocess.check_output([
+                "git", "rev-parse", "--show-toplevel",
+            ]).decode(sys.getdefaultencoding()).strip()
             llvm_sha = subprocess.check_output([
                 "git", "log", "--author=bors", "--format=%H", "-n1",
                 "-m", "--first-parent",
                 "--",
-                "src/llvm-project",
-                "src/bootstrap/download-ci-llvm-stamp",
+                "{}/src/llvm-project".format(top_level),
+                "{}/src/bootstrap/download-ci-llvm-stamp".format(top_level),
             ]).decode(sys.getdefaultencoding()).strip()
             llvm_assertions = self.get_toml('assertions', 'llvm') == 'true'
+            llvm_root = self.llvm_root()
+            llvm_lib = os.path.join(llvm_root, "lib")
             if self.program_out_of_date(self.llvm_stamp(), llvm_sha + str(llvm_assertions)):
                 self._download_ci_llvm(llvm_sha, llvm_assertions)
                 for binary in ["llvm-config", "FileCheck"]:
-                    self.fix_bin_or_dylib("{}/bin/{}".format(self.llvm_root(), binary))
+                    self.fix_bin_or_dylib(os.path.join(llvm_root, "bin", binary), rpath_libz=True)
+                for lib in os.listdir(llvm_lib):
+                    if lib.endswith(".so"):
+                        self.fix_bin_or_dylib(os.path.join(llvm_lib, lib), rpath_libz=True)
                 with output(self.llvm_stamp()) as llvm_stamp:
-                    llvm_stamp.write(self.date + llvm_sha + str(llvm_assertions))
+                    llvm_stamp.write(llvm_sha + str(llvm_assertions))
 
     def downloading_llvm(self):
         opt = self.get_toml('download-ci-llvm', 'llvm')
+        # This is currently all tier 1 targets (since others may not have CI
+        # artifacts)
+        # https://doc.rust-lang.org/rustc/platform-support.html#tier-1
+        supported_platforms = [
+            "aarch64-unknown-linux-gnu",
+            "i686-pc-windows-gnu",
+            "i686-pc-windows-msvc",
+            "i686-unknown-linux-gnu",
+            "x86_64-unknown-linux-gnu",
+            "x86_64-apple-darwin",
+            "x86_64-pc-windows-gnu",
+            "x86_64-pc-windows-msvc",
+        ]
         return opt == "true" \
-            or (opt == "if-available" and self.build == "x86_64-unknown-linux-gnu")
+            or (opt == "if-available" and self.build in supported_platforms)
 
-    def _download_stage0_helper(self, filename, pattern, tarball_suffix, date=None):
-        if date is None:
-            date = self.date
+    def _download_component_helper(
+        self, filename, pattern, tarball_suffix, download_rustc=False, key=None
+    ):
+        if key is None:
+            if download_rustc:
+                key = self.rustc_commit
+            else:
+                key = self.date
         cache_dst = os.path.join(self.build_dir, "cache")
-        rustc_cache = os.path.join(cache_dst, date)
+        rustc_cache = os.path.join(cache_dst, key)
         if not os.path.exists(rustc_cache):
             os.makedirs(rustc_cache)
 
-        url = "{}/dist/{}".format(self._download_url, date)
+        if download_rustc:
+            url = "https://ci-artifacts.rust-lang.org/rustc-builds/{}".format(self.rustc_commit)
+        else:
+            url = "{}/dist/{}".format(self._download_url, key)
         tarball = os.path.join(rustc_cache, filename)
         if not os.path.exists(tarball):
-            get("{}/{}".format(url, filename), tarball, verbose=self.verbose)
+            do_verify = not download_rustc
+            get("{}/{}".format(url, filename), tarball, verbose=self.verbose, do_verify=do_verify)
         unpack(tarball, tarball_suffix, self.bin_root(), match=pattern, verbose=self.verbose)
 
     def _download_ci_llvm(self, llvm_sha, llvm_assertions):
@@ -476,7 +528,12 @@ class RustBuild(object):
         url = "https://ci-artifacts.rust-lang.org/rustc-builds/{}".format(llvm_sha)
         if llvm_assertions:
             url = url.replace('rustc-builds', 'rustc-builds-alt')
-        tarball_suffix = '.tar.xz' if support_xz() else '.tar.gz'
+        # ci-artifacts are only stored as .xz, not .gz
+        if not support_xz():
+            print("error: XZ support is required to download LLVM")
+            print("help: consider disabling `download-ci-llvm` or using python3")
+            exit(1)
+        tarball_suffix = '.tar.xz'
         filename = "rust-dev-nightly-" + self.build + tarball_suffix
         tarball = os.path.join(rustc_cache, filename)
         if not os.path.exists(tarball):
@@ -485,7 +542,7 @@ class RustBuild(object):
                 match="rust-dev",
                 verbose=self.verbose)
 
-    def fix_bin_or_dylib(self, fname):
+    def fix_bin_or_dylib(self, fname, rpath_libz=False):
         """Modifies the interpreter section of 'fname' to fix the dynamic linker,
         or the RPATH section, to fix the dynamic library search path
 
@@ -555,26 +612,51 @@ class RustBuild(object):
             self.nix_deps_dir = nix_deps_dir
 
         patchelf = "{}/patchelf/bin/patchelf".format(nix_deps_dir)
+        patchelf_args = []
 
-        if fname.endswith(".so"):
-            # Dynamic library, patch RPATH to point to system dependencies.
+        if rpath_libz:
+            # Patch RPATH to add `zlib` dependency that stems from LLVM
             dylib_deps = ["zlib"]
             rpath_entries = [
                 # Relative default, all binary and dynamic libraries we ship
                 # appear to have this (even when `../lib` is redundant).
                 "$ORIGIN/../lib",
             ] + ["{}/{}/lib".format(nix_deps_dir, dep) for dep in dylib_deps]
-            patchelf_args = ["--set-rpath", ":".join(rpath_entries)]
-        else:
+            patchelf_args += ["--set-rpath", ":".join(rpath_entries)]
+        if not fname.endswith(".so"):
+            # Finally, set the corret .interp for binaries
             bintools_dir = "{}/stdenv.cc.bintools".format(nix_deps_dir)
             with open("{}/nix-support/dynamic-linker".format(bintools_dir)) as dynamic_linker:
-                patchelf_args = ["--set-interpreter", dynamic_linker.read().rstrip()]
+                patchelf_args += ["--set-interpreter", dynamic_linker.read().rstrip()]
 
         try:
             subprocess.check_output([patchelf] + patchelf_args + [fname])
         except subprocess.CalledProcessError as reason:
             print("warning: failed to call patchelf:", reason)
             return
+
+    # Return the stage1 compiler to download, if any.
+    def maybe_download_rustc(self):
+        # If `download-rustc` is not set, default to rebuilding.
+        if self.get_toml("download-rustc", section="rust") != "true":
+            return None
+
+        # Handle running from a directory other than the top level
+        rev_parse = ["git", "rev-parse", "--show-toplevel"]
+        top_level = subprocess.check_output(rev_parse, universal_newlines=True).strip()
+        compiler = "{}/compiler/".format(top_level)
+
+        # Look for a version to compare to based on the current commit.
+        # Only commits merged by bors will have CI artifacts.
+        merge_base = ["git", "log", "--author=bors", "--pretty=%H", "-n1"]
+        commit = subprocess.check_output(merge_base, universal_newlines=True).strip()
+
+        # Warn if there were changes to the compiler since the ancestor commit.
+        status = subprocess.call(["git", "diff-index", "--quiet", commit, "--", compiler])
+        if status != 0:
+            print("warning: `download-rustc` is enabled, but there are changes to compiler/")
+
+        return commit
 
     def rustc_stamp(self):
         """Return the path for .rustc-stamp
@@ -585,16 +667,6 @@ class RustBuild(object):
         True
         """
         return os.path.join(self.bin_root(), '.rustc-stamp')
-
-    def cargo_stamp(self):
-        """Return the path for .cargo-stamp
-
-        >>> rb = RustBuild()
-        >>> rb.build_dir = "build"
-        >>> rb.cargo_stamp() == os.path.join("build", "stage0", ".cargo-stamp")
-        True
-        """
-        return os.path.join(self.bin_root(), '.cargo-stamp')
 
     def rustfmt_stamp(self):
         """Return the path for .rustfmt-stamp
@@ -617,12 +689,12 @@ class RustBuild(object):
         return os.path.join(self.llvm_root(), '.llvm-stamp')
 
 
-    def program_out_of_date(self, stamp_path, extra=""):
+    def program_out_of_date(self, stamp_path, key):
         """Check if the given program stamp is out of date"""
         if not os.path.exists(stamp_path) or self.clean:
             return True
         with open(stamp_path, 'r') as stamp:
-            return (self.date + extra) != stamp.read()
+            return key != stamp.read()
 
     def bin_root(self):
         """Return the binary root directory
@@ -796,7 +868,7 @@ class RustBuild(object):
         env.setdefault("RUSTFLAGS", "")
         env["RUSTFLAGS"] += " -Cdebuginfo=2"
 
-        build_section = "target.{}".format(self.build_triple())
+        build_section = "target.{}".format(self.build)
         target_features = []
         if self.get_toml("crt-static", build_section) == "true":
             target_features += ["+crt-static"]
@@ -807,6 +879,7 @@ class RustBuild(object):
         target_linker = self.get_toml("linker", build_section)
         if target_linker is not None:
             env["RUSTFLAGS"] += " -C linker=" + target_linker
+        # cfg(bootstrap): Add `-Wsemicolon_in_expressions_from_macros` after the next beta bump
         env["RUSTFLAGS"] += " -Wrust_2018_idioms -Wunused_lifetimes"
         if self.get_toml("deny-warnings", "rust") != "false":
             env["RUSTFLAGS"] += " -Dwarnings"
@@ -827,11 +900,15 @@ class RustBuild(object):
         run(args, env=env, verbose=self.verbose)
 
     def build_triple(self):
-        """Build triple as in LLVM"""
+        """Build triple as in LLVM
+
+        Note that `default_build_triple` is moderately expensive,
+        so use `self.build` where possible.
+        """
         config = self.get_toml('build')
         if config:
             return config
-        return default_build_triple()
+        return default_build_triple(self.verbose)
 
     def check_submodule(self, module, slow_submodules):
         if not slow_submodules:
@@ -894,13 +971,17 @@ class RustBuild(object):
         filtered_submodules = []
         submodules_names = []
         llvm_checked_out = os.path.exists(os.path.join(self.rust_root, "src/llvm-project/.git"))
+        external_llvm_provided = self.get_toml('llvm-config') or self.downloading_llvm()
+        llvm_needed = not self.get_toml('codegen-backends', 'rust') \
+            or "llvm" in self.get_toml('codegen-backends', 'rust')
         for module in submodules:
             if module.endswith("llvm-project"):
-                # Don't sync the llvm-project submodule either if an external LLVM
-                # was provided, or if we are downloading LLVM. Also, if the
-                # submodule has been initialized already, sync it anyways so that
-                # it doesn't mess up contributor pull requests.
-                if self.get_toml('llvm-config') or self.downloading_llvm():
+                # Don't sync the llvm-project submodule if an external LLVM was
+                # provided, if we are downloading LLVM or if the LLVM backend is
+                # not being built. Also, if the submodule has been initialized
+                # already, sync it anyways so that it doesn't mess up contributor
+                # pull requests.
+                if external_llvm_provided or not llvm_needed:
                     if self.get_toml('lld') != 'true' and not llvm_checked_out:
                         continue
             check = self.check_submodule(module, slow_submodules)
@@ -1041,7 +1122,6 @@ def bootstrap(help_triggered):
     data = stage0_data(build.rust_root)
     build.date = data['date']
     build.rustc_channel = data['rustc']
-    build.cargo_channel = data['cargo']
 
     if "rustfmt" in data:
         build.rustfmt_channel = data['rustfmt']
@@ -1051,10 +1131,17 @@ def bootstrap(help_triggered):
     else:
         build.set_normal_environment()
 
+    build.build = args.build or build.build_triple()
     build.update_submodules()
 
     # Fetch/build the bootstrap
-    build.build = args.build or build.build_triple()
+    build.rustc_commit = build.maybe_download_rustc()
+    if build.rustc_commit is not None:
+        if build.verbose:
+            commit = build.rustc_commit
+            print("using downloaded stage1 artifacts from CI (commit {})".format(commit))
+        # FIXME: support downloading artifacts from the beta channel
+        build.rustc_channel = "nightly"
     build.download_stage0()
     sys.stdout.flush()
     build.ensure_vendored()

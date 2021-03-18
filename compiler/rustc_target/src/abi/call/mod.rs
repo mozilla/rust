@@ -27,18 +27,27 @@ mod x86_win64;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PassMode {
     /// Ignore the argument.
+    ///
+    /// The argument is either uninhabited or a ZST.
     Ignore,
     /// Pass the argument directly.
+    ///
+    /// The argument has a layout abi of `Scalar`, `Vector` or in rare cases `Aggregate`.
     Direct(ArgAttributes),
     /// Pass a pair's elements directly in two arguments.
+    ///
+    /// The argument has a layout abi of `ScalarPair`.
     Pair(ArgAttributes, ArgAttributes),
     /// Pass the argument after casting it, to either
     /// a single uniform or a pair of registers.
     Cast(CastTarget),
     /// Pass the argument indirectly via a hidden pointer.
-    /// The second value, if any, is for the extra data (vtable or length)
+    /// The `extra_attrs` value, if any, is for the extra data (vtable or length)
     /// which indicates that it refers to an unsized rvalue.
-    Indirect(ArgAttributes, Option<ArgAttributes>),
+    /// `on_stack` defines that the the value should be passed at a fixed
+    /// stack offset in accordance to the ABI rather than passed using a
+    /// pointer. This corresponds to the `byval` LLVM argument attribute.
+    Indirect { attrs: ArgAttributes, extra_attrs: Option<ArgAttributes>, on_stack: bool },
 }
 
 // Hack to disable non_upper_case_globals only for the bitflags! and not for the rest
@@ -52,17 +61,23 @@ mod attr_impl {
     bitflags::bitflags! {
         #[derive(Default)]
         pub struct ArgAttribute: u16 {
-            const ByVal     = 1 << 0;
             const NoAlias   = 1 << 1;
             const NoCapture = 1 << 2;
             const NonNull   = 1 << 3;
             const ReadOnly  = 1 << 4;
-            const SExt      = 1 << 5;
-            const StructRet = 1 << 6;
-            const ZExt      = 1 << 7;
             const InReg     = 1 << 8;
         }
     }
+}
+
+/// Sometimes an ABI requires small integers to be extended to a full or partial register. This enum
+/// defines if this extension should be zero-extension or sign-extension when necssary. When it is
+/// not necesary to extend the argument, this enum is ignored.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum ArgExtension {
+    None,
+    Zext,
+    Sext,
 }
 
 /// A compact representation of LLVM attributes (at least those relevant for this module)
@@ -70,6 +85,7 @@ mod attr_impl {
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct ArgAttributes {
     pub regular: ArgAttribute,
+    pub arg_ext: ArgExtension,
     /// The minimum size of the pointee, guaranteed to be valid for the duration of the whole call
     /// (corresponding to LLVM's dereferenceable and dereferenceable_or_null attributes).
     pub pointee_size: Size,
@@ -80,9 +96,21 @@ impl ArgAttributes {
     pub fn new() -> Self {
         ArgAttributes {
             regular: ArgAttribute::default(),
+            arg_ext: ArgExtension::None,
             pointee_size: Size::ZERO,
             pointee_align: None,
         }
+    }
+
+    pub fn ext(&mut self, ext: ArgExtension) -> &mut Self {
+        assert!(
+            self.arg_ext == ArgExtension::None || self.arg_ext == ext,
+            "cannot set {:?} when {:?} is already set",
+            ext,
+            self.arg_ext
+        );
+        self.arg_ext = ext;
+        self
     }
 
     pub fn set(&mut self, attr: ArgAttribute) -> &mut Self {
@@ -180,7 +208,7 @@ impl Uniform {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct CastTarget {
     pub prefix: [Option<RegKind>; 8],
-    pub prefix_chunk: Size,
+    pub prefix_chunk_size: Size,
     pub rest: Uniform,
 }
 
@@ -192,7 +220,7 @@ impl From<Reg> for CastTarget {
 
 impl From<Uniform> for CastTarget {
     fn from(uniform: Uniform) -> CastTarget {
-        CastTarget { prefix: [None; 8], prefix_chunk: Size::ZERO, rest: uniform }
+        CastTarget { prefix: [None; 8], prefix_chunk_size: Size::ZERO, rest: uniform }
     }
 }
 
@@ -200,13 +228,13 @@ impl CastTarget {
     pub fn pair(a: Reg, b: Reg) -> CastTarget {
         CastTarget {
             prefix: [Some(a.kind), None, None, None, None, None, None, None],
-            prefix_chunk: a.size,
+            prefix_chunk_size: a.size,
             rest: Uniform::from(b),
         }
     }
 
     pub fn size<C: HasDataLayout>(&self, cx: &C) -> Size {
-        (self.prefix_chunk * self.prefix.iter().filter(|x| x.is_some()).count() as u64)
+        (self.prefix_chunk_size * self.prefix.iter().filter(|x| x.is_some()).count() as u64)
             .align_to(self.rest.align(cx))
             + self.rest.total
     }
@@ -214,7 +242,7 @@ impl CastTarget {
     pub fn align<C: HasDataLayout>(&self, cx: &C) -> Align {
         self.prefix
             .iter()
-            .filter_map(|x| x.map(|kind| Reg { kind, size: self.prefix_chunk }.align(cx)))
+            .filter_map(|x| x.map(|kind| Reg { kind, size: self.prefix_chunk_size }.align(cx)))
             .fold(cx.data_layout().aggregate_align.abi.max(self.rest.align(cx)), |acc, align| {
                 acc.max(align)
             })
@@ -417,35 +445,56 @@ pub struct ArgAbi<'a, Ty> {
 }
 
 impl<'a, Ty> ArgAbi<'a, Ty> {
-    pub fn new(layout: TyAndLayout<'a, Ty>) -> Self {
-        ArgAbi { layout, pad: None, mode: PassMode::Direct(ArgAttributes::new()) }
+    pub fn new(
+        cx: &impl HasDataLayout,
+        layout: TyAndLayout<'a, Ty>,
+        scalar_attrs: impl Fn(&TyAndLayout<'a, Ty>, &abi::Scalar, Size) -> ArgAttributes,
+    ) -> Self {
+        let mode = match &layout.abi {
+            Abi::Uninhabited => PassMode::Ignore,
+            Abi::Scalar(scalar) => PassMode::Direct(scalar_attrs(&layout, scalar, Size::ZERO)),
+            Abi::ScalarPair(a, b) => PassMode::Pair(
+                scalar_attrs(&layout, a, Size::ZERO),
+                scalar_attrs(&layout, b, a.value.size(cx).align_to(b.value.align(cx).abi)),
+            ),
+            Abi::Vector { .. } => PassMode::Direct(ArgAttributes::new()),
+            Abi::Aggregate { .. } => PassMode::Direct(ArgAttributes::new()),
+        };
+        ArgAbi { layout, pad: None, mode }
     }
 
-    pub fn make_indirect(&mut self) {
-        assert_eq!(self.mode, PassMode::Direct(ArgAttributes::new()));
-
-        // Start with fresh attributes for the pointer.
+    fn indirect_pass_mode(layout: &TyAndLayout<'a, Ty>) -> PassMode {
         let mut attrs = ArgAttributes::new();
 
         // For non-immediate arguments the callee gets its own copy of
         // the value on the stack, so there are no aliases. It's also
         // program-invisible so can't possibly capture
         attrs.set(ArgAttribute::NoAlias).set(ArgAttribute::NoCapture).set(ArgAttribute::NonNull);
-        attrs.pointee_size = self.layout.size;
+        attrs.pointee_size = layout.size;
         // FIXME(eddyb) We should be doing this, but at least on
         // i686-pc-windows-msvc, it results in wrong stack offsets.
-        // attrs.pointee_align = Some(self.layout.align.abi);
+        // attrs.pointee_align = Some(layout.align.abi);
 
-        let extra_attrs = self.layout.is_unsized().then_some(ArgAttributes::new());
+        let extra_attrs = layout.is_unsized().then_some(ArgAttributes::new());
 
-        self.mode = PassMode::Indirect(attrs, extra_attrs);
+        PassMode::Indirect { attrs, extra_attrs, on_stack: false }
+    }
+
+    pub fn make_indirect(&mut self) {
+        match self.mode {
+            PassMode::Direct(_) | PassMode::Pair(_, _) => {}
+            PassMode::Indirect { attrs: _, extra_attrs: None, on_stack: false } => return,
+            _ => panic!("Tried to make {:?} indirect", self.mode),
+        }
+
+        self.mode = Self::indirect_pass_mode(&self.layout);
     }
 
     pub fn make_indirect_byval(&mut self) {
         self.make_indirect();
         match self.mode {
-            PassMode::Indirect(ref mut attrs, _) => {
-                attrs.set(ArgAttribute::ByVal);
+            PassMode::Indirect { attrs: _, extra_attrs: _, ref mut on_stack } => {
+                *on_stack = true;
             }
             _ => unreachable!(),
         }
@@ -457,7 +506,11 @@ impl<'a, Ty> ArgAbi<'a, Ty> {
             if let abi::Int(i, signed) = scalar.value {
                 if i.size().bits() < bits {
                     if let PassMode::Direct(ref mut attrs) = self.mode {
-                        attrs.set(if signed { ArgAttribute::SExt } else { ArgAttribute::ZExt });
+                        if signed {
+                            attrs.ext(ArgExtension::Sext)
+                        } else {
+                            attrs.ext(ArgExtension::Zext)
+                        };
                     }
                 }
             }
@@ -465,7 +518,6 @@ impl<'a, Ty> ArgAbi<'a, Ty> {
     }
 
     pub fn cast_to<T: Into<CastTarget>>(&mut self, target: T) {
-        assert_eq!(self.mode, PassMode::Direct(ArgAttributes::new()));
         self.mode = PassMode::Cast(target.into());
     }
 
@@ -474,31 +526,19 @@ impl<'a, Ty> ArgAbi<'a, Ty> {
     }
 
     pub fn is_indirect(&self) -> bool {
-        match self.mode {
-            PassMode::Indirect(..) => true,
-            _ => false,
-        }
+        matches!(self.mode, PassMode::Indirect { .. })
     }
 
     pub fn is_sized_indirect(&self) -> bool {
-        match self.mode {
-            PassMode::Indirect(_, None) => true,
-            _ => false,
-        }
+        matches!(self.mode, PassMode::Indirect { attrs: _, extra_attrs: None, on_stack: _ })
     }
 
     pub fn is_unsized_indirect(&self) -> bool {
-        match self.mode {
-            PassMode::Indirect(_, Some(_)) => true,
-            _ => false,
-        }
+        matches!(self.mode, PassMode::Indirect { attrs: _, extra_attrs: Some(_), on_stack: _ })
     }
 
     pub fn is_ignore(&self) -> bool {
-        match self.mode {
-            PassMode::Ignore => true,
-            _ => false,
-        }
+        matches!(self.mode, PassMode::Ignore)
     }
 }
 
@@ -511,6 +551,7 @@ pub enum Conv {
 
     // Target-specific calling conventions.
     ArmAapcs,
+    CCmseNonSecureCall,
 
     Msp430Intr,
 
@@ -562,6 +603,13 @@ impl<'a, Ty> FnAbi<'a, Ty> {
         Ty: TyAndLayoutMethods<'a, C> + Copy,
         C: LayoutOf<Ty = Ty, TyAndLayout = TyAndLayout<'a, Ty>> + HasDataLayout + HasTargetSpec,
     {
+        if abi == spec::abi::Abi::X86Interrupt {
+            if let Some(arg) = self.args.first_mut() {
+                arg.make_indirect_byval();
+            }
+            return Ok(());
+        }
+
         match &cx.target_spec().arch[..] {
             "x86" => {
                 let flavor = if abi == spec::abi::Abi::Fastcall {
@@ -574,7 +622,7 @@ impl<'a, Ty> FnAbi<'a, Ty> {
             "x86_64" => {
                 if abi == spec::abi::Abi::SysV64 {
                     x86_64::compute_abi_info(cx, self);
-                } else if abi == spec::abi::Abi::Win64 || cx.target_spec().options.is_like_windows {
+                } else if abi == spec::abi::Abi::Win64 || cx.target_spec().is_like_windows {
                     x86_win64::compute_abi_info(self);
                 } else {
                     x86_64::compute_abi_info(cx, self);
@@ -596,15 +644,12 @@ impl<'a, Ty> FnAbi<'a, Ty> {
             "nvptx64" => nvptx64::compute_abi_info(self),
             "hexagon" => hexagon::compute_abi_info(self),
             "riscv32" | "riscv64" => riscv::compute_abi_info(cx, self),
-            "wasm32" if cx.target_spec().target_os != "emscripten" => {
-                wasm32_bindgen_compat::compute_abi_info(self)
-            }
-            "wasm32" | "asmjs" => wasm32::compute_abi_info(cx, self),
+            "wasm32" => match cx.target_spec().os.as_str() {
+                "emscripten" | "wasi" => wasm32::compute_abi_info(cx, self),
+                _ => wasm32_bindgen_compat::compute_abi_info(self),
+            },
+            "asmjs" => wasm32::compute_abi_info(cx, self),
             a => return Err(format!("unrecognized arch \"{}\" in target specification", a)),
-        }
-
-        if let PassMode::Indirect(ref mut attrs, _) = self.ret.mode {
-            attrs.set(ArgAttribute::StructRet);
         }
 
         Ok(())

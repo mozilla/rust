@@ -2,7 +2,6 @@
 #![allow(incomplete_features)]
 #![cfg_attr(full, feature(const_generics))]
 #![cfg_attr(full, allow(incomplete_features))]
-#![cfg_attr(min, feature(min_const_generics))]
 
 trait HasSize {
     const SIZE: usize;
@@ -17,8 +16,8 @@ struct ArrayHolder<const X: usize>([u32; X]);
 impl<const X: usize> ArrayHolder<X> {
     pub const fn new() -> Self {
         ArrayHolder([0; Self::SIZE])
-        //[full]~^ ERROR constant expression depends on a generic parameter
-        //[min]~^^ ERROR generic `Self` types are currently
+        //~^ ERROR constant expression depends on a generic parameter
+        //[min]~| ERROR mismatched types
     }
 }
 

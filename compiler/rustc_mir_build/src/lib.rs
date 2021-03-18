@@ -9,6 +9,7 @@
 #![feature(control_flow_enum)]
 #![feature(crate_visibility_modifier)]
 #![feature(bool_to_option)]
+#![feature(once_cell)]
 #![feature(or_patterns)]
 #![recursion_limit = "256"]
 
@@ -19,7 +20,7 @@ extern crate rustc_middle;
 
 mod build;
 mod lints;
-mod thir;
+pub mod thir;
 
 use rustc_middle::ty::query::Providers;
 

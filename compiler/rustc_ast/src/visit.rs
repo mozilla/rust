@@ -14,8 +14,7 @@
 //! those that are created by the expansion of a macro.
 
 use crate::ast::*;
-use crate::token::Token;
-use crate::tokenstream::{TokenStream, TokenTree};
+use crate::token;
 
 use rustc_span::symbol::{Ident, Symbol};
 use rustc_span::Span;
@@ -75,7 +74,7 @@ impl<'a> FnKind<'a> {
 /// Each method of the `Visitor` trait is a hook to be potentially
 /// overridden. Each method's default implementation recursively visits
 /// the substructure of the input via the corresponding `walk` method;
-/// e.g., the `visit_mod` method by default calls `visit::walk_mod`.
+/// e.g., the `visit_item` method by default calls `visit::walk_item`.
 ///
 /// If you want to ensure that your code handles every variant
 /// explicitly, you need to override each method. (And you also need
@@ -87,9 +86,6 @@ pub trait Visitor<'ast>: Sized {
     }
     fn visit_ident(&mut self, ident: Ident) {
         walk_ident(self, ident);
-    }
-    fn visit_mod(&mut self, m: &'ast Mod, _s: Span, _attrs: &[Attribute], _n: NodeId) {
-        walk_mod(self, m);
     }
     fn visit_foreign_item(&mut self, i: &'ast ForeignItem) {
         walk_foreign_item(self, i)
@@ -155,8 +151,8 @@ pub trait Visitor<'ast>: Sized {
     fn visit_variant_data(&mut self, s: &'ast VariantData) {
         walk_struct_def(self, s)
     }
-    fn visit_struct_field(&mut self, s: &'ast StructField) {
-        walk_struct_field(self, s)
+    fn visit_field_def(&mut self, s: &'ast FieldDef) {
+        walk_field_def(self, s)
     }
     fn visit_enum_def(
         &mut self,
@@ -176,13 +172,8 @@ pub trait Visitor<'ast>: Sized {
     fn visit_lifetime(&mut self, lifetime: &'ast Lifetime) {
         walk_lifetime(self, lifetime)
     }
-    fn visit_mac(&mut self, _mac: &'ast MacCall) {
-        panic!("visit_mac disabled by default");
-        // N.B., see note about macros above.
-        // if you really want a visitor that
-        // works on macros, use this
-        // definition in your trait impl:
-        // visit::walk_mac(self, _mac)
+    fn visit_mac_call(&mut self, mac: &'ast MacCall) {
+        walk_mac(self, mac)
     }
     fn visit_mac_def(&mut self, _mac: &'ast MacroDef, _id: NodeId) {
         // Nothing to do
@@ -208,14 +199,6 @@ pub trait Visitor<'ast>: Sized {
     fn visit_attribute(&mut self, attr: &'ast Attribute) {
         walk_attribute(self, attr)
     }
-    fn visit_tt(&mut self, tt: TokenTree) {
-        walk_tt(self, tt)
-    }
-    fn visit_tts(&mut self, tts: TokenStream) {
-        walk_tts(self, tts)
-    }
-    fn visit_token(&mut self, _t: Token) {}
-    // FIXME: add `visit_interpolated` and `walk_interpolated`
     fn visit_vis(&mut self, vis: &'ast Visibility) {
         walk_vis(self, vis)
     }
@@ -225,11 +208,11 @@ pub trait Visitor<'ast>: Sized {
     fn visit_fn_header(&mut self, _header: &'ast FnHeader) {
         // Nothing to do
     }
-    fn visit_field(&mut self, f: &'ast Field) {
-        walk_field(self, f)
+    fn visit_expr_field(&mut self, f: &'ast ExprField) {
+        walk_expr_field(self, f)
     }
-    fn visit_field_pattern(&mut self, fp: &'ast FieldPat) {
-        walk_field_pattern(self, fp)
+    fn visit_pat_field(&mut self, fp: &'ast PatField) {
+        walk_pat_field(self, fp)
     }
 }
 
@@ -252,12 +235,8 @@ pub fn walk_ident<'a, V: Visitor<'a>>(visitor: &mut V, ident: Ident) {
 }
 
 pub fn walk_crate<'a, V: Visitor<'a>>(visitor: &mut V, krate: &'a Crate) {
-    visitor.visit_mod(&krate.module, krate.span, &krate.attrs, CRATE_NODE_ID);
+    walk_list!(visitor, visit_item, &krate.items);
     walk_list!(visitor, visit_attribute, &krate.attrs);
-}
-
-pub fn walk_mod<'a, V: Visitor<'a>>(visitor: &mut V, module: &'a Mod) {
-    walk_list!(visitor, visit_item, &module.items);
 }
 
 pub fn walk_local<'a, V: Visitor<'a>>(visitor: &mut V, local: &'a Local) {
@@ -306,17 +285,22 @@ pub fn walk_item<'a, V: Visitor<'a>>(visitor: &mut V, item: &'a Item) {
             visitor.visit_ty(typ);
             walk_list!(visitor, visit_expr, expr);
         }
-        ItemKind::Fn(_, ref sig, ref generics, ref body) => {
+        ItemKind::Fn(box FnKind(_, ref sig, ref generics, ref body)) => {
             visitor.visit_generics(generics);
             let kind = FnKind::Fn(FnCtxt::Free, item.ident, sig, &item.vis, body.as_deref());
             visitor.visit_fn(kind, item.span, item.id)
         }
-        ItemKind::Mod(ref module) => visitor.visit_mod(module, item.span, &item.attrs, item.id),
+        ItemKind::Mod(_unsafety, ref mod_kind) => match mod_kind {
+            ModKind::Loaded(items, _inline, _inner_span) => {
+                walk_list!(visitor, visit_item, items)
+            }
+            ModKind::Unloaded => {}
+        },
         ItemKind::ForeignMod(ref foreign_module) => {
             walk_list!(visitor, visit_foreign_item, &foreign_module.items);
         }
         ItemKind::GlobalAsm(ref ga) => visitor.visit_global_asm(ga),
-        ItemKind::TyAlias(_, ref generics, ref bounds, ref ty) => {
+        ItemKind::TyAlias(box TyAliasKind(_, ref generics, ref bounds, ref ty)) => {
             visitor.visit_generics(generics);
             walk_list!(visitor, visit_param_bound, bounds);
             walk_list!(visitor, visit_ty, ty);
@@ -325,7 +309,7 @@ pub fn walk_item<'a, V: Visitor<'a>>(visitor: &mut V, item: &'a Item) {
             visitor.visit_generics(generics);
             visitor.visit_enum_def(enum_definition, generics, item.id, item.span)
         }
-        ItemKind::Impl {
+        ItemKind::Impl(box ImplKind {
             unsafety: _,
             polarity: _,
             defaultness: _,
@@ -334,7 +318,7 @@ pub fn walk_item<'a, V: Visitor<'a>>(visitor: &mut V, item: &'a Item) {
             ref of_trait,
             ref self_ty,
             ref items,
-        } => {
+        }) => {
             visitor.visit_generics(generics);
             walk_list!(visitor, visit_trait_ref, of_trait);
             visitor.visit_ty(self_ty);
@@ -345,7 +329,7 @@ pub fn walk_item<'a, V: Visitor<'a>>(visitor: &mut V, item: &'a Item) {
             visitor.visit_generics(generics);
             visitor.visit_variant_data(struct_definition);
         }
-        ItemKind::Trait(.., ref generics, ref bounds, ref items) => {
+        ItemKind::Trait(box TraitKind(.., ref generics, ref bounds, ref items)) => {
             visitor.visit_generics(generics);
             walk_list!(visitor, visit_param_bound, bounds);
             walk_list!(visitor, visit_assoc_item, items, AssocCtxt::Trait);
@@ -354,7 +338,7 @@ pub fn walk_item<'a, V: Visitor<'a>>(visitor: &mut V, item: &'a Item) {
             visitor.visit_generics(generics);
             walk_list!(visitor, visit_param_bound, bounds);
         }
-        ItemKind::MacCall(ref mac) => visitor.visit_mac(mac),
+        ItemKind::MacCall(ref mac) => visitor.visit_mac_call(mac),
         ItemKind::MacroDef(ref ts) => visitor.visit_mac_def(ts, item.id),
     }
     walk_list!(visitor, visit_attribute, &item.attrs);
@@ -380,13 +364,13 @@ where
     walk_list!(visitor, visit_attribute, &variant.attrs);
 }
 
-pub fn walk_field<'a, V: Visitor<'a>>(visitor: &mut V, f: &'a Field) {
+pub fn walk_expr_field<'a, V: Visitor<'a>>(visitor: &mut V, f: &'a ExprField) {
     visitor.visit_expr(&f.expr);
     visitor.visit_ident(f.ident);
     walk_list!(visitor, visit_attribute, f.attrs.iter());
 }
 
-pub fn walk_field_pattern<'a, V: Visitor<'a>>(visitor: &mut V, fp: &'a FieldPat) {
+pub fn walk_pat_field<'a, V: Visitor<'a>>(visitor: &mut V, fp: &'a PatField) {
     visitor.visit_ident(fp.ident);
     visitor.visit_pat(&fp.pat);
     walk_list!(visitor, visit_attribute, fp.attrs.iter());
@@ -422,7 +406,7 @@ pub fn walk_ty<'a, V: Visitor<'a>>(visitor: &mut V, typ: &'a Ty) {
         }
         TyKind::Typeof(ref expression) => visitor.visit_anon_const(expression),
         TyKind::Infer | TyKind::ImplicitSelf | TyKind::Err => {}
-        TyKind::MacCall(ref mac) => visitor.visit_mac(mac),
+        TyKind::MacCall(ref mac) => visitor.visit_mac_call(mac),
         TyKind::Never | TyKind::CVarArgs => {}
     }
 }
@@ -498,6 +482,9 @@ pub fn walk_assoc_ty_constraint<'a, V: Visitor<'a>>(
     constraint: &'a AssocTyConstraint,
 ) {
     visitor.visit_ident(constraint.ident);
+    if let Some(ref gen_args) = constraint.gen_args {
+        visitor.visit_generic_args(gen_args.span(), gen_args);
+    }
     match constraint.kind {
         AssocTyConstraintKind::Equality { ref ty } => {
             visitor.visit_ty(ty);
@@ -522,7 +509,7 @@ pub fn walk_pat<'a, V: Visitor<'a>>(visitor: &mut V, pattern: &'a Pat) {
         }
         PatKind::Struct(ref path, ref fields, _) => {
             visitor.visit_path(path, pattern.id);
-            walk_list!(visitor, visit_field_pattern, fields);
+            walk_list!(visitor, visit_pat_field, fields);
         }
         PatKind::Box(ref subpattern)
         | PatKind::Ref(ref subpattern, _)
@@ -540,7 +527,7 @@ pub fn walk_pat<'a, V: Visitor<'a>>(visitor: &mut V, pattern: &'a Pat) {
         PatKind::Tuple(ref elems) | PatKind::Slice(ref elems) | PatKind::Or(ref elems) => {
             walk_list!(visitor, visit_pat, elems);
         }
-        PatKind::MacCall(ref mac) => visitor.visit_mac(mac),
+        PatKind::MacCall(ref mac) => visitor.visit_mac_call(mac),
     }
 }
 
@@ -554,18 +541,18 @@ pub fn walk_foreign_item<'a, V: Visitor<'a>>(visitor: &mut V, item: &'a ForeignI
             visitor.visit_ty(ty);
             walk_list!(visitor, visit_expr, expr);
         }
-        ForeignItemKind::Fn(_, sig, generics, body) => {
+        ForeignItemKind::Fn(box FnKind(_, sig, generics, body)) => {
             visitor.visit_generics(generics);
             let kind = FnKind::Fn(FnCtxt::Foreign, ident, sig, vis, body.as_deref());
             visitor.visit_fn(kind, span, id);
         }
-        ForeignItemKind::TyAlias(_, generics, bounds, ty) => {
+        ForeignItemKind::TyAlias(box TyAliasKind(_, generics, bounds, ty)) => {
             visitor.visit_generics(generics);
             walk_list!(visitor, visit_param_bound, bounds);
             walk_list!(visitor, visit_ty, ty);
         }
         ForeignItemKind::MacCall(mac) => {
-            visitor.visit_mac(mac);
+            visitor.visit_mac_call(mac);
         }
     }
 }
@@ -588,7 +575,12 @@ pub fn walk_generic_param<'a, V: Visitor<'a>>(visitor: &mut V, param: &'a Generi
     match param.kind {
         GenericParamKind::Lifetime => (),
         GenericParamKind::Type { ref default } => walk_list!(visitor, visit_ty, default),
-        GenericParamKind::Const { ref ty, .. } => visitor.visit_ty(ty),
+        GenericParamKind::Const { ref ty, ref default, .. } => {
+            visitor.visit_ty(ty);
+            if let Some(default) = default {
+                visitor.visit_anon_const(default);
+            }
+        }
     }
 }
 
@@ -659,33 +651,33 @@ pub fn walk_assoc_item<'a, V: Visitor<'a>>(visitor: &mut V, item: &'a AssocItem,
             visitor.visit_ty(ty);
             walk_list!(visitor, visit_expr, expr);
         }
-        AssocItemKind::Fn(_, sig, generics, body) => {
+        AssocItemKind::Fn(box FnKind(_, sig, generics, body)) => {
             visitor.visit_generics(generics);
             let kind = FnKind::Fn(FnCtxt::Assoc(ctxt), ident, sig, vis, body.as_deref());
             visitor.visit_fn(kind, span, id);
         }
-        AssocItemKind::TyAlias(_, generics, bounds, ty) => {
+        AssocItemKind::TyAlias(box TyAliasKind(_, generics, bounds, ty)) => {
             visitor.visit_generics(generics);
             walk_list!(visitor, visit_param_bound, bounds);
             walk_list!(visitor, visit_ty, ty);
         }
         AssocItemKind::MacCall(mac) => {
-            visitor.visit_mac(mac);
+            visitor.visit_mac_call(mac);
         }
     }
 }
 
 pub fn walk_struct_def<'a, V: Visitor<'a>>(visitor: &mut V, struct_definition: &'a VariantData) {
-    walk_list!(visitor, visit_struct_field, struct_definition.fields());
+    walk_list!(visitor, visit_field_def, struct_definition.fields());
 }
 
-pub fn walk_struct_field<'a, V: Visitor<'a>>(visitor: &mut V, struct_field: &'a StructField) {
-    visitor.visit_vis(&struct_field.vis);
-    if let Some(ident) = struct_field.ident {
+pub fn walk_field_def<'a, V: Visitor<'a>>(visitor: &mut V, field: &'a FieldDef) {
+    visitor.visit_vis(&field.vis);
+    if let Some(ident) = field.ident {
         visitor.visit_ident(ident);
     }
-    visitor.visit_ty(&struct_field.ty);
-    walk_list!(visitor, visit_attribute, &struct_field.attrs);
+    visitor.visit_ty(&field.ty);
+    walk_list!(visitor, visit_attribute, &field.attrs);
 }
 
 pub fn walk_block<'a, V: Visitor<'a>>(visitor: &mut V, block: &'a Block) {
@@ -699,8 +691,8 @@ pub fn walk_stmt<'a, V: Visitor<'a>>(visitor: &mut V, statement: &'a Stmt) {
         StmtKind::Expr(ref expr) | StmtKind::Semi(ref expr) => visitor.visit_expr(expr),
         StmtKind::Empty => {}
         StmtKind::MacCall(ref mac) => {
-            let MacCallStmt { ref mac, style: _, ref attrs } = **mac;
-            visitor.visit_mac(mac);
+            let MacCallStmt { ref mac, style: _, ref attrs, tokens: _ } = **mac;
+            visitor.visit_mac_call(mac);
             for attr in attrs.iter() {
                 visitor.visit_attribute(attr);
             }
@@ -729,10 +721,14 @@ pub fn walk_expr<'a, V: Visitor<'a>>(visitor: &mut V, expression: &'a Expr) {
             visitor.visit_expr(element);
             visitor.visit_anon_const(count)
         }
-        ExprKind::Struct(ref path, ref fields, ref optional_base) => {
-            visitor.visit_path(path, expression.id);
-            walk_list!(visitor, visit_field, fields);
-            walk_list!(visitor, visit_expr, optional_base);
+        ExprKind::Struct(ref se) => {
+            visitor.visit_path(&se.path, expression.id);
+            walk_list!(visitor, visit_expr_field, &se.fields);
+            match &se.rest {
+                StructRest::Base(expr) => visitor.visit_expr(expr),
+                StructRest::Rest(_span) => {}
+                StructRest::None => {}
+            }
         }
         ExprKind::Tup(ref subexpressions) => {
             walk_list!(visitor, visit_expr, subexpressions);
@@ -815,6 +811,7 @@ pub fn walk_expr<'a, V: Visitor<'a>>(visitor: &mut V, expression: &'a Expr) {
             walk_list!(visitor, visit_expr, start);
             walk_list!(visitor, visit_expr, end);
         }
+        ExprKind::Underscore => {}
         ExprKind::Path(ref maybe_qself, ref path) => {
             if let Some(ref qself) = *maybe_qself {
                 visitor.visit_ty(&qself.ty);
@@ -831,7 +828,7 @@ pub fn walk_expr<'a, V: Visitor<'a>>(visitor: &mut V, expression: &'a Expr) {
         ExprKind::Ret(ref optional_expression) => {
             walk_list!(visitor, visit_expr, optional_expression);
         }
-        ExprKind::MacCall(ref mac) => visitor.visit_mac(mac),
+        ExprKind::MacCall(ref mac) => visitor.visit_mac_call(mac),
         ExprKind::Paren(ref subexpression) => visitor.visit_expr(subexpression),
         ExprKind::InlineAsm(ref ia) => {
             for (op, _) in &ia.operands {
@@ -894,7 +891,7 @@ pub fn walk_vis<'a, V: Visitor<'a>>(visitor: &mut V, vis: &'a Visibility) {
 
 pub fn walk_attribute<'a, V: Visitor<'a>>(visitor: &mut V, attr: &'a Attribute) {
     match attr.kind {
-        AttrKind::Normal(ref item) => walk_mac_args(visitor, &item.args),
+        AttrKind::Normal(ref item, ref _tokens) => walk_mac_args(visitor, &item.args),
         AttrKind::DocComment(..) => {}
     }
 }
@@ -902,20 +899,15 @@ pub fn walk_attribute<'a, V: Visitor<'a>>(visitor: &mut V, attr: &'a Attribute) 
 pub fn walk_mac_args<'a, V: Visitor<'a>>(visitor: &mut V, args: &'a MacArgs) {
     match args {
         MacArgs::Empty => {}
-        MacArgs::Delimited(_dspan, _delim, tokens) => visitor.visit_tts(tokens.clone()),
-        MacArgs::Eq(_eq_span, tokens) => visitor.visit_tts(tokens.clone()),
-    }
-}
-
-pub fn walk_tt<'a, V: Visitor<'a>>(visitor: &mut V, tt: TokenTree) {
-    match tt {
-        TokenTree::Token(token) => visitor.visit_token(token),
-        TokenTree::Delimited(_, _, tts) => visitor.visit_tts(tts),
-    }
-}
-
-pub fn walk_tts<'a, V: Visitor<'a>>(visitor: &mut V, tts: TokenStream) {
-    for tt in tts.trees() {
-        visitor.visit_tt(tt);
+        MacArgs::Delimited(_dspan, _delim, _tokens) => {}
+        // The value in `#[key = VALUE]` must be visited as an expression for backward
+        // compatibility, so that macros can be expanded in that position.
+        MacArgs::Eq(_eq_span, token) => match &token.kind {
+            token::Interpolated(nt) => match &**nt {
+                token::NtExpr(expr) => visitor.visit_expr(expr),
+                t => panic!("unexpected token in key-value attribute: {:?}", t),
+            },
+            t => panic!("unexpected token in key-value attribute: {:?}", t),
+        },
     }
 }

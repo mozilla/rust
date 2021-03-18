@@ -52,13 +52,13 @@ The types of top-level items, which never contain unbound type
 variables, are stored directly into the `tcx` typeck_results.
 
 N.B., a type variable is not the same thing as a type parameter.  A
-type variable is rather an "instance" of a type parameter: that is,
-given a generic function `fn foo<T>(t: T)`: while checking the
+type variable is an instance of a type parameter. That is,
+given a generic function `fn foo<T>(t: T)`, while checking the
 function `foo`, the type `ty_param(0)` refers to the type `T`, which
-is treated in abstract.  When `foo()` is called, however, `T` will be
+is treated in abstract. However, when `foo()` is called, `T` will be
 substituted for a fresh type variable `N`.  This variable will
 eventually be resolved to some concrete type (which might itself be
-type parameter).
+a type parameter).
 
 */
 
@@ -108,7 +108,7 @@ use rustc_hir::def::Res;
 use rustc_hir::def_id::{CrateNum, DefId, LocalDefId, LOCAL_CRATE};
 use rustc_hir::intravisit::Visitor;
 use rustc_hir::itemlikevisit::ItemLikeVisitor;
-use rustc_hir::{HirIdMap, Node};
+use rustc_hir::{HirIdMap, ImplicitSelfKind, Node};
 use rustc_index::bit_set::BitSet;
 use rustc_index::vec::Idx;
 use rustc_infer::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
@@ -121,9 +121,9 @@ use rustc_middle::ty::{self, RegionKind, Ty, TyCtxt, UserType};
 use rustc_session::config;
 use rustc_session::parse::feature_err;
 use rustc_session::Session;
-use rustc_span::source_map::DUMMY_SP;
 use rustc_span::symbol::{kw, Ident};
 use rustc_span::{self, BytePos, MultiSpan, Span};
+use rustc_span::{source_map::DUMMY_SP, sym};
 use rustc_target::abi::VariantIdx;
 use rustc_target::spec::abi::Abi;
 use rustc_trait_selection::traits;
@@ -184,14 +184,14 @@ impl UnsafetyState {
         UnsafetyState { def, unsafety, unsafe_push_count: 0, from_fn: true }
     }
 
-    pub fn recurse(&mut self, blk: &hir::Block<'_>) -> UnsafetyState {
+    pub fn recurse(self, blk: &hir::Block<'_>) -> UnsafetyState {
         use hir::BlockCheckMode;
         match self.unsafety {
             // If this unsafe, then if the outer function was already marked as
             // unsafe we shouldn't attribute the unsafe'ness to the block. This
             // way the block can be warned about instead of ignoring this
             // extraneous block (functions are never warned about).
-            hir::Unsafety::Unsafe if self.from_fn => *self,
+            hir::Unsafety::Unsafe if self.from_fn => self,
 
             unsafety => {
                 let (unsafety, def, count) = match blk.rules {
@@ -270,7 +270,7 @@ fn adt_destructor(tcx: TyCtxt<'_>, def_id: DefId) -> Option<ty::Destructor> {
 
 /// If this `DefId` is a "primary tables entry", returns
 /// `Some((body_id, header, decl))` with information about
-/// it's body-id, fn-header and fn-decl (if any). Otherwise,
+/// its body-id, fn-header and fn-decl (if any). Otherwise,
 /// returns `None`.
 ///
 /// If this function returns `Some`, then `typeck_results(def_id)` will
@@ -362,7 +362,7 @@ fn used_trait_imports(tcx: TyCtxt<'_>, def_id: LocalDefId) -> &FxHashSet<LocalDe
 /// conclude that we don't have a defining use of `MyItem`. By mapping inference
 /// variables back to the actual generic parameters, we will correctly see that
 /// we have a defining use of `MyItem`
-fn fixup_opaque_types<'tcx, T>(tcx: TyCtxt<'tcx>, val: &T) -> T
+fn fixup_opaque_types<'tcx, T>(tcx: TyCtxt<'tcx>, val: T) -> T
 where
     T: TypeFoldable<'tcx>,
 {
@@ -495,12 +495,13 @@ fn typeck_with_fallback<'tcx>(
         let fcx = if let (Some(header), Some(decl)) = (fn_header, fn_decl) {
             let fn_sig = if crate::collect::get_infer_ret_ty(&decl.output).is_some() {
                 let fcx = FnCtxt::new(&inh, param_env, body.value.hir_id);
-                AstConv::ty_of_fn(
+                <dyn AstConv<'_>>::ty_of_fn(
                     &fcx,
                     header.unsafety,
                     header.abi,
                     decl,
                     &hir::Generics::empty(),
+                    None,
                     None,
                 )
             } else {
@@ -510,15 +511,15 @@ fn typeck_with_fallback<'tcx>(
             check_abi(tcx, span, fn_sig.abi());
 
             // Compute the fty from point of view of inside the fn.
-            let fn_sig = tcx.liberate_late_bound_regions(def_id.to_def_id(), &fn_sig);
+            let fn_sig = tcx.liberate_late_bound_regions(def_id.to_def_id(), fn_sig);
             let fn_sig = inh.normalize_associated_types_in(
                 body.value.span,
                 body_id.hir_id,
                 param_env,
-                &fn_sig,
+                fn_sig,
             );
 
-            let fn_sig = fixup_opaque_types(tcx, &fn_sig);
+            let fn_sig = fixup_opaque_types(tcx, fn_sig);
 
             let fcx = check_fn(&inh, param_env, fn_sig, decl, id, body, None).0;
             fcx
@@ -526,7 +527,7 @@ fn typeck_with_fallback<'tcx>(
             let fcx = FnCtxt::new(&inh, param_env, body.value.hir_id);
             let expected_type = body_ty
                 .and_then(|ty| match ty.kind {
-                    hir::TyKind::Infer => Some(AstConv::ast_ty_to_ty(&fcx, ty)),
+                    hir::TyKind::Infer => Some(<dyn AstConv<'_>>::ast_ty_to_ty(&fcx, ty)),
                     _ => None,
                 })
                 .unwrap_or_else(|| match tcx.hir().get(id) {
@@ -543,14 +544,15 @@ fn typeck_with_fallback<'tcx>(
                     _ => fallback(),
                 });
 
-            let expected_type = fcx.normalize_associated_types_in(body.value.span, &expected_type);
+            let expected_type = fcx.normalize_associated_types_in(body.value.span, expected_type);
             fcx.require_type_is_sized(expected_type, body.value.span, traits::ConstSized);
 
-            let revealed_ty = if tcx.features().impl_trait_in_bindings {
-                fcx.instantiate_opaque_types_from_value(id, &expected_type, body.value.span)
-            } else {
-                expected_type
-            };
+            let revealed_ty = fcx.instantiate_opaque_types_from_value(
+                id,
+                expected_type,
+                body.value.span,
+                Some(sym::impl_trait_in_bindings),
+            );
 
             // Gather locals in statics (because of block expressions).
             GatherLocalsVisitor::new(&fcx, id).visit_body(body);
@@ -838,7 +840,7 @@ fn missing_items_err(
     // Obtain the level of indentation ending in `sugg_sp`.
     let indentation = tcx.sess.source_map().span_to_margin(sugg_sp).unwrap_or(0);
     // Make the whitespace that will make the suggestion have the right indentation.
-    let padding: String = (0..indentation).map(|_| " ").collect();
+    let padding: String = std::iter::repeat(" ").take(indentation).collect();
 
     for trait_item in missing_items {
         let snippet = suggestion_signature(&trait_item, tcx);
@@ -864,9 +866,9 @@ fn bounds_from_generic_predicates<'tcx>(
     let mut projections = vec![];
     for (predicate, _) in predicates.predicates {
         debug!("predicate {:?}", predicate);
-        let bound_predicate = predicate.bound_atom();
+        let bound_predicate = predicate.kind();
         match bound_predicate.skip_binder() {
-            ty::PredicateAtom::Trait(trait_predicate, _) => {
+            ty::PredicateKind::Trait(trait_predicate, _) => {
                 let entry = types.entry(trait_predicate.self_ty()).or_default();
                 let def_id = trait_predicate.def_id();
                 if Some(def_id) != tcx.lang_items().sized_trait() {
@@ -875,7 +877,7 @@ fn bounds_from_generic_predicates<'tcx>(
                     entry.push(trait_predicate.def_id());
                 }
             }
-            ty::PredicateAtom::Projection(projection_pred) => {
+            ty::PredicateKind::Projection(projection_pred) => {
                 projections.push(bound_predicate.rebind(projection_pred));
             }
             _ => {}
@@ -1061,7 +1063,10 @@ fn report_unexpected_variant_res(tcx: TyCtxt<'_>, res: Res, span: Span) {
         E0533,
         "expected unit struct, unit variant or constant, found {}{}",
         res.descr(),
-        tcx.sess.source_map().span_to_snippet(span).map_or(String::new(), |s| format!(" `{}`", s)),
+        tcx.sess
+            .source_map()
+            .span_to_snippet(span)
+            .map_or_else(|_| String::new(), |s| format!(" `{}`", s)),
     )
     .emit();
 }
@@ -1134,6 +1139,7 @@ impl ItemLikeVisitor<'tcx> for CheckItemTypesVisitor<'tcx> {
     }
     fn visit_trait_item(&mut self, _: &'tcx hir::TraitItem<'tcx>) {}
     fn visit_impl_item(&mut self, _: &'tcx hir::ImplItem<'tcx>) {}
+    fn visit_foreign_item(&mut self, _: &'tcx hir::ForeignItem<'tcx>) {}
 }
 
 fn typeck_item_bodies(tcx: TyCtxt<'_>, crate_num: CrateNum) {

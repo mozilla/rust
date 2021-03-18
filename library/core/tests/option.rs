@@ -161,6 +161,13 @@ fn test_unwrap_or_else() {
 }
 
 #[test]
+fn test_unwrap_unchecked() {
+    assert_eq!(unsafe { Some(1).unwrap_unchecked() }, 1);
+    let s = unsafe { Some("hello".to_string()).unwrap_unchecked() };
+    assert_eq!(s, "hello");
+}
+
+#[test]
 fn test_iter() {
     let val = 5;
 
@@ -401,4 +408,14 @@ fn test_unwrap_drop() {
     }
 
     assert_eq!(x.get(), 0);
+}
+
+#[test]
+pub fn option_ext() {
+    let thing = "{{ f }}";
+    let f = thing.find("{{");
+
+    if f.is_none() {
+        println!("None!");
+    }
 }

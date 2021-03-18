@@ -122,12 +122,12 @@ pub fn finalize(cx: &CodegenCx<'_, '_>) {
         // for macOS to understand. For more info see #11352
         // This can be overridden using --llvm-opts -dwarf-version,N.
         // Android has the same issue (#22398)
-        if let Some(version) = cx.sess().target.options.dwarf_version {
+        if let Some(version) = cx.sess().target.dwarf_version {
             llvm::LLVMRustAddModuleFlag(cx.llmod, "Dwarf Version\0".as_ptr().cast(), version)
         }
 
         // Indicate that we want CodeView debug information on MSVC
-        if cx.sess().target.options.is_like_msvc {
+        if cx.sess().target.is_like_msvc {
             llvm::LLVMRustAddModuleFlag(cx.llmod, "CodeView\0".as_ptr().cast(), 1)
         }
 
@@ -224,9 +224,9 @@ pub struct DebugLoc {
     /// Information about the original source file.
     pub file: Lrc<SourceFile>,
     /// The (1-based) line number.
-    pub line: Option<u32>,
+    pub line: u32,
     /// The (1-based) column number.
-    pub col: Option<u32>,
+    pub col: u32,
 }
 
 impl CodegenCx<'ll, '_> {
@@ -243,16 +243,16 @@ impl CodegenCx<'ll, '_> {
                 let line = (line + 1) as u32;
                 let col = (pos - line_pos).to_u32() + 1;
 
-                (file, Some(line), Some(col))
+                (file, line, col)
             }
-            Err(file) => (file, None, None),
+            Err(file) => (file, UNKNOWN_LINE_NUMBER, UNKNOWN_COLUMN_NUMBER),
         };
 
         // For MSVC, omit the column number.
         // Otherwise, emit it. This mimics clang behaviour.
         // See discussion in https://github.com/rust-lang/rust/issues/42921
-        if self.sess().target.options.is_like_msvc {
-            DebugLoc { file, line, col: None }
+        if self.sess().target.is_like_msvc {
+            DebugLoc { file, line, col: UNKNOWN_COLUMN_NUMBER }
         } else {
             DebugLoc { file, line, col }
         }
@@ -358,9 +358,9 @@ impl DebugInfoMethods<'tcx> for CodegenCx<'ll, 'tcx> {
                 linkage_name.as_ptr().cast(),
                 linkage_name.len(),
                 file_metadata,
-                loc.line.unwrap_or(UNKNOWN_LINE_NUMBER),
+                loc.line,
                 function_type_metadata,
-                scope_line.unwrap_or(UNKNOWN_LINE_NUMBER),
+                scope_line,
                 flags,
                 spflags,
                 maybe_definition_llfn,
@@ -387,7 +387,7 @@ impl DebugInfoMethods<'tcx> for CodegenCx<'ll, 'tcx> {
             });
 
             // Arguments types
-            if cx.sess().target.options.is_like_msvc {
+            if cx.sess().target.is_like_msvc {
                 // FIXME(#42800):
                 // There is a bug in MSDIA that leads to a crash when it encounters
                 // a fixed-size array of `u8` or something zero-sized in a
@@ -435,7 +435,7 @@ impl DebugInfoMethods<'tcx> for CodegenCx<'ll, 'tcx> {
             name_to_append_suffix_to.push('<');
             for (i, actual_type) in substs.types().enumerate() {
                 if i != 0 {
-                    name_to_append_suffix_to.push_str(",");
+                    name_to_append_suffix_to.push(',');
                 }
 
                 let actual_type =
@@ -481,9 +481,9 @@ impl DebugInfoMethods<'tcx> for CodegenCx<'ll, 'tcx> {
         }
 
         fn get_parameter_names(cx: &CodegenCx<'_, '_>, generics: &ty::Generics) -> Vec<Symbol> {
-            let mut names = generics
-                .parent
-                .map_or(vec![], |def_id| get_parameter_names(cx, cx.tcx.generics_of(def_id)));
+            let mut names = generics.parent.map_or_else(Vec::new, |def_id| {
+                get_parameter_names(cx, cx.tcx.generics_of(def_id))
+            });
             names.extend(generics.params.iter().map(|param| param.name));
             names
         }
@@ -501,7 +501,7 @@ impl DebugInfoMethods<'tcx> for CodegenCx<'ll, 'tcx> {
                     let impl_self_ty = cx.tcx.subst_and_normalize_erasing_regions(
                         instance.substs,
                         ty::ParamEnv::reveal_all(),
-                        &cx.tcx.type_of(impl_def_id),
+                        cx.tcx.type_of(impl_def_id),
                     );
 
                     // Only "class" methods are generally understood by LLVM,
@@ -550,15 +550,7 @@ impl DebugInfoMethods<'tcx> for CodegenCx<'ll, 'tcx> {
     ) -> &'ll DILocation {
         let DebugLoc { line, col, .. } = self.lookup_debug_loc(span.lo());
 
-        unsafe {
-            llvm::LLVMRustDIBuilderCreateDebugLocation(
-                utils::debug_context(self).llcontext,
-                line.unwrap_or(UNKNOWN_LINE_NUMBER),
-                col.unwrap_or(UNKNOWN_COLUMN_NUMBER),
-                scope,
-                inlined_at,
-            )
-        }
+        unsafe { llvm::LLVMRustDIBuilderCreateDebugLocation(line, col, scope, inlined_at) }
     }
 
     fn create_vtable_metadata(&self, ty: Ty<'tcx>, vtable: Self::Value) {
@@ -607,7 +599,7 @@ impl DebugInfoMethods<'tcx> for CodegenCx<'ll, 'tcx> {
                 name.as_ptr().cast(),
                 name.len(),
                 file_metadata,
-                loc.line.unwrap_or(UNKNOWN_LINE_NUMBER),
+                loc.line,
                 type_metadata,
                 true,
                 DIFlags::FlagZero,

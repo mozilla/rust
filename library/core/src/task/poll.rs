@@ -39,15 +39,17 @@ impl<T> Poll<T> {
 
     /// Returns `true` if this is `Poll::Ready`
     #[inline]
+    #[rustc_const_stable(feature = "const_poll", since = "1.49.0")]
     #[stable(feature = "futures_api", since = "1.36.0")]
-    pub fn is_ready(&self) -> bool {
+    pub const fn is_ready(&self) -> bool {
         matches!(*self, Poll::Ready(_))
     }
 
     /// Returns `true` if this is `Poll::Pending`
     #[inline]
+    #[rustc_const_stable(feature = "const_poll", since = "1.49.0")]
     #[stable(feature = "futures_api", since = "1.36.0")]
-    pub fn is_pending(&self) -> bool {
+    pub const fn is_pending(&self) -> bool {
         !self.is_ready()
     }
 }
@@ -82,7 +84,7 @@ impl<T, E> Poll<Result<T, E>> {
 
 impl<T, E> Poll<Option<Result<T, E>>> {
     /// Changes the success value of this `Poll` with the closure provided.
-    #[unstable(feature = "poll_map", issue = "63514")]
+    #[stable(feature = "poll_map", since = "1.51.0")]
     pub fn map_ok<U, F>(self, f: F) -> Poll<Option<Result<U, E>>>
     where
         F: FnOnce(T) -> U,
@@ -96,7 +98,7 @@ impl<T, E> Poll<Option<Result<T, E>>> {
     }
 
     /// Changes the error value of this `Poll` with the closure provided.
-    #[unstable(feature = "poll_map", issue = "63514")]
+    #[stable(feature = "poll_map", since = "1.51.0")]
     pub fn map_err<U, F>(self, f: F) -> Poll<Option<Result<T, U>>>
     where
         F: FnOnce(E) -> U,

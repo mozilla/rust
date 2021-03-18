@@ -5,12 +5,10 @@ use crate::llvm::{self, True};
 use crate::type_::Type;
 use crate::type_of::LayoutLlvmExt;
 use crate::value::Value;
+use cstr::cstr;
 use libc::c_uint;
 use rustc_codegen_ssa::traits::*;
-use rustc_data_structures::const_cstr;
-use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
-use rustc_hir::Node;
 use rustc_middle::middle::codegen_fn_attrs::{CodegenFnAttrFlags, CodegenFnAttrs};
 use rustc_middle::mir::interpret::{
     read_target_uint, Allocation, ErrorHandled, GlobalAlloc, Pointer,
@@ -18,8 +16,6 @@ use rustc_middle::mir::interpret::{
 use rustc_middle::mir::mono::MonoItem;
 use rustc_middle::ty::{self, Instance, Ty};
 use rustc_middle::{bug, span_bug};
-use rustc_span::symbol::sym;
-use rustc_span::Span;
 use rustc_target::abi::{AddressSpace, Align, HasDataLayout, LayoutOf, Primitive, Scalar, Size};
 use tracing::debug;
 
@@ -92,7 +88,7 @@ fn set_global_alignment(cx: &CodegenCx<'ll, '_>, gv: &'ll Value, mut align: Alig
     // The target may require greater alignment for globals than the type does.
     // Note: GCC and Clang also allow `__attribute__((aligned))` on variables,
     // which can force it to be smaller.  Rust doesn't support this yet.
-    if let Some(min) = cx.sess().target.options.min_global_align {
+    if let Some(min) = cx.sess().target.min_global_align {
         match Align::from_bits(min) {
             Ok(min) => align = align.max(min),
             Err(err) => {
@@ -110,7 +106,7 @@ fn check_and_apply_linkage(
     attrs: &CodegenFnAttrs,
     ty: Ty<'tcx>,
     sym: &str,
-    span: Span,
+    span_def_id: DefId,
 ) -> &'ll Value {
     let llty = cx.layout_of(ty).llvm_type(cx);
     if let Some(linkage) = attrs.linkage {
@@ -125,7 +121,7 @@ fn check_and_apply_linkage(
             cx.layout_of(mt.ty).llvm_type(cx)
         } else {
             cx.sess().span_fatal(
-                span,
+                cx.tcx.def_span(span_def_id),
                 "must have type `*const T` or `*mut T` due to `#[linkage]` attribute",
             )
         };
@@ -143,7 +139,10 @@ fn check_and_apply_linkage(
             let mut real_name = "_rust_extern_with_linkage_".to_string();
             real_name.push_str(&sym);
             let g2 = cx.define_global(&real_name, llty).unwrap_or_else(|| {
-                cx.sess().span_fatal(span, &format!("symbol `{}` is already defined", &sym))
+                cx.sess().span_fatal(
+                    cx.tcx.def_span(span_def_id),
+                    &format!("symbol `{}` is already defined", &sym),
+                )
             });
             llvm::LLVMRustSetLinkage(g2, llvm::Linkage::InternalLinkage);
             llvm::LLVMSetInitializer(g2, g1);
@@ -207,72 +206,42 @@ impl CodegenCx<'ll, 'tcx> {
 
         let ty = instance.ty(self.tcx, ty::ParamEnv::reveal_all());
         let sym = self.tcx.symbol_name(instance).name;
+        let fn_attrs = self.tcx.codegen_fn_attrs(def_id);
 
-        debug!("get_static: sym={} instance={:?}", sym, instance);
+        debug!("get_static: sym={} instance={:?} fn_attrs={:?}", sym, instance, fn_attrs);
 
-        let g = if let Some(def_id) = def_id.as_local() {
-            let id = self.tcx.hir().local_def_id_to_hir_id(def_id);
+        let g = if def_id.is_local() && !self.tcx.is_foreign_item(def_id) {
             let llty = self.layout_of(ty).llvm_type(self);
-            // FIXME: refactor this to work without accessing the HIR
-            let (g, attrs) = match self.tcx.hir().get(id) {
-                Node::Item(&hir::Item { attrs, span, kind: hir::ItemKind::Static(..), .. }) => {
-                    if let Some(g) = self.get_declared_value(sym) {
-                        if self.val_ty(g) != self.type_ptr_to(llty) {
-                            span_bug!(span, "Conflicting types for static");
-                        }
-                    }
-
-                    let g = self.declare_global(sym, llty);
-
-                    if !self.tcx.is_reachable_non_generic(def_id) {
-                        unsafe {
-                            llvm::LLVMRustSetVisibility(g, llvm::Visibility::Hidden);
-                        }
-                    }
-
-                    (g, attrs)
+            if let Some(g) = self.get_declared_value(sym) {
+                if self.val_ty(g) != self.type_ptr_to(llty) {
+                    span_bug!(self.tcx.def_span(def_id), "Conflicting types for static");
                 }
+            }
 
-                Node::ForeignItem(&hir::ForeignItem {
-                    ref attrs,
-                    span,
-                    kind: hir::ForeignItemKind::Static(..),
-                    ..
-                }) => {
-                    let fn_attrs = self.tcx.codegen_fn_attrs(def_id);
-                    (check_and_apply_linkage(&self, &fn_attrs, ty, sym, span), &**attrs)
-                }
+            let g = self.declare_global(sym, llty);
 
-                item => bug!("get_static: expected static, found {:?}", item),
-            };
-
-            debug!("get_static: sym={} attrs={:?}", sym, attrs);
-
-            for attr in attrs {
-                if self.tcx.sess.check_name(attr, sym::thread_local) {
-                    llvm::set_thread_local_mode(g, self.tls_model);
+            if !self.tcx.is_reachable_non_generic(def_id) {
+                unsafe {
+                    llvm::LLVMRustSetVisibility(g, llvm::Visibility::Hidden);
                 }
             }
 
             g
         } else {
-            // FIXME(nagisa): perhaps the map of externs could be offloaded to llvm somehow?
-            debug!("get_static: sym={} item_attr={:?}", sym, self.tcx.item_attrs(def_id));
+            check_and_apply_linkage(&self, &fn_attrs, ty, sym, def_id)
+        };
 
-            let attrs = self.tcx.codegen_fn_attrs(def_id);
-            let span = self.tcx.def_span(def_id);
-            let g = check_and_apply_linkage(&self, &attrs, ty, sym, span);
+        // Thread-local statics in some other crate need to *always* be linked
+        // against in a thread-local fashion, so we need to be sure to apply the
+        // thread-local attribute locally if it was present remotely. If we
+        // don't do this then linker errors can be generated where the linker
+        // complains that one object files has a thread local version of the
+        // symbol and another one doesn't.
+        if fn_attrs.flags.contains(CodegenFnAttrFlags::THREAD_LOCAL) {
+            llvm::set_thread_local_mode(g, self.tls_model);
+        }
 
-            // Thread-local statics in some other crate need to *always* be linked
-            // against in a thread-local fashion, so we need to be sure to apply the
-            // thread-local attribute locally if it was present remotely. If we
-            // don't do this then linker errors can be generated where the linker
-            // complains that one object files has a thread local version of the
-            // symbol and another one doesn't.
-            if attrs.flags.contains(CodegenFnAttrFlags::THREAD_LOCAL) {
-                llvm::set_thread_local_mode(g, self.tls_model);
-            }
-
+        if !def_id.is_local() {
             let needs_dll_storage_attr = self.use_dll_storage_attrs && !self.tcx.is_foreign_item(def_id) &&
                 // ThinLTO can't handle this workaround in all cases, so we don't
                 // emit the attrs. Instead we make them unnecessary by disallowing
@@ -283,7 +252,7 @@ impl CodegenCx<'ll, 'tcx> {
             // argument validation.
             debug_assert!(
                 !(self.tcx.sess.opts.cg.linker_plugin_lto.enabled()
-                    && self.tcx.sess.target.options.is_like_windows
+                    && self.tcx.sess.target.is_like_windows
                     && self.tcx.sess.opts.cg.prefer_dynamic)
             );
 
@@ -304,8 +273,7 @@ impl CodegenCx<'ll, 'tcx> {
                     }
                 }
             }
-            g
-        };
+        }
 
         if self.use_dll_storage_attrs && self.tcx.is_dllimport_foreign_item(def_id) {
             // For foreign (native) libs we know the exact storage type to use.
@@ -397,10 +365,8 @@ impl StaticMethods for CodegenCx<'ll, 'tcx> {
 
             // As an optimization, all shared statics which do not have interior
             // mutability are placed into read-only memory.
-            if !is_mutable {
-                if self.type_is_freeze(ty) {
-                    llvm::LLVMSetGlobalConstant(g, llvm::True);
-                }
+            if !is_mutable && self.type_is_freeze(ty) {
+                llvm::LLVMSetGlobalConstant(g, llvm::True);
             }
 
             debuginfo::create_global_var_metadata(&self, def_id, g);
@@ -437,7 +403,7 @@ impl StaticMethods for CodegenCx<'ll, 'tcx> {
                 // will use load-unaligned instructions instead, and thus avoiding the crash.
                 //
                 // We could remove this hack whenever we decide to drop macOS 10.10 support.
-                if self.tcx.sess.target.options.is_like_osx {
+                if self.tcx.sess.target.is_like_osx {
                     // The `inspect` method is okay here because we checked relocations, and
                     // because we are doing this access to inspect the final interpreter state
                     // (not as part of the interpreter execution).
@@ -453,9 +419,9 @@ impl StaticMethods for CodegenCx<'ll, 'tcx> {
                             .all(|&byte| byte == 0);
 
                     let sect_name = if all_bytes_are_zero {
-                        const_cstr!("__DATA,__thread_bss")
+                        cstr!("__DATA,__thread_bss")
                     } else {
-                        const_cstr!("__DATA,__thread_data")
+                        cstr!("__DATA,__thread_data")
                     };
                     llvm::LLVMSetSection(g, sect_name.as_ptr());
                 }

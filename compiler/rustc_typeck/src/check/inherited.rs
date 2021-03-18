@@ -117,7 +117,7 @@ impl Inherited<'a, 'tcx> {
                 maybe_typeck_results: infcx.in_progress_typeck_results,
             },
             infcx,
-            fulfillment_cx: RefCell::new(TraitEngine::new(tcx)),
+            fulfillment_cx: RefCell::new(<dyn TraitEngine<'_>>::new(tcx)),
             locals: RefCell::new(Default::default()),
             deferred_sized_obligations: RefCell::new(Vec::new()),
             deferred_call_resolutions: RefCell::new(Default::default()),
@@ -156,7 +156,7 @@ impl Inherited<'a, 'tcx> {
         span: Span,
         body_id: hir::HirId,
         param_env: ty::ParamEnv<'tcx>,
-        value: &T,
+        value: T,
     ) -> T
     where
         T: TypeFoldable<'tcx>,

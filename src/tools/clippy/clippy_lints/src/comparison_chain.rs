@@ -12,7 +12,8 @@ declare_clippy_lint! {
     /// **Why is this bad?** `if` is not guaranteed to be exhaustive and conditionals can get
     /// repetitive
     ///
-    /// **Known problems:** None.
+    /// **Known problems:** The match statement may be slower due to the compiler
+    /// not inlining the call to cmp. See issue [#5354](https://github.com/rust-lang/rust-clippy/issues/5354)
     ///
     /// **Example:**
     /// ```rust,ignore
@@ -116,7 +117,7 @@ impl<'tcx> LateLintPass<'tcx> for ComparisonChain {
             expr.span,
             "`if` chain can be rewritten with `match`",
             None,
-            "Consider rewriting the `if` chain to use `cmp` and `match`.",
+            "consider rewriting the `if` chain to use `cmp` and `match`",
         )
     }
 }

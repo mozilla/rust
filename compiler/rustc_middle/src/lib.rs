@@ -8,7 +8,7 @@
 //! - **MIR.** The "mid-level (M) intermediate representation (IR)" is
 //!   defined in the `mir` module. This module contains only the
 //!   *definition* of the MIR; the passes that transform and operate
-//!   on MIR are found in `librustc_mir` crate.
+//!   on MIR are found in `rustc_mir` crate.
 //! - **Types.** The internal representation of types used in rustc is
 //!   defined in the `ty` module. This includes the **type context**
 //!   (or `tcx`), which is the central context during most of
@@ -24,6 +24,7 @@
 
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/nightly-rustc/")]
 #![feature(array_windows)]
+#![feature(assoc_char_funcs)]
 #![feature(backtrace)]
 #![feature(bool_to_option)]
 #![feature(box_patterns)]
@@ -47,6 +48,10 @@
 #![feature(associated_type_bounds)]
 #![feature(rustc_attrs)]
 #![feature(int_error_matching)]
+#![feature(half_open_range_patterns)]
+#![feature(exclusive_range_pattern)]
+#![feature(control_flow_enum)]
+#![feature(associated_type_defaults)]
 #![recursion_limit = "512"]
 
 #[macro_use]
@@ -71,6 +76,7 @@ pub mod query;
 
 #[macro_use]
 pub mod arena;
+#[macro_use]
 pub mod dep_graph;
 pub mod hir;
 pub mod ich;

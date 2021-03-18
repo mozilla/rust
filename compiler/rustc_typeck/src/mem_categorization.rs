@@ -124,7 +124,7 @@ impl<'a, 'tcx> MemCategorizationContext<'a, 'tcx> {
         self.infcx.type_is_copy_modulo_regions(self.param_env, ty, span)
     }
 
-    fn resolve_vars_if_possible<T>(&self, value: &T) -> T
+    fn resolve_vars_if_possible<T>(&self, value: T) -> T
     where
         T: TypeFoldable<'tcx>,
     {
@@ -142,7 +142,7 @@ impl<'a, 'tcx> MemCategorizationContext<'a, 'tcx> {
     ) -> McResult<Ty<'tcx>> {
         match ty {
             Some(ty) => {
-                let ty = self.resolve_vars_if_possible(&ty);
+                let ty = self.resolve_vars_if_possible(ty);
                 if ty.references_error() || ty.is_ty_var() {
                     debug!("resolve_type_vars_or_error: error from {:?}", ty);
                     Err(())
@@ -274,7 +274,7 @@ impl<'a, 'tcx> MemCategorizationContext<'a, 'tcx> {
         F: FnOnce() -> McResult<PlaceWithHirId<'tcx>>,
     {
         debug!("cat_expr_adjusted_with({:?}): {:?}", adjustment, expr);
-        let target = self.resolve_vars_if_possible(&adjustment.target);
+        let target = self.resolve_vars_if_possible(adjustment.target);
         match adjustment.kind {
             adjustment::Adjust::Deref(overloaded) => {
                 // Equivalent to *expr or something similar.
@@ -303,7 +303,7 @@ impl<'a, 'tcx> MemCategorizationContext<'a, 'tcx> {
 
         let expr_ty = self.expr_ty(expr)?;
         match expr.kind {
-            hir::ExprKind::Unary(hir::UnOp::UnDeref, ref e_base) => {
+            hir::ExprKind::Unary(hir::UnOp::Deref, ref e_base) => {
                 if self.typeck_results.is_method_call(expr) {
                     self.cat_overloaded_place(expr, e_base)
                 } else {
@@ -364,6 +364,7 @@ impl<'a, 'tcx> MemCategorizationContext<'a, 'tcx> {
             | hir::ExprKind::Cast(..)
             | hir::ExprKind::DropTemps(..)
             | hir::ExprKind::Array(..)
+            | hir::ExprKind::If(..)
             | hir::ExprKind::Tup(..)
             | hir::ExprKind::Binary(..)
             | hir::ExprKind::Block(..)
@@ -459,7 +460,7 @@ impl<'a, 'tcx> MemCategorizationContext<'a, 'tcx> {
         kind: ProjectionKind,
     ) -> PlaceWithHirId<'tcx> {
         let mut projections = base_place.place.projections;
-        projections.push(Projection { kind: kind, ty: ty });
+        projections.push(Projection { kind, ty });
         let ret = PlaceWithHirId::new(
             node.hir_id(),
             base_place.place.base_ty,
@@ -653,9 +654,7 @@ impl<'a, 'tcx> MemCategorizationContext<'a, 'tcx> {
         // Then we see that to get the same result, we must start with
         // `deref { deref { place_foo }}` instead of `place_foo` since the pattern is now `Some(x,)`
         // and not `&&Some(x,)`, even though its assigned type is that of `&&Some(x,)`.
-        for _ in
-            0..self.typeck_results.pat_adjustments().get(pat.hir_id).map(|v| v.len()).unwrap_or(0)
-        {
+        for _ in 0..self.typeck_results.pat_adjustments().get(pat.hir_id).map_or(0, |v| v.len()) {
             debug!("cat_pattern: applying adjustment to place_with_id={:?}", place_with_id);
             place_with_id = self.cat_deref(pat, place_with_id)?;
         }
