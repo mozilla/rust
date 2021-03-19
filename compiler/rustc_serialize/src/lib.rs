@@ -16,6 +16,7 @@ Core encoding and decoding interfaces.
 #![feature(min_specialization)]
 #![feature(core_intrinsics)]
 #![feature(maybe_uninit_slice)]
+#![feature(maybe_uninit_write_slice)]
 #![feature(new_uninit)]
 #![cfg_attr(test, feature(test))]
 #![allow(rustc::internal)]
@@ -29,3 +30,5 @@ pub mod json;
 
 pub mod leb128;
 pub mod opaque;
+
+pub mod raw;
