@@ -87,7 +87,9 @@ pub fn save_work_product_index(
     debug!("save_work_product_index()");
     dep_graph.assert_ignored();
     let path = work_products_path(sess);
-    save_in(sess, path, "work product index", |e| encode_work_product_index(&new_work_products, e));
+    save_in_raw(sess, path, "work product index", |e| {
+        encode_work_product_index(&new_work_products, e)
+    });
 
     // We also need to clean out old work-products, as not all of them are
     // deleted during invalidation. Some object files don't change their
@@ -166,10 +168,62 @@ where
     debug!("save: data written to disk successfully");
 }
 
+fn save_in_raw<F>(sess: &Session, path_buf: PathBuf, name: &str, encode: F)
+where
+    F: FnOnce(&mut raw::FileEncoder) -> raw::FileEncodeResult,
+{
+    debug!("save: storing data in {}", path_buf.display());
+
+    // Delete the old file, if any.
+    // Note: It's important that we actually delete the old file and not just
+    // truncate and overwrite it, since it might be a shared hard-link, the
+    // underlying data of which we don't want to modify
+    match fs::remove_file(&path_buf) {
+        Ok(()) => {
+            debug!("save: remove old file");
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => (),
+        Err(err) => {
+            sess.err(&format!(
+                "unable to delete old {} at `{}`: {}",
+                name,
+                path_buf.display(),
+                err
+            ));
+            return;
+        }
+    }
+
+    let mut encoder = match raw::FileEncoder::new(&path_buf) {
+        Ok(encoder) => encoder,
+        Err(err) => {
+            sess.err(&format!("failed to create {} at `{}`: {}", name, path_buf.display(), err));
+            return;
+        }
+    };
+
+    if let Err(err) = file_format::write_file_header_raw(&mut encoder, sess.is_nightly_build()) {
+        sess.err(&format!("failed to write {} header to `{}`: {}", name, path_buf.display(), err));
+        return;
+    }
+
+    if let Err(err) = encode(&mut encoder) {
+        sess.err(&format!("failed to write {} to `{}`: {}", name, path_buf.display(), err));
+        return;
+    }
+
+    if let Err(err) = encoder.flush() {
+        sess.err(&format!("failed to flush {} to `{}`: {}", name, path_buf.display(), err));
+        return;
+    }
+
+    debug!("save: data written to disk successfully");
+}
+
 fn encode_work_product_index(
     work_products: &FxHashMap<WorkProductId, WorkProduct>,
-    encoder: &mut opaque::FileEncoder,
-) -> opaque::FileEncodeResult {
+    encoder: &mut raw::FileEncoder,
+) -> raw::FileEncodeResult {
     let serialized_products: Vec<_> = work_products
         .iter()
         .map(|(id, work_product)| SerializedWorkProduct {
