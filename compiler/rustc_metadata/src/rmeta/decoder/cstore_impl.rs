@@ -90,7 +90,7 @@ impl IntoArgs for (CrateNum, DefId) {
 }
 
 provide! { <'tcx> tcx, def_id, other, cdata,
-    type_of => { cdata.get_type(def_id.index, tcx) }
+    try_type_of => { Ok(cdata.get_type(def_id.index, tcx)) }
     generics_of => { cdata.get_generics(def_id.index, tcx.sess) }
     explicit_predicates_of => { cdata.get_explicit_predicates(def_id.index, tcx) }
     inferred_outlives_of => { cdata.get_inferred_outlives(def_id.index, tcx) }
@@ -123,7 +123,7 @@ provide! { <'tcx> tcx, def_id, other, cdata,
     mir_abstract_const => { cdata.get_mir_abstract_const(tcx, def_id.index) }
     unused_generic_params => { cdata.get_unused_generic_params(def_id.index) }
     mir_const_qualif => { cdata.mir_const_qualif(def_id.index) }
-    fn_sig => { cdata.fn_sig(def_id.index, tcx) }
+    try_fn_sig => { Ok(cdata.fn_sig(def_id.index, tcx)) }
     inherent_impls => { cdata.get_inherent_implementations_for_type(tcx, def_id.index) }
     is_const_fn_raw => { cdata.is_const_fn_raw(def_id.index) }
     asyncness => { cdata.asyncness(def_id.index) }

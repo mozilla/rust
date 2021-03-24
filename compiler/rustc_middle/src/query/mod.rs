@@ -94,7 +94,7 @@ rustc_queries! {
     }
 
     /// Records the type of every item.
-    query type_of(key: DefId) -> Ty<'tcx> {
+    query try_type_of(key: DefId) -> Result<Ty<'tcx>, String> {
         desc { |tcx| "computing type of `{}`", tcx.def_path_str(key) }
         cache_on_disk_if { key.is_local() }
     }
@@ -600,7 +600,7 @@ rustc_queries! {
     }
 
     /// The signature of functions.
-    query fn_sig(key: DefId) -> ty::PolyFnSig<'tcx> {
+    query try_fn_sig(key: DefId) -> Result<ty::PolyFnSig<'tcx>, String> {
         desc { |tcx| "computing function signature of `{}`", tcx.def_path_str(key) }
     }
 

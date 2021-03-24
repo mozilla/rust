@@ -103,7 +103,7 @@ impl Foo {
 #[rustc_clean(cfg="cfail2", except="hir_owner,hir_owner_nodes")]
 #[rustc_clean(cfg="cfail3")]
 impl Foo {
-    #[rustc_dirty(cfg="cfail2", except="type_of,predicates_of,promoted_mir")]
+    #[rustc_dirty(cfg="cfail2", except="try_type_of,predicates_of,promoted_mir")]
     #[rustc_clean(cfg="cfail3")]
     pub fn method_selfness(&self) { }
 }
@@ -120,7 +120,7 @@ impl Foo {
 impl Foo {
     #[rustc_clean(
         cfg="cfail2",
-        except="hir_owner,hir_owner_nodes,fn_sig,typeck,optimized_mir"
+        except="hir_owner,hir_owner_nodes,try_fn_sig,typeck,optimized_mir"
     )]
     #[rustc_clean(cfg="cfail3")]
     pub fn method_selfmutness(&mut self) { }
@@ -160,7 +160,7 @@ impl Foo {
 impl Foo {
     #[rustc_clean(
         cfg="cfail2",
-        except="hir_owner,hir_owner_nodes,fn_sig,typeck,optimized_mir"
+        except="hir_owner,hir_owner_nodes,try_fn_sig,typeck,optimized_mir"
     )]
     #[rustc_clean(cfg="cfail3")]
     pub fn add_method_parameter(&self, _: i32) { }
@@ -197,7 +197,7 @@ impl Foo {
 impl Foo {
     #[rustc_clean(
         cfg="cfail2",
-        except="hir_owner,hir_owner_nodes,fn_sig,optimized_mir,typeck")]
+        except="hir_owner,hir_owner_nodes,try_fn_sig,optimized_mir,typeck")]
     #[rustc_clean(cfg="cfail3")]
     pub fn change_method_return_type(&self) -> u8 { 0 }
 }
@@ -251,7 +251,7 @@ impl Foo {
 impl Foo {
     #[rustc_clean(
         cfg="cfail2",
-        except="hir_owner,hir_owner_nodes,fn_sig,typeck,optimized_mir"
+        except="hir_owner,hir_owner_nodes,try_fn_sig,typeck,optimized_mir"
     )]
     #[rustc_clean(cfg="cfail3")]
     pub unsafe fn make_method_unsafe(&self) { }
@@ -269,7 +269,7 @@ impl Foo {
 #[rustc_clean(cfg="cfail2")]
 #[rustc_clean(cfg="cfail3")]
 impl Foo {
-    #[rustc_clean(cfg="cfail2", except="hir_owner,hir_owner_nodes,fn_sig,typeck")]
+    #[rustc_clean(cfg="cfail2", except="hir_owner,hir_owner_nodes,try_fn_sig,typeck")]
     #[rustc_clean(cfg="cfail3")]
     pub extern "C" fn make_method_extern(&self) { }
 }
@@ -286,7 +286,7 @@ impl Foo {
 #[rustc_clean(cfg="cfail2")]
 #[rustc_clean(cfg="cfail3")]
 impl Foo {
-    #[rustc_clean(cfg="cfail2", except="hir_owner,hir_owner_nodes,fn_sig,typeck")]
+    #[rustc_clean(cfg="cfail2", except="hir_owner,hir_owner_nodes,try_fn_sig,typeck")]
     #[rustc_clean(cfg="cfail3")]
     pub extern "system" fn change_method_calling_convention(&self) { }
 }
@@ -340,7 +340,7 @@ impl Foo {
     // appear dirty, that might be the cause. -nmatsakis
     #[rustc_clean(
         cfg="cfail2",
-        except="hir_owner,hir_owner_nodes,generics_of,predicates_of,type_of",
+        except="hir_owner,hir_owner_nodes,generics_of,predicates_of,try_type_of",
     )]
     #[rustc_clean(cfg="cfail3")]
     pub fn add_type_parameter_to_method<T>(&self) { }
@@ -360,7 +360,7 @@ impl Foo {
 impl Foo {
     #[rustc_clean(
         cfg="cfail2",
-        except="hir_owner,hir_owner_nodes,generics_of,predicates_of,type_of"
+        except="hir_owner,hir_owner_nodes,generics_of,predicates_of,try_type_of"
     )]
     #[rustc_clean(cfg="cfail3")]
     pub fn add_lifetime_bound_to_lifetime_param_of_method<'a, 'b: 'a>(&self) { }
@@ -388,7 +388,7 @@ impl Foo {
     // body will be affected. So if you start to see `typeck`
     // appear dirty, that might be the cause. -nmatsakis
     #[rustc_clean(cfg="cfail2", except="hir_owner,hir_owner_nodes,generics_of,predicates_of,\
-                                        type_of")]
+                                        try_type_of")]
     #[rustc_clean(cfg="cfail3")]
     pub fn add_lifetime_bound_to_type_param_of_method<'a, T: 'a>(&self) { }
 }
@@ -453,7 +453,7 @@ impl Bar<u32> {
 impl<T> Bar<T> {
     #[rustc_clean(
         cfg="cfail2",
-        except="generics_of,fn_sig,typeck,type_of,optimized_mir"
+        except="generics_of,try_fn_sig,typeck,try_type_of,optimized_mir"
     )]
     #[rustc_clean(cfg="cfail3")]
     pub fn add_type_parameter_to_impl(&self) { }
@@ -471,7 +471,7 @@ impl Bar<u32> {
 #[rustc_clean(cfg="cfail2", except="hir_owner,hir_owner_nodes")]
 #[rustc_clean(cfg="cfail3")]
 impl Bar<u64> {
-    #[rustc_clean(cfg="cfail2", except="fn_sig,optimized_mir,typeck")]
+    #[rustc_clean(cfg="cfail2", except="try_fn_sig,optimized_mir,typeck")]
     #[rustc_clean(cfg="cfail3")]
     pub fn change_impl_self_type(&self) { }
 }
