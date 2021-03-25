@@ -3,7 +3,7 @@ use crate::rmeta::EncodeContext;
 use crate::rmeta::MetadataBlob;
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::owning_ref::OwningRef;
-use rustc_hir::definitions::DefPathTable;
+use rustc_hir::def_path_hash_map::DefPathHashMap as DefPathHashMapInner;
 use rustc_serialize::{opaque, Decodable, Decoder, Encodable, Encoder};
 use rustc_span::def_id::{DefIndex, DefPathHash};
 
@@ -41,7 +41,7 @@ impl odht::Config for HashMapConfig {
 
 crate enum DefPathHashMap<'tcx> {
     OwnedFromMetadata(odht::HashTable<HashMapConfig, OwningRef<MetadataBlob, [u8]>>),
-    BorrowedFromTcx(&'tcx DefPathTable),
+    BorrowedFromTcx(&'tcx DefPathHashMapInner),
 }
 
 impl DefPathHashMap<'tcx> {
@@ -59,29 +59,10 @@ impl DefPathHashMap<'tcx> {
 impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for DefPathHashMap<'tcx> {
     fn encode(&self, e: &mut EncodeContext<'a, 'tcx>) -> opaque::EncodeResult {
         match *self {
-            DefPathHashMap::BorrowedFromTcx(def_path_table) => {
-                let item_count = def_path_table.num_def_ids();
-                let bytes_needed = odht::bytes_needed::<HashMapConfig>(item_count, 87);
-
-                e.emit_usize(bytes_needed)?;
-
-                // We allocate the space for the table inside the output stream and then
-                // write directly to it. This way we don't have to create another allocation
-                // just for building the table.
-                e.emit_raw_bytes_with(bytes_needed, |bytes| {
-                    assert!(bytes.len() == bytes_needed);
-                    let mut table =
-                        odht::HashTable::<HashMapConfig, _>::init_in_place(bytes, item_count, 87)
-                            .unwrap();
-
-                    for (def_index, _, def_path_hash) in
-                        def_path_table.enumerated_keys_and_path_hashes()
-                    {
-                        table.insert(def_path_hash, &def_index);
-                    }
-                });
-
-                Ok(())
+            DefPathHashMap::BorrowedFromTcx(def_path_hash_map) => {
+                let bytes = def_path_hash_map.raw_bytes();
+                e.emit_usize(bytes.len())?;
+                e.emit_raw_bytes(bytes)
             }
             DefPathHashMap::OwnedFromMetadata(_) => {
                 panic!("DefPathHashMap::OwnedFromMetadata variant only exists for deserialization")

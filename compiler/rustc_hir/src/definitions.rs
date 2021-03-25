@@ -8,11 +8,11 @@ pub use crate::def_id::DefPathHash;
 use crate::def_id::{
     CrateNum, DefId, DefIndex, LocalDefId, StableCrateId, CRATE_DEF_INDEX, LOCAL_CRATE,
 };
+use crate::def_path_hash_map::DefPathHashMap;
 use crate::hir;
 
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::stable_hasher::StableHasher;
-use rustc_data_structures::unhash::UnhashMap;
 use rustc_index::vec::IndexVec;
 use rustc_span::crate_disambiguator::CrateDisambiguator;
 use rustc_span::hygiene::ExpnId;
@@ -30,7 +30,7 @@ use tracing::debug;
 pub struct DefPathTable {
     index_to_key: IndexVec<DefIndex, DefKey>,
     def_path_hashes: IndexVec<DefIndex, DefPathHash>,
-    def_path_hash_to_index: UnhashMap<DefPathHash, DefIndex>,
+    def_path_hash_to_index: DefPathHashMap,
 }
 
 impl DefPathTable {
@@ -46,7 +46,7 @@ impl DefPathTable {
 
         // Check for hash collisions of DefPathHashes. These should be
         // exceedingly rare.
-        if let Some(existing) = self.def_path_hash_to_index.insert(def_path_hash, index) {
+        if let Some(existing) = self.def_path_hash_to_index.insert(&def_path_hash, &index) {
             let def_path1 = DefPath::make(LOCAL_CRATE, existing, |idx| self.def_key(idx));
             let def_path2 = DefPath::make(LOCAL_CRATE, index, |idx| self.def_key(idx));
 
@@ -316,7 +316,7 @@ impl Definitions {
     #[inline]
     pub fn def_path_hash_to_def_id(&self, def_path_hash: DefPathHash) -> LocalDefId {
         debug_assert!(def_path_hash.stable_crate_id() == self.stable_crate_id);
-        let local_def_index = self.table.def_path_hash_to_index[&def_path_hash];
+        let local_def_index = self.table.def_path_hash_to_index.get(&def_path_hash).unwrap();
         LocalDefId { local_def_index }
     }
 
@@ -444,6 +444,10 @@ impl Definitions {
 
     pub fn iter_local_def_id(&self) -> impl Iterator<Item = LocalDefId> + '_ {
         self.def_id_to_hir_id.iter_enumerated().map(|(k, _)| k)
+    }
+
+    pub fn def_path_hash_to_def_index_map(&self) -> &DefPathHashMap {
+        &self.table.def_path_hash_to_index
     }
 }
 

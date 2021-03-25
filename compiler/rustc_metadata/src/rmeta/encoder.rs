@@ -120,13 +120,6 @@ impl<'a, 'tcx> Encoder for EncodeContext<'a, 'tcx> {
     }
 }
 
-impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
-    #[inline]
-    pub fn emit_raw_bytes_with(&mut self, byte_count: usize, w: impl FnOnce(&mut [u8])) {
-        self.opaque.emit_raw_bytes_with(byte_count, w);
-    }
-}
-
 impl<'a, 'tcx, T: Encodable<EncodeContext<'a, 'tcx>>> Encodable<EncodeContext<'a, 'tcx>>
     for Lazy<T>
 {
@@ -471,7 +464,9 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
     }
 
     fn encode_def_path_hash_map(&mut self) -> Lazy<DefPathHashMap<'tcx>> {
-        self.lazy(DefPathHashMap::BorrowedFromTcx(self.tcx.hir().definitions().def_path_table()))
+        self.lazy(DefPathHashMap::BorrowedFromTcx(
+            self.tcx.hir().definitions().def_path_hash_to_def_index_map(),
+        ))
     }
 
     fn encode_source_map(&mut self) -> Lazy<[rustc_span::SourceFile]> {
