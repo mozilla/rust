@@ -3500,9 +3500,6 @@ impl<T> [T] {
     /// Calling this method with overlapping or out-of-bounds indices is *[undefined behavior]*
     /// even if the resulting references are not used.
     ///
-    /// [`get`many_]: slice::get_many
-    /// [undefined behavior]: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
-    ///
     /// # Examples
     ///
     /// ```
@@ -3514,6 +3511,9 @@ impl<T> [T] {
     ///     assert_eq!(x.get_many_unchecked([0, 2]), [&1, &4]);
     /// }
     /// ```
+    ///
+    /// [`get_many`]: slice::get_many
+    /// [undefined behavior]: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
     #[unstable(feature = "get_many", issue = "none")]
     #[inline]
     pub unsafe fn get_many_unchecked<const N: usize>(&self, indices: [usize; N]) -> [&T; N] {
@@ -3542,9 +3542,6 @@ impl<T> [T] {
     /// Calling this method with overlapping or out-of-bounds indices is *[undefined behavior]*
     /// even if the resulting references are not used.
     ///
-    /// [`get_many_mut`]: slice::get_many_mut
-    /// [undefined behavior]: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
-    ///
     /// # Examples
     ///
     /// ```
@@ -3559,6 +3556,9 @@ impl<T> [T] {
     /// }
     /// assert_eq!(x, &[10, 2, 400]);
     /// ```
+    ///
+    /// [`get_many_mut`]: slice::get_many_mut
+    /// [undefined behavior]: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
     #[unstable(feature = "get_many", issue = "none")]
     #[inline]
     pub unsafe fn get_many_unchecked_mut<const N: usize>(
@@ -3615,8 +3615,6 @@ impl<T> [T] {
     /// The indices have to be given in sorted order, and need to be pairwise
     /// disjunct.
     ///
-    /// [`get_many`]: slice::get_many
-    ///
     /// # Examples
     ///
     /// ```
@@ -3629,6 +3627,8 @@ impl<T> [T] {
     /// }
     /// assert_eq!(v, &[413, 2, 612]);
     /// ```
+    ///
+    /// [`get_many`]: slice::get_many
     #[unstable(feature = "get_many", issue = "none")]
     #[inline]
     pub fn get_many_mut<const N: usize>(&mut self, indices: [usize; N]) -> Option<[&mut T; N]> {
