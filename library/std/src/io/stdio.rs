@@ -558,9 +558,9 @@ pub fn stdout() -> Stdout {
             // might have leaked a StdoutLock, which would
             // otherwise cause a deadlock here.
             if let Some(lock) = Pin::static_ref(instance).try_lock() {
-                if let Ok(instance) = lock.try_borrow_mut() {
+                if let Ok(mut instance) = lock.try_borrow_mut() {
                     let _ = instance.flush();
-                    instance.set_buffer_mode(BufferMode::Immediate)
+                    instance.set_mode(BufferMode::Immediate)
                 }
             }
         }
