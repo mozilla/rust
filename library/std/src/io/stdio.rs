@@ -553,12 +553,15 @@ pub fn stdout() -> Stdout {
 
     fn cleanup() {
         if let Some(instance) = INSTANCE.get() {
-            // Disable buffering during shutdown
+            // Flush the data and disable buffering during shutdown
             // We use try_lock() instead of lock(), because someone
             // might have leaked a StdoutLock, which would
             // otherwise cause a deadlock here.
             if let Some(lock) = Pin::static_ref(instance).try_lock() {
-                lock.set_buffer_mode(BufferMode::Immediate)
+                if let Ok(instance) = lock.try_borrow_mut() {
+                    let _ = instance.flush();
+                    instance.set_buffer_mode(BufferMode::Immediate)
+                }
             }
         }
     }
