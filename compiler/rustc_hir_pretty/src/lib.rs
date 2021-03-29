@@ -1,4 +1,4 @@
-#![feature(or_patterns)]
+#![cfg_attr(bootstrap, feature(or_patterns))]
 #![recursion_limit = "256"]
 
 use rustc_ast as ast;
@@ -2266,8 +2266,10 @@ impl<'a> State<'a> {
             GenericParamKind::Const { ref ty, ref default } => {
                 self.word_space(":");
                 self.print_type(ty);
-                if let Some(ref _default) = default {
-                    // FIXME(const_generics_defaults): print the `default` value here
+                if let Some(ref default) = default {
+                    self.s.space();
+                    self.word_space("=");
+                    self.print_anon_const(&default)
                 }
             }
         }

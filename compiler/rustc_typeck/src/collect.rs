@@ -50,6 +50,7 @@ use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::{Span, DUMMY_SP};
 use rustc_target::spec::abi;
 use rustc_trait_selection::traits::error_reporting::suggestions::NextTypeParamName;
+use std::iter;
 
 mod item_bounds;
 mod type_of;
@@ -254,10 +255,15 @@ impl Visitor<'tcx> for CollectItemTypesVisitor<'tcx> {
                     self.tcx.ensure().type_of(def_id);
                 }
                 hir::GenericParamKind::Type { .. } => {}
-                hir::GenericParamKind::Const { .. } => {
+                hir::GenericParamKind::Const { default, .. } => {
                     let def_id = self.tcx.hir().local_def_id(param.hir_id);
                     self.tcx.ensure().type_of(def_id);
-                    // FIXME(const_generics_defaults)
+                    if let Some(default) = default {
+                        let default_def_id = self.tcx.hir().local_def_id(default.hir_id);
+                        // need to store default and type of default
+                        self.tcx.ensure().type_of(default_def_id);
+                        self.tcx.ensure().const_param_default(def_id);
+                    }
                 }
             }
         }
@@ -1523,7 +1529,7 @@ fn generics_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::Generics {
                         |lint| {
                             lint.build(
                                 "defaults for type parameters are only allowed in \
-                                 `struct`, `enum`, `type`, or `trait` definitions.",
+                                 `struct`, `enum`, `type`, or `trait` definitions",
                             )
                             .emit();
                         },
@@ -1549,13 +1555,21 @@ fn generics_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::Generics {
             i += 1;
             Some(param_def)
         }
-        GenericParamKind::Const { .. } => {
+        GenericParamKind::Const { default, .. } => {
+            if !allow_defaults && default.is_some() {
+                tcx.sess.span_err(
+                    param.span,
+                    "defaults for const parameters are only allowed in \
+                    `struct`, `enum`, `type`, or `trait` definitions",
+                );
+            }
+
             let param_def = ty::GenericParamDef {
                 index: type_start + i as u32,
                 name: param.name.ident().name,
                 def_id: tcx.hir().local_def_id(param.hir_id).to_def_id(),
                 pure_wrt_drop: param.pure_wrt_drop,
-                kind: ty::GenericParamDefKind::Const,
+                kind: ty::GenericParamDefKind::Const { has_default: default.is_some() },
             };
             i += 1;
             Some(param_def)
@@ -2212,10 +2226,11 @@ fn const_evaluatable_predicates_of<'tcx>(
         fn visit_anon_const(&mut self, c: &'tcx hir::AnonConst) {
             let def_id = self.tcx.hir().local_def_id(c.hir_id);
             let ct = ty::Const::from_anon_const(self.tcx, def_id);
-            if let ty::ConstKind::Unevaluated(def, substs, None) = ct.val {
+            if let ty::ConstKind::Unevaluated(uv) = ct.val {
+                assert_eq!(uv.promoted, None);
                 let span = self.tcx.hir().span(c.hir_id);
                 self.preds.insert((
-                    ty::PredicateKind::ConstEvaluatable(def, substs).to_predicate(self.tcx),
+                    ty::PredicateKind::ConstEvaluatable(uv.def, uv.substs).to_predicate(self.tcx),
                     span,
                 ));
             }
@@ -2425,7 +2440,7 @@ fn compute_sig_of_foreign_fn_decl<'tcx>(
                     .emit();
             }
         };
-        for (input, ty) in decl.inputs.iter().zip(fty.inputs().skip_binder()) {
+        for (input, ty) in iter::zip(decl.inputs, fty.inputs().skip_binder()) {
             check(&input, ty)
         }
         if let hir::FnRetTy::Return(ref ty) = decl.output {
@@ -2875,7 +2890,17 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, id: DefId) -> CodegenFnAttrs {
                     .emit();
                     InlineAttr::None
                 } else if list_contains_name(&items[..], sym::always) {
-                    InlineAttr::Always
+                    if tcx.sess.instrument_coverage() {
+                        // Fixes Issue #82875. Forced inlining allows LLVM to discard functions
+                        // marked with `#[inline(always)]`, which can break coverage reporting if
+                        // that function was referenced from a coverage map.
+                        //
+                        // FIXME(#83429): Is there a better place, e.g., in codegen, to check and
+                        // convert `Always` to `Hint`?
+                        InlineAttr::Hint
+                    } else {
+                        InlineAttr::Always
+                    }
                 } else if list_contains_name(&items[..], sym::never) {
                     InlineAttr::Never
                 } else {

@@ -472,6 +472,11 @@ macro_rules! implement_ty_decoder {
                     read_str -> Cow<'_, str>;
                 }
 
+                #[inline]
+                fn read_raw_bytes_into(&mut self, bytes: &mut [u8]) -> Result<(), Self::Error> {
+                    self.opaque.read_raw_bytes_into(bytes)
+                }
+
                 fn error(&mut self, err: &str) -> Self::Error {
                     self.opaque.error(err)
                 }

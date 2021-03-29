@@ -793,13 +793,6 @@ impl Session {
         }
     }
 
-    pub fn inline_asm_dialect(&self) -> rustc_ast::LlvmAsmDialect {
-        match self.asm_arch {
-            Some(InlineAsmArch::X86 | InlineAsmArch::X86_64) => rustc_ast::LlvmAsmDialect::Intel,
-            _ => rustc_ast::LlvmAsmDialect::Att,
-        }
-    }
-
     pub fn relocation_model(&self) -> RelocModel {
         self.opts.cg.relocation_model.unwrap_or(self.target.relocation_model)
     }
@@ -863,7 +856,7 @@ impl Session {
         } else if self.target.requires_uwtable {
             true
         } else {
-            self.opts.cg.force_unwind_tables.unwrap_or(false)
+            self.opts.cg.force_unwind_tables.unwrap_or(self.target.default_uwtable)
         }
     }
 
@@ -1148,6 +1141,21 @@ impl Session {
 
     pub fn link_dead_code(&self) -> bool {
         self.opts.cg.link_dead_code.unwrap_or(false)
+    }
+
+    pub fn instrument_coverage(&self) -> bool {
+        self.opts.debugging_opts.instrument_coverage.unwrap_or(config::InstrumentCoverage::Off)
+            != config::InstrumentCoverage::Off
+    }
+
+    pub fn instrument_coverage_except_unused_generics(&self) -> bool {
+        self.opts.debugging_opts.instrument_coverage.unwrap_or(config::InstrumentCoverage::Off)
+            == config::InstrumentCoverage::ExceptUnusedGenerics
+    }
+
+    pub fn instrument_coverage_except_unused_functions(&self) -> bool {
+        self.opts.debugging_opts.instrument_coverage.unwrap_or(config::InstrumentCoverage::Off)
+            == config::InstrumentCoverage::ExceptUnusedFunctions
     }
 
     pub fn mark_attr_known(&self, attr: &Attribute) {

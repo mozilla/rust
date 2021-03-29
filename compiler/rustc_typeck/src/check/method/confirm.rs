@@ -15,6 +15,7 @@ use rustc_middle::ty::{self, GenericParamDefKind, Ty};
 use rustc_span::Span;
 use rustc_trait_selection::traits;
 
+use std::iter;
 use std::ops::Deref;
 
 struct ConfirmContext<'a, 'tcx> {
@@ -358,7 +359,7 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
                     (GenericParamDefKind::Type { .. }, GenericArg::Type(ty)) => {
                         self.cfcx.to_ty(ty).into()
                     }
-                    (GenericParamDefKind::Const, GenericArg::Const(ct)) => {
+                    (GenericParamDefKind::Const { .. }, GenericArg::Const(ct)) => {
                         self.cfcx.const_arg_to_const(&ct.value, param.def_id).into()
                     }
                     _ => unreachable!(),
@@ -496,10 +497,7 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
             // We don't care about regions here.
             .filter_map(|obligation| match obligation.predicate.kind().skip_binder() {
                 ty::PredicateKind::Trait(trait_pred, _) if trait_pred.def_id() == sized_def_id => {
-                    let span = predicates
-                        .predicates
-                        .iter()
-                        .zip(predicates.spans.iter())
+                    let span = iter::zip(&predicates.predicates, &predicates.spans)
                         .find_map(
                             |(p, span)| {
                                 if *p == obligation.predicate { Some(*span) } else { None }

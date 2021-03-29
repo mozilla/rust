@@ -21,7 +21,7 @@ use rustc_macros::HashStable;
 use rustc_span::{Span, DUMMY_SP};
 use rustc_target::abi::{Integer, Size, TargetDataLayout};
 use smallvec::SmallVec;
-use std::{cmp, fmt};
+use std::{cmp, fmt, iter};
 
 #[derive(Copy, Clone, Debug)]
 pub struct Discr<'tcx> {
@@ -414,9 +414,7 @@ impl<'tcx> TyCtxt<'tcx> {
             _ => bug!(),
         };
 
-        let result = item_substs
-            .iter()
-            .zip(impl_substs.iter())
+        let result = iter::zip(item_substs, impl_substs)
             .filter(|&(_, k)| {
                 match k.unpack() {
                     GenericArgKind::Lifetime(&ty::RegionKind::ReEarlyBound(ref ebr)) => {
@@ -726,6 +724,46 @@ impl<'tcx> ty::TyS<'tcx> {
             | ty::FnPtr(_) => true,
             ty::Tuple(_) => self.tuple_fields().all(Self::is_trivially_freeze),
             ty::Slice(elem_ty) | ty::Array(elem_ty, _) => elem_ty.is_trivially_freeze(),
+            ty::Adt(..)
+            | ty::Bound(..)
+            | ty::Closure(..)
+            | ty::Dynamic(..)
+            | ty::Foreign(_)
+            | ty::Generator(..)
+            | ty::GeneratorWitness(_)
+            | ty::Infer(_)
+            | ty::Opaque(..)
+            | ty::Param(_)
+            | ty::Placeholder(_)
+            | ty::Projection(_) => false,
+        }
+    }
+
+    /// Checks whether values of this type `T` implement the `Unpin` trait.
+    pub fn is_unpin(&'tcx self, tcx_at: TyCtxtAt<'tcx>, param_env: ty::ParamEnv<'tcx>) -> bool {
+        self.is_trivially_unpin() || tcx_at.is_unpin_raw(param_env.and(self))
+    }
+
+    /// Fast path helper for testing if a type is `Unpin`.
+    ///
+    /// Returning true means the type is known to be `Unpin`. Returning
+    /// `false` means nothing -- could be `Unpin`, might not be.
+    fn is_trivially_unpin(&self) -> bool {
+        match self.kind() {
+            ty::Int(_)
+            | ty::Uint(_)
+            | ty::Float(_)
+            | ty::Bool
+            | ty::Char
+            | ty::Str
+            | ty::Never
+            | ty::Ref(..)
+            | ty::RawPtr(_)
+            | ty::FnDef(..)
+            | ty::Error(_)
+            | ty::FnPtr(_) => true,
+            ty::Tuple(_) => self.tuple_fields().all(Self::is_trivially_unpin),
+            ty::Slice(elem_ty) | ty::Array(elem_ty, _) => elem_ty.is_trivially_unpin(),
             ty::Adt(..)
             | ty::Bound(..)
             | ty::Closure(..)

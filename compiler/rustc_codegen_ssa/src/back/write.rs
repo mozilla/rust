@@ -176,7 +176,7 @@ impl ModuleConfig {
 
                     // The rustc option `-Zinstrument_coverage` injects intrinsic calls to
                     // `llvm.instrprof.increment()`, which requires the LLVM `instrprof` pass.
-                    if sess.opts.debugging_opts.instrument_coverage {
+                    if sess.instrument_coverage() {
                         passes.push("instrprof".to_owned());
                     }
                     passes
@@ -1958,7 +1958,7 @@ pub fn submit_pre_lto_module_to_llvm<B: ExtraBackendMethods>(
         .unwrap_or_else(|e| panic!("failed to open bitcode file `{}`: {}", bc_path.display(), e));
 
     let mmap = unsafe {
-        memmap::Mmap::map(&file).unwrap_or_else(|e| {
+        memmap2::Mmap::map(&file).unwrap_or_else(|e| {
             panic!("failed to mmap bitcode file `{}`: {}", bc_path.display(), e)
         })
     };

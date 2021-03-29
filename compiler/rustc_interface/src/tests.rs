@@ -2,6 +2,7 @@ use crate::interface::parse_cfgspecs;
 
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{emitter::HumanReadableErrorType, registry, ColorConfig};
+use rustc_session::config::InstrumentCoverage;
 use rustc_session::config::Strip;
 use rustc_session::config::{build_configuration, build_session_options, to_crate_config};
 use rustc_session::config::{rustc_optgroups, ErrorOutputType, ExternLocation, Options, Passes};
@@ -560,13 +561,13 @@ fn test_debugging_options_tracking_hash() {
     tracked!(inline_mir, Some(true));
     tracked!(inline_mir_threshold, Some(123));
     tracked!(inline_mir_hint_threshold, Some(123));
-    tracked!(instrument_coverage, true);
+    tracked!(instrument_coverage, Some(InstrumentCoverage::All));
     tracked!(instrument_mcount, true);
     tracked!(link_only, true);
     tracked!(merge_functions, Some(MergeFunctions::Disabled));
     tracked!(mir_emit_retag, true);
     tracked!(mir_opt_level, Some(4));
-    tracked!(mutable_noalias, true);
+    tracked!(mutable_noalias, Some(true));
     tracked!(new_llvm_pass_manager, true);
     tracked!(no_codegen, true);
     tracked!(no_generate_arange_section, true);

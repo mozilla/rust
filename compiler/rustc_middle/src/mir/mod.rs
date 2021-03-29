@@ -1537,9 +1537,10 @@ pub enum StatementKind<'tcx> {
     AscribeUserType(Box<(Place<'tcx>, UserTypeProjection)>, ty::Variance),
 
     /// Marks the start of a "coverage region", injected with '-Zinstrument-coverage'. A
-    /// `CoverageInfo` statement carries metadata about the coverage region, used to inject a coverage
-    /// map into the binary. The `Counter` kind also generates executable code, to increment a
-    /// counter varible at runtime, each time the code region is executed.
+    /// `Coverage` statement carries metadata about the coverage region, used to inject a coverage
+    /// map into the binary. If `Coverage::kind` is a `Counter`, the statement also generates
+    /// executable code, to increment a counter varible at runtime, each time the code region is
+    /// executed.
     Coverage(Box<Coverage>),
 
     /// Denotes a call to the intrinsic function copy_overlapping, where `src_dst` denotes the
@@ -2328,7 +2329,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                             CtorKind::Fn => fmt_tuple(fmt, &name),
                             CtorKind::Fictive => {
                                 let mut struct_fmt = fmt.debug_struct(&name);
-                                for (field, place) in variant_def.fields.iter().zip(places) {
+                                for (field, place) in iter::zip(&variant_def.fields, places) {
                                     struct_fmt.field(&field.ident.as_str(), place);
                                 }
                                 struct_fmt.finish()
@@ -2352,7 +2353,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                             let mut struct_fmt = fmt.debug_struct(&name);
 
                             if let Some(upvars) = tcx.upvars_mentioned(def_id) {
-                                for (&var_id, place) in upvars.keys().zip(places) {
+                                for (&var_id, place) in iter::zip(upvars.keys(), places) {
                                     let var_name = tcx.hir().name(var_id);
                                     struct_fmt.field(&var_name.as_str(), place);
                                 }
@@ -2371,7 +2372,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                             let mut struct_fmt = fmt.debug_struct(&name);
 
                             if let Some(upvars) = tcx.upvars_mentioned(def_id) {
-                                for (&var_id, place) in upvars.keys().zip(places) {
+                                for (&var_id, place) in iter::zip(upvars.keys(), places) {
                                     let var_name = tcx.hir().name(var_id);
                                     struct_fmt.field(&var_name.as_str(), place);
                                 }

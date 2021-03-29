@@ -34,6 +34,7 @@ use rustc_hir::def_id::DefId;
 use rustc_hir::Constness;
 use rustc_infer::infer::LateBoundRegionConversionTime;
 use rustc_middle::dep_graph::{DepKind, DepNodeIndex};
+use rustc_middle::mir::abstract_const::NotConstEvaluatable;
 use rustc_middle::mir::interpret::ErrorHandled;
 use rustc_middle::ty::fast_reject;
 use rustc_middle::ty::print::with_no_trimmed_paths;
@@ -547,7 +548,8 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                         obligation.cause.span,
                     ) {
                         Ok(()) => Ok(EvaluatedToOk),
-                        Err(ErrorHandled::TooGeneric) => Ok(EvaluatedToAmbig),
+                        Err(NotConstEvaluatable::MentionsInfer) => Ok(EvaluatedToAmbig),
+                        Err(NotConstEvaluatable::MentionsParam) => Ok(EvaluatedToErr),
                         Err(_) => Ok(EvaluatedToErr),
                     }
                 }
@@ -556,13 +558,11 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     debug!(?c1, ?c2, "evaluate_predicate_recursively: equating consts");
 
                     let evaluate = |c: &'tcx ty::Const<'tcx>| {
-                        if let ty::ConstKind::Unevaluated(def, substs, promoted) = c.val {
+                        if let ty::ConstKind::Unevaluated(unevaluated) = c.val {
                             self.infcx
                                 .const_eval_resolve(
                                     obligation.param_env,
-                                    def,
-                                    substs,
-                                    promoted,
+                                    unevaluated,
                                     Some(obligation.cause.span),
                                 )
                                 .map(|val| ty::Const::from_value(self.tcx(), val, c.ty))
@@ -863,7 +863,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         stack: &TraitObligationStack<'o, 'tcx>,
         candidate: &SelectionCandidate<'tcx>,
     ) -> Result<EvaluationResult, OverflowError> {
-        let result = self.evaluation_probe(|this| {
+        let mut result = self.evaluation_probe(|this| {
             let candidate = (*candidate).clone();
             match this.confirm_candidate(stack.obligation, candidate) {
                 Ok(selection) => {
@@ -876,6 +876,19 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 Err(..) => Ok(EvaluatedToErr),
             }
         })?;
+
+        // If we erased any lifetimes, then we want to use
+        // `EvaluatedToOkModuloRegions` instead of `EvaluatedToOk`
+        // as your final result. The result will be cached using
+        // the freshened trait predicate as a key, so we need
+        // our result to be correct by *any* choice of original lifetimes,
+        // not just the lifetime choice for this particular (non-erased)
+        // predicate.
+        // See issue #80691
+        if stack.fresh_trait_ref.has_erased_regions() {
+            result = result.max(EvaluatedToOkModuloRegions);
+        }
+
         debug!(?result);
         Ok(result)
     }
@@ -1874,7 +1887,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         // substitution if we find that any of the input types, when
         // simplified, do not match.
 
-        obligation.predicate.skip_binder().trait_ref.substs.iter().zip(impl_trait_ref.substs).any(
+        iter::zip(obligation.predicate.skip_binder().trait_ref.substs, impl_trait_ref.substs).any(
             |(obligation_arg, impl_arg)| {
                 match (obligation_arg.unpack(), impl_arg.unpack()) {
                     (GenericArgKind::Type(obligation_ty), GenericArgKind::Type(impl_ty)) => {

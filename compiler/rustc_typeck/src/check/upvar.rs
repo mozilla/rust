@@ -30,7 +30,6 @@
 //! then mean that all later passes would have to check for these figments
 //! and report an error, and it just seems like more mess in the end.)
 
-use super::writeback::Resolver;
 use super::FnCtxt;
 
 use crate::expr_use_visitor as euv;
@@ -42,7 +41,6 @@ use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_infer::infer::UpvarRegion;
 use rustc_middle::hir::place::{Place, PlaceBase, PlaceWithHirId, Projection, ProjectionKind};
 use rustc_middle::mir::FakeReadCause;
-use rustc_middle::ty::fold::TypeFoldable;
 use rustc_middle::ty::{self, Ty, TyCtxt, TypeckResults, UpvarSubsts};
 use rustc_session::lint;
 use rustc_span::sym;
@@ -50,6 +48,8 @@ use rustc_span::{MultiSpan, Span, Symbol};
 
 use rustc_index::vec::Idx;
 use rustc_target::abi::VariantIdx;
+
+use std::iter;
 
 /// Describe the relationship between the paths of two places
 /// eg:
@@ -167,7 +167,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         let closure_hir_id = self.tcx.hir().local_def_id_to_hir_id(local_def_id);
         if should_do_migration_analysis(self.tcx, closure_hir_id) {
-            self.perform_2229_migration_anaysis(closure_def_id, capture_clause, span, body);
+            self.perform_2229_migration_anaysis(closure_def_id, capture_clause, span);
         }
 
         // We now fake capture information for all variables that are mentioned within the closure
@@ -221,8 +221,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         }
 
         self.log_closure_min_capture_info(closure_def_id, span);
-
-        self.min_captures_to_closure_captures_bridge(closure_def_id);
 
         // Now that we've analyzed the closure, we know how each
         // variable is borrowed, and we know what traits the closure
@@ -291,80 +289,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 }
             })
             .collect()
-    }
-
-    /// Bridge for closure analysis
-    /// ----------------------------
-    ///
-    /// For closure with DefId `c`, the bridge converts structures required for supporting RFC 2229,
-    /// to structures currently used in the compiler for handling closure captures.
-    ///
-    /// For example the following structure will be converted:
-    ///
-    /// closure_min_captures
-    /// foo -> [ {foo.x, ImmBorrow}, {foo.y, MutBorrow} ]
-    /// bar -> [ {bar.z, ByValue}, {bar.q, MutBorrow} ]
-    ///
-    /// to
-    ///
-    /// 1. closure_captures
-    /// foo -> UpvarId(foo, c), bar -> UpvarId(bar, c)
-    ///
-    /// 2. upvar_capture_map
-    /// UpvarId(foo,c) -> MutBorrow, UpvarId(bar, c) -> ByValue
-    fn min_captures_to_closure_captures_bridge(&self, closure_def_id: DefId) {
-        let mut closure_captures: FxIndexMap<hir::HirId, ty::UpvarId> = Default::default();
-        let mut upvar_capture_map = ty::UpvarCaptureMap::default();
-
-        if let Some(min_captures) =
-            self.typeck_results.borrow().closure_min_captures.get(&closure_def_id)
-        {
-            for (var_hir_id, min_list) in min_captures.iter() {
-                for captured_place in min_list {
-                    let place = &captured_place.place;
-                    let capture_info = captured_place.info;
-
-                    let upvar_id = match place.base {
-                        PlaceBase::Upvar(upvar_id) => upvar_id,
-                        base => bug!("Expected upvar, found={:?}", base),
-                    };
-
-                    assert_eq!(upvar_id.var_path.hir_id, *var_hir_id);
-                    assert_eq!(upvar_id.closure_expr_id, closure_def_id.expect_local());
-
-                    closure_captures.insert(*var_hir_id, upvar_id);
-
-                    let new_capture_kind =
-                        if let Some(capture_kind) = upvar_capture_map.get(&upvar_id) {
-                            // upvar_capture_map only stores the UpvarCapture (CaptureKind),
-                            // so we create a fake capture info with no expression.
-                            let fake_capture_info = ty::CaptureInfo {
-                                capture_kind_expr_id: None,
-                                path_expr_id: None,
-                                capture_kind: *capture_kind,
-                            };
-                            determine_capture_info(fake_capture_info, capture_info).capture_kind
-                        } else {
-                            capture_info.capture_kind
-                        };
-                    upvar_capture_map.insert(upvar_id, new_capture_kind);
-                }
-            }
-        }
-        debug!("For closure_def_id={:?}, closure_captures={:#?}", closure_def_id, closure_captures);
-        debug!(
-            "For closure_def_id={:?}, upvar_capture_map={:#?}",
-            closure_def_id, upvar_capture_map
-        );
-
-        if !closure_captures.is_empty() {
-            self.typeck_results
-                .borrow_mut()
-                .closure_captures
-                .insert(closure_def_id, closure_captures);
-
-            self.typeck_results.borrow_mut().upvar_capture_map.extend(upvar_capture_map);
-        }
     }
 
     /// Analyzes the information collected by `InferBorrowKind` to compute the min number of
@@ -543,13 +467,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         closure_def_id: DefId,
         capture_clause: hir::CaptureBy,
         span: Span,
-        body: &'tcx hir::Body<'tcx>,
     ) {
         let need_migrations = self.compute_2229_migrations(
             closure_def_id,
             span,
             capture_clause,
-            body,
             self.typeck_results.borrow().closure_min_captures.get(&closure_def_id),
         );
 
@@ -587,19 +509,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         closure_def_id: DefId,
         closure_span: Span,
         closure_clause: hir::CaptureBy,
-        body: &'tcx hir::Body<'tcx>,
         min_captures: Option<&ty::RootVariableMinCaptureList<'tcx>>,
     ) -> Vec<hir::HirId> {
-        fn resolve_ty<T: TypeFoldable<'tcx>>(
-            fcx: &FnCtxt<'_, 'tcx>,
-            span: Span,
-            body: &'tcx hir::Body<'tcx>,
-            ty: T,
-        ) -> T {
-            let mut resolver = Resolver::new(fcx, &span, body);
-            ty.fold_with(&mut resolver)
-        }
-
         let upvars = if let Some(upvars) = self.tcx.upvars_mentioned(closure_def_id) {
             upvars
         } else {
@@ -609,7 +520,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let mut need_migrations = Vec::new();
 
         for (&var_hir_id, _) in upvars.iter() {
-            let ty = resolve_ty(self, closure_span, body, self.node_ty(var_hir_id));
+            let ty = self.infcx.resolve_vars_if_possible(self.node_ty(var_hir_id));
 
             if !ty.needs_drop(self.tcx, self.tcx.param_env(closure_def_id.expect_local())) {
                 continue;
@@ -1722,7 +1633,7 @@ fn determine_place_ancestry_relation(
     let projections_b = &place_b.projections;
 
     let same_initial_projections =
-        projections_a.iter().zip(projections_b.iter()).all(|(proj_a, proj_b)| proj_a == proj_b);
+        iter::zip(projections_a, projections_b).all(|(proj_a, proj_b)| proj_a == proj_b);
 
     if same_initial_projections {
         // First min(n, m) projections are the same

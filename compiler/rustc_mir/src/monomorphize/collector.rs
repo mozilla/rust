@@ -646,8 +646,8 @@ impl<'a, 'tcx> MirVisitor<'tcx> for MirNeighborCollector<'a, 'tcx> {
 
         match substituted_constant.val {
             ty::ConstKind::Value(val) => collect_const_value(self.tcx, val, self.output),
-            ty::ConstKind::Unevaluated(def, substs, promoted) => {
-                match self.tcx.const_eval_resolve(param_env, def, substs, promoted, None) {
+            ty::ConstKind::Unevaluated(unevaluated) => {
+                match self.tcx.const_eval_resolve(param_env, unevaluated, None) {
                     Ok(val) => collect_const_value(self.tcx, val, self.output),
                     Err(ErrorHandled::Reported(ErrorReported) | ErrorHandled::Linted) => {}
                     Err(ErrorHandled::TooGeneric) => span_bug!(
@@ -1175,7 +1175,8 @@ fn create_mono_items_for_default_impls<'tcx>(
                     let substs =
                         InternalSubsts::for_item(tcx, method.def_id, |param, _| match param.kind {
                             GenericParamDefKind::Lifetime => tcx.lifetimes.re_erased.into(),
-                            GenericParamDefKind::Type { .. } | GenericParamDefKind::Const => {
+                            GenericParamDefKind::Type { .. }
+                            | GenericParamDefKind::Const { .. } => {
                                 trait_ref.substs[param.index as usize]
                             }
                         });
