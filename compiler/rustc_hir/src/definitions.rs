@@ -8,11 +8,11 @@ pub use crate::def_id::DefPathHash;
 use crate::def_id::{
     CrateNum, DefId, DefIndex, LocalDefId, StableCrateId, CRATE_DEF_INDEX, LOCAL_CRATE,
 };
+use crate::def_path_hash_map::DefPathHashMap;
 use crate::hir;
 
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::stable_hasher::StableHasher;
-use rustc_data_structures::unhash::UnhashMap;
 use rustc_index::vec::IndexVec;
 use rustc_span::crate_disambiguator::CrateDisambiguator;
 use rustc_span::hygiene::ExpnId;
@@ -30,7 +30,7 @@ use tracing::debug;
 pub struct DefPathTable {
     index_to_key: IndexVec<DefIndex, DefKey>,
     def_path_hashes: IndexVec<DefIndex, DefPathHash>,
-    def_path_hash_to_index: UnhashMap<DefPathHash, DefIndex>,
+    def_path_hash_to_index: DefPathHashMap,
 }
 
 impl DefPathTable {
@@ -46,7 +46,7 @@ impl DefPathTable {
 
         // Check for hash collisions of DefPathHashes. These should be
         // exceedingly rare.
-        if let Some(existing) = self.def_path_hash_to_index.insert(def_path_hash, index) {
+        if let Some(existing) = self.def_path_hash_to_index.insert(&def_path_hash, &index) {
             let def_path1 = DefPath::make(LOCAL_CRATE, existing, |idx| self.def_key(idx));
             let def_path2 = DefPath::make(LOCAL_CRATE, index, |idx| self.def_key(idx));
 
@@ -93,19 +93,10 @@ impl DefPathTable {
 
     pub fn enumerated_keys_and_path_hashes(
         &self,
-    ) -> impl Iterator<Item = (DefIndex, &DefKey, &DefPathHash)> + '_ {
+    ) -> impl Iterator<Item = (DefIndex, &DefKey, &DefPathHash)> + ExactSizeIterator + '_ {
         self.index_to_key
             .iter_enumerated()
             .map(move |(index, key)| (index, key, &self.def_path_hashes[index]))
-    }
-
-    pub fn all_def_path_hashes_and_def_ids(
-        &self,
-        krate: CrateNum,
-    ) -> impl Iterator<Item = (DefPathHash, DefId)> + '_ {
-        self.def_path_hashes
-            .iter_enumerated()
-            .map(move |(index, hash)| (*hash, DefId { krate, index }))
     }
 }
 
@@ -126,6 +117,9 @@ pub struct Definitions {
     parent_modules_of_macro_defs: FxHashMap<ExpnId, DefId>,
     /// Item with a given `LocalDefId` was defined during macro expansion with ID `ExpnId`.
     expansions_that_defined: FxHashMap<LocalDefId, ExpnId>,
+
+    /// The [StableCrateId] of the local crate.
+    stable_crate_id: StableCrateId,
 }
 
 /// A unique identifier that we can use to lookup a definition
@@ -321,7 +315,8 @@ impl Definitions {
 
     #[inline]
     pub fn def_path_hash_to_def_id(&self, def_path_hash: DefPathHash) -> LocalDefId {
-        let local_def_index = self.table.def_path_hash_to_index[&def_path_hash];
+        debug_assert!(def_path_hash.stable_crate_id() == self.stable_crate_id);
+        let local_def_index = self.table.def_path_hash_to_index.get(&def_path_hash).unwrap();
         LocalDefId { local_def_index }
     }
 
@@ -372,6 +367,7 @@ impl Definitions {
             hir_id_to_def_id: Default::default(),
             expansions_that_defined: Default::default(),
             parent_modules_of_macro_defs: Default::default(),
+            stable_crate_id,
         }
     }
 
@@ -448,6 +444,10 @@ impl Definitions {
 
     pub fn iter_local_def_id(&self) -> impl Iterator<Item = LocalDefId> + '_ {
         self.def_id_to_hir_id.iter_enumerated().map(|(k, _)| k)
+    }
+
+    pub fn def_path_hash_to_def_index_map(&self) -> &DefPathHashMap {
+        &self.table.def_path_hash_to_index
     }
 }
 

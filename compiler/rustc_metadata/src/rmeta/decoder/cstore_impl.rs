@@ -10,7 +10,7 @@ use rustc_data_structures::stable_map::FxHashMap;
 use rustc_data_structures::svh::Svh;
 use rustc_hir as hir;
 use rustc_hir::def::DefKind;
-use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, CRATE_DEF_INDEX, LOCAL_CRATE};
+use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, StableCrateId, CRATE_DEF_INDEX, LOCAL_CRATE};
 use rustc_hir::definitions::{DefKey, DefPath, DefPathHash};
 use rustc_middle::hir::exports::Export;
 use rustc_middle::middle::cstore::ForeignModule;
@@ -515,14 +515,14 @@ impl CrateStore for CStore {
         self.get_crate_data(def.krate).def_path_hash(def.index)
     }
 
-    // See `CrateMetadataRef::def_path_hash_to_def_id` for more details
-    fn def_path_hash_to_def_id(
-        &self,
-        cnum: CrateNum,
-        index_guess: u32,
-        hash: DefPathHash,
-    ) -> Option<DefId> {
-        self.get_crate_data(cnum).def_path_hash_to_def_id(cnum, index_guess, hash)
+    fn def_path_hash_to_def_id(&self, cnum: CrateNum, hash: DefPathHash) -> Option<DefId> {
+        self.get_crate_data(cnum)
+            .def_path_hash_to_def_index(hash)
+            .map(|index| DefId { krate: cnum, index })
+    }
+
+    fn stable_crate_id_to_crate_num(&self, stable_crate_id: StableCrateId) -> CrateNum {
+        self.stable_crate_ids[&stable_crate_id]
     }
 
     fn crates_untracked(&self) -> Vec<CrateNum> {

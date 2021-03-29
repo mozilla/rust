@@ -1,3 +1,4 @@
+use crate::rmeta::def_path_hash_map::DefPathHashMap;
 use crate::rmeta::table::{FixedSizeEncoding, TableBuilder};
 use crate::rmeta::*;
 
@@ -462,6 +463,12 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         }
     }
 
+    fn encode_def_path_hash_map(&mut self) -> Lazy<DefPathHashMap<'tcx>> {
+        self.lazy(DefPathHashMap::BorrowedFromTcx(
+            self.tcx.hir().definitions().def_path_hash_to_def_index_map(),
+        ))
+    }
+
     fn encode_source_map(&mut self) -> Lazy<[rustc_span::SourceFile]> {
         let source_map = self.tcx.sess.source_map();
         let all_source_files = source_map.files();
@@ -631,6 +638,10 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         let (syntax_contexts, expn_data) = self.encode_hygiene();
         let hygiene_bytes = self.position() - i;
 
+        i = self.position();
+        let def_path_hash_map = self.encode_def_path_hash_map();
+        let def_path_hash_map_bytes = self.position() - i;
+
         // Encode source_map. This needs to be done last,
         // since encoding `Span`s tells us which `SourceFiles` we actually
         // need to encode.
@@ -678,6 +689,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             tables,
             syntax_contexts,
             expn_data,
+            def_path_hash_map,
         });
 
         let total_bytes = self.position();
@@ -700,6 +712,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             eprintln!("            impl bytes: {}", impl_bytes);
             eprintln!("    exp. symbols bytes: {}", exported_symbols_bytes);
             eprintln!("  def-path table bytes: {}", def_path_table_bytes);
+            eprintln!(" def-path hashes bytes: {}", def_path_hash_map_bytes);
             eprintln!(" proc-macro-data-bytes: {}", proc_macro_data_bytes);
             eprintln!("             mir bytes: {}", mir_bytes);
             eprintln!("            item bytes: {}", item_bytes);

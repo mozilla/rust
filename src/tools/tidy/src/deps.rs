@@ -126,6 +126,7 @@ const PERMITTED_DEPENDENCIES: &[&str] = &[
     "miniz_oxide",
     "num_cpus",
     "object",
+    "odht",
     "once_cell",
     "opaque-debug",
     "parking_lot",
