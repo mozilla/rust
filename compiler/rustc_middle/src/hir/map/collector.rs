@@ -6,7 +6,6 @@ use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_hir as hir;
 use rustc_hir::def_id::LocalDefId;
-use rustc_hir::def_id::CRATE_DEF_ID;
 use rustc_hir::definitions;
 use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_hir::*;
@@ -83,34 +82,19 @@ pub(super) fn collect(
     mut hcx: StableHashingContext<'a>,
     owner: LocalDefId,
 ) -> Option<IndexedHir<'hir>> {
-    let mut collector = NodeCollector::new(sess, krate, definitions, owner);
+    let mut collector = if let Some(Some(item)) = krate.owners.get(owner) {
+        let mut collector = NodeCollector::new(sess, krate, definitions, owner, &mut hcx, *item);
 
-    if let Some(Some(owner)) = krate.owners.get(owner) {
-        match owner {
-            OwnerNode::Crate(module) => {
-                collector.insert_owner(CRATE_DEF_ID, OwnerNode::Crate(module), &mut hcx);
-                collector.visit_mod(module, module.inner, hir::CRATE_HIR_ID);
-            }
-            OwnerNode::Item(item) => {
-                collector.insert_owner(item.def_id, OwnerNode::Item(item), &mut hcx);
-                collector.visit_item(item);
-            }
-            OwnerNode::TraitItem(item) => {
-                collector.insert_owner(item.def_id, OwnerNode::TraitItem(item), &mut hcx);
-                collector.visit_trait_item(item);
-            }
-            OwnerNode::ImplItem(item) => {
-                collector.insert_owner(item.def_id, OwnerNode::ImplItem(item), &mut hcx);
-                collector.visit_impl_item(item);
-            }
-            OwnerNode::ForeignItem(item) => {
-                collector.insert_owner(item.def_id, OwnerNode::ForeignItem(item), &mut hcx);
-                collector.visit_foreign_item(item);
-            }
-            OwnerNode::MacroDef(macro_def) => {
-                collector.insert_owner(macro_def.def_id, OwnerNode::MacroDef(macro_def), &mut hcx);
-            }
-        }
+        match item {
+            OwnerNode::Crate(citem) => collector.visit_mod(&citem, citem.inner, hir::CRATE_HIR_ID),
+            OwnerNode::Item(item) => collector.visit_item(item),
+            OwnerNode::TraitItem(item) => collector.visit_trait_item(item),
+            OwnerNode::ImplItem(item) => collector.visit_impl_item(item),
+            OwnerNode::ForeignItem(item) => collector.visit_foreign_item(item),
+            OwnerNode::MacroDef(..) => {}
+        };
+
+        collector
     } else {
         return None;
     };
@@ -130,34 +114,21 @@ impl<'a, 'hir> NodeCollector<'a, 'hir> {
         krate: &'hir Crate<'hir>,
         definitions: &'a definitions::Definitions,
         owner: LocalDefId,
+        hcx: &mut StableHashingContext<'a>,
+        item: OwnerNode<'hir>,
     ) -> NodeCollector<'a, 'hir> {
+        let hash = hash_body(hcx, item);
+        let mut nodes = IndexVec::new();
+        nodes.push(Some(ParentedNode { parent: ItemLocalId::new(0), node: item.into() }));
         NodeCollector {
             krate,
             source_map: sess.source_map(),
             owner,
             parent_node: ItemLocalId::new(0),
             definitions,
-            nodes: OwnerNodes {
-                hash: Fingerprint::ZERO,
-                nodes: IndexVec::new(),
-                bodies: FxHashMap::default(),
-            },
+            nodes: OwnerNodes { hash, nodes, bodies: FxHashMap::default() },
             parenting: FxHashMap::default(),
         }
-    }
-
-    fn insert_owner(
-        &mut self,
-        owner: LocalDefId,
-        node: OwnerNode<'hir>,
-        hcx: &mut StableHashingContext<'a>,
-    ) {
-        debug_assert_eq!(owner, self.owner);
-        self.nodes
-            .nodes
-            .push(Some(ParentedNode { parent: ItemLocalId::new(0), node: node.into() }));
-        let hash = hash_body(hcx, node);
-        self.nodes.hash = hash;
     }
 
     fn insert(&mut self, span: Span, hir_id: HirId, node: Node<'hir>) {
