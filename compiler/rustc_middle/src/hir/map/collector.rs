@@ -14,7 +14,6 @@ use rustc_session::Session;
 use rustc_span::source_map::SourceMap;
 use rustc_span::{Span, DUMMY_SP};
 
-use std::collections::BTreeMap;
 use std::iter::repeat;
 
 /// A visitor that walks over the HIR and collects `Node`s into a HIR map.
@@ -46,17 +45,6 @@ fn insert_vec_map<K: Idx, V: Clone>(map: &mut IndexVec<K, Option<V>>, k: K, v: V
     map[k] = Some(v);
 }
 
-fn subtree<T>(
-    map: &BTreeMap<BodyId, T>,
-    owner: LocalDefId,
-) -> impl Iterator<Item = (ItemLocalId, &T)> {
-    let start = BodyId { hir_id: HirId::make_owner(owner) };
-    let end = BodyId {
-        hir_id: HirId::make_owner(LocalDefId { local_def_index: owner.local_def_index + 1 }),
-    };
-    map.range(start..end).map(|(body_id, item)| (body_id.hir_id.local_id, item))
-}
-
 fn hash_body(
     hcx: &mut StableHashingContext<'_>,
     item_like: impl for<'a> HashStable<StableHashingContext<'a>>,
@@ -68,13 +56,6 @@ fn hash_body(
     stable_hasher.finish()
 }
 
-/// Represents an entry and its parent `HirId`.
-#[derive(Copy, Clone, Debug)]
-pub struct Entry<'hir> {
-    parent: HirId,
-    node: Node<'hir>,
-}
-
 pub(super) fn collect(
     sess: &'a Session,
     krate: &'hir Crate<'hir>,
@@ -82,55 +63,33 @@ pub(super) fn collect(
     mut hcx: StableHashingContext<'a>,
     owner: LocalDefId,
 ) -> Option<IndexedHir<'hir>> {
-    let mut collector = if let Some(Some(item)) = krate.owners.get(owner) {
-        let mut collector = NodeCollector::new(sess, krate, definitions, owner, &mut hcx, *item);
-
-        match item {
-            OwnerNode::Crate(citem) => collector.visit_mod(&citem, citem.inner, hir::CRATE_HIR_ID),
-            OwnerNode::Item(item) => collector.visit_item(item),
-            OwnerNode::TraitItem(item) => collector.visit_trait_item(item),
-            OwnerNode::ImplItem(item) => collector.visit_impl_item(item),
-            OwnerNode::ForeignItem(item) => collector.visit_foreign_item(item),
-            OwnerNode::MacroDef(..) => {}
-        };
-
-        collector
-    } else {
-        return None;
+    let item = *krate.owners.get(owner)?.as_ref()?;
+    let hash = hash_body(&mut hcx, item);
+    let mut nodes = IndexVec::new();
+    nodes.push(Some(ParentedNode { parent: ItemLocalId::new(0), node: item.into() }));
+    let mut collector = NodeCollector {
+        krate,
+        source_map: sess.source_map(),
+        owner,
+        parent_node: ItemLocalId::new(0),
+        definitions,
+        nodes: OwnerNodes { hash, nodes, bodies: FxHashMap::default() },
+        parenting: FxHashMap::default(),
     };
 
-    // Insert bodies into the map
-    for (local_id, body) in subtree(&krate.bodies, owner) {
-        let bodies = &mut collector.nodes.bodies;
-        assert!(bodies.insert(local_id, body).is_none());
-    }
+    match item {
+        OwnerNode::Crate(citem) => collector.visit_mod(&citem, citem.inner, hir::CRATE_HIR_ID),
+        OwnerNode::Item(item) => collector.visit_item(item),
+        OwnerNode::TraitItem(item) => collector.visit_trait_item(item),
+        OwnerNode::ImplItem(item) => collector.visit_impl_item(item),
+        OwnerNode::ForeignItem(item) => collector.visit_foreign_item(item),
+        OwnerNode::MacroDef(..) => {}
+    };
 
     Some(IndexedHir { nodes: collector.nodes, parenting: collector.parenting })
 }
 
 impl<'a, 'hir> NodeCollector<'a, 'hir> {
-    fn new(
-        sess: &'a Session,
-        krate: &'hir Crate<'hir>,
-        definitions: &'a definitions::Definitions,
-        owner: LocalDefId,
-        hcx: &mut StableHashingContext<'a>,
-        item: OwnerNode<'hir>,
-    ) -> NodeCollector<'a, 'hir> {
-        let hash = hash_body(hcx, item);
-        let mut nodes = IndexVec::new();
-        nodes.push(Some(ParentedNode { parent: ItemLocalId::new(0), node: item.into() }));
-        NodeCollector {
-            krate,
-            source_map: sess.source_map(),
-            owner,
-            parent_node: ItemLocalId::new(0),
-            definitions,
-            nodes: OwnerNodes { hash, nodes, bodies: FxHashMap::default() },
-            parenting: FxHashMap::default(),
-        }
-    }
-
     fn insert(&mut self, span: Span, hir_id: HirId, node: Node<'hir>) {
         debug_assert_eq!(self.owner, hir_id.owner);
         debug_assert_ne!(hir_id.local_id.as_u32(), 0);
@@ -213,7 +172,10 @@ impl<'a, 'hir> Visitor<'hir> for NodeCollector<'a, 'hir> {
     }
 
     fn visit_nested_body(&mut self, id: BodyId) {
-        self.visit_body(self.krate.body(id));
+        let body = self.krate.body(id);
+        debug_assert_eq!(id.hir_id.owner, self.owner);
+        assert!(self.nodes.bodies.insert(id.hir_id.local_id, body).is_none());
+        self.visit_body(body);
     }
 
     fn visit_param(&mut self, param: &'hir Param<'hir>) {
