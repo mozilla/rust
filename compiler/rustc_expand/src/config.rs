@@ -410,7 +410,16 @@ impl<'a> StripUnconfigured<'a> {
                 );
                 trees.push((bracket_group, Spacing::Alone));
                 let tokens = Some(LazyTokenStream::new(AttrAnnotatedTokenStream::new(trees)));
-                self.process_cfg_attr(attr::mk_attr_from_item(item, tokens, attr.style, span))
+                let attr = attr::mk_attr_from_item(item, tokens, attr.style, span);
+                if attr.has_name(sym::crate_type) {
+                    self.sess
+                        .span_err(attr.span, "`crate_type` is not allowed within a `#![cfg_attr]`");
+                }
+                if attr.has_name(sym::crate_name) {
+                    self.sess
+                        .span_err(attr.span, "`crate_name` is not allowed within a `#![cfg_attr]`");
+                }
+                self.process_cfg_attr(attr)
             })
             .collect()
     }
