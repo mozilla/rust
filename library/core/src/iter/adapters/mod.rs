@@ -55,7 +55,7 @@ pub use self::zip::TrustedRandomAccess;
 #[unstable(feature = "iter_zip", issue = "83574")]
 pub use self::zip::zip;
 
-#[unstable(feature = "iter_dedup", reason = "recently added", issue = "none")]
+#[unstable(feature = "iter_dedup", reason = "recently added", issue = "83748")]
 pub use self::dedup::{Dedup, DedupBy, DedupByKey};
 
 /// This trait provides transitive access to source-stage in an interator-adapter pipeline
