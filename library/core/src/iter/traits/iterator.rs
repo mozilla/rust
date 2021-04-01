@@ -1610,6 +1610,8 @@ pub trait Iterator {
     /// # Examples
     ///
     /// ```
+    /// #![feature(iter_dedup)]
+    ///
     /// let vec = vec![1, 2, 2, 3, 2];
     ///
     /// let mut iter = vec.into_iter().dedup();
@@ -1640,6 +1642,8 @@ pub trait Iterator {
     /// # Examples
     ///
     /// ```
+    /// #![feature(iter_dedup)]
+    ///
     /// let vec = vec!["foo", "bar", "Bar", "baz", "bar"];
     ///
     /// let mut iter = vec.into_iter().dedup_by(|a, b| a.eq_ignore_ascii_case(b));
@@ -1668,6 +1672,8 @@ pub trait Iterator {
     /// # Examples
     ///
     /// ```
+    /// #![feature(iter_dedup)]
+    ///
     /// let vec = vec![10, 20, 21, 30, 20];
     ///
     /// let mut iter = vec.into_iter().dedup_by_key(|&i| i / 10);
