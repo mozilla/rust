@@ -498,7 +498,7 @@ impl<'a> Decoder<'a> {
     }
 
     #[inline]
-    fn read_raw_bytes(&mut self, bytes: usize) -> &'a [u8] {
+    pub fn read_raw_bytes(&mut self, bytes: usize) -> &'a [u8] {
         let start = self.position;
         self.position += bytes;
         &self.data[start..self.position]

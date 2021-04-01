@@ -1,7 +1,6 @@
 use crate::leb128::{self, max_leb128_len};
 use crate::serialize::{self, Encoder as _};
 use std::borrow::Cow;
-use std::convert::TryInto;
 use std::fs::File;
 use std::io::{self, Write};
 use std::mem::MaybeUninit;
@@ -702,47 +701,5 @@ impl<'a> serialize::Decodable<Decoder<'a>> for Vec<u8> {
     fn decode(d: &mut Decoder<'a>) -> Result<Self, String> {
         let len = serialize::Decoder::read_usize(d)?;
         Ok(d.read_raw_bytes(len).to_owned())
-    }
-}
-
-// An integer that will always encode to 8 bytes.
-pub struct IntEncodedWithFixedSize(pub u64);
-
-impl IntEncodedWithFixedSize {
-    pub const ENCODED_SIZE: usize = 8;
-}
-
-impl serialize::Encodable<Encoder> for IntEncodedWithFixedSize {
-    #[inline]
-    fn encode(&self, e: &mut Encoder) -> EncodeResult {
-        let _start_pos = e.position();
-        e.emit_raw_bytes(&self.0.to_le_bytes())?;
-        let _end_pos = e.position();
-        debug_assert_eq!((_end_pos - _start_pos), IntEncodedWithFixedSize::ENCODED_SIZE);
-        Ok(())
-    }
-}
-
-impl serialize::Encodable<FileEncoder> for IntEncodedWithFixedSize {
-    #[inline]
-    fn encode(&self, e: &mut FileEncoder) -> FileEncodeResult {
-        let _start_pos = e.position();
-        e.emit_raw_bytes(&self.0.to_le_bytes())?;
-        let _end_pos = e.position();
-        debug_assert_eq!((_end_pos - _start_pos), IntEncodedWithFixedSize::ENCODED_SIZE);
-        Ok(())
-    }
-}
-
-impl<'a> serialize::Decodable<Decoder<'a>> for IntEncodedWithFixedSize {
-    #[inline]
-    fn decode(decoder: &mut Decoder<'a>) -> Result<IntEncodedWithFixedSize, String> {
-        let _start_pos = decoder.position();
-        let bytes = decoder.read_raw_bytes(IntEncodedWithFixedSize::ENCODED_SIZE);
-        let _end_pos = decoder.position();
-        debug_assert_eq!((_end_pos - _start_pos), IntEncodedWithFixedSize::ENCODED_SIZE);
-
-        let value = u64::from_le_bytes(bytes.try_into().unwrap());
-        Ok(IntEncodedWithFixedSize(value))
     }
 }
