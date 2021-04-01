@@ -1624,7 +1624,7 @@ pub trait Iterator {
     #[inline]
     fn dedup(self) -> Dedup<Self, Self::Item>
     where
-        Self: Sized
+        Self: Sized,
     {
         Dedup::new(self)
     }
