@@ -108,7 +108,7 @@
 #![feature(const_maybe_uninit_as_ptr)]
 #![feature(custom_inner_attributes)]
 #![feature(decl_macro)]
-#![feature(doc_cfg)]
+#![cfg_attr(bootstrap, doc_cfg)]
 #![feature(doc_spotlight)]
 #![feature(duration_consts_2)]
 #![feature(duration_saturating_ops)]

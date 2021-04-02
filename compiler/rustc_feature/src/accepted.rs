@@ -280,6 +280,10 @@ declare_features! (
     /// Allows the use of or-patterns (e.g., `0 | 1`).
     (accepted, or_patterns, "1.53.0", Some(54883), None),
 
+    /// Allows `#[doc(cfg(...))]`. It adds information about under which condition an item is
+    /// available.
+    (active, doc_cfg, "1.50.0", Some(43781), None),
+
     // -------------------------------------------------------------------------
     // feature-group-end: accepted features
     // -------------------------------------------------------------------------
