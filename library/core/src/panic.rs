@@ -2,6 +2,14 @@
 
 #![stable(feature = "core_panic_info", since = "1.41.0")]
 
+#[unstable(
+    feature = "panic_internals",
+    reason = "internal details of the implementation of the `panic!` and related macros",
+    issue = "none"
+)]
+#[doc(hidden)]
+pub mod assert_info;
+
 use crate::any::Any;
 use crate::fmt;
 
@@ -21,7 +29,7 @@ pub macro panic_2015 {
         $crate::panicking::panic_str($msg)
     ),
     ($fmt:expr, $($arg:tt)+) => (
-        $crate::panicking::panic_fmt($crate::format_args!($fmt, $($arg)+))
+        $crate::panicking::panic_fmt($crate::format_args!($fmt, $($arg)+), $crate::option::Option::None)
     ),
 }
 
@@ -35,7 +43,7 @@ pub macro panic_2021 {
         $crate::panicking::panic("explicit panic")
     ),
     ($($t:tt)+) => (
-        $crate::panicking::panic_fmt($crate::format_args!($($t)+))
+        $crate::panicking::panic_fmt($crate::format_args!($($t)+), $crate::option::Option::None)
     ),
 }
 
@@ -68,6 +76,7 @@ pub struct PanicInfo<'a> {
     payload: &'a (dyn Any + Send),
     message: Option<&'a fmt::Arguments<'a>>,
     location: &'a Location<'a>,
+    extra_info: Option<ExtraInfo<'a>>,
 }
 
 impl<'a> PanicInfo<'a> {
@@ -83,7 +92,7 @@ impl<'a> PanicInfo<'a> {
         location: &'a Location<'a>,
     ) -> Self {
         struct NoPayload;
-        PanicInfo { location, message, payload: &NoPayload }
+        PanicInfo { location, message, payload: &NoPayload, extra_info: None }
     }
 
     #[unstable(
@@ -160,6 +169,40 @@ impl<'a> PanicInfo<'a> {
         // NOTE: If this is changed to sometimes return None,
         // deal with that case in std::panicking::default_hook and std::panicking::begin_panic_fmt.
         Some(&self.location)
+    }
+
+    #[unstable(
+        feature = "panic_internals",
+        reason = "internal details of the implementation of the `panic!` and related macros",
+        issue = "none"
+    )]
+    #[doc(hidden)]
+    #[inline]
+    pub fn set_extra_info(&mut self, info: Option<ExtraInfo<'a>>) {
+        self.extra_info = info;
+    }
+
+    #[unstable(
+        feature = "panic_internals",
+        reason = "internal details of the implementation of the `panic!` and related macros",
+        issue = "none"
+    )]
+    #[doc(hidden)]
+    #[inline]
+    pub fn extra_info(&self) -> Option<ExtraInfo<'_>> {
+        self.extra_info
+    }
+
+    /// Get the information about the assertion that caused the panic.
+    ///
+    /// Returns `None` if the panic was not caused by an assertion.
+    #[unstable(
+        feature = "panic_internals",
+        reason = "internal details of the implementation of the `panic!` and related macros",
+        issue = "none"
+    )]
+    pub fn assert_info(&self) -> Option<&assert_info::AssertInfo<'_>> {
+        if let Some(ExtraInfo::AssertInfo(x)) = &self.extra_info { Some(x) } else { None }
     }
 }
 
@@ -365,6 +408,17 @@ impl fmt::Display for Location<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}:{}:{}", self.file, self.line, self.col)
     }
+}
+
+#[unstable(
+    feature = "panic_internals",
+    reason = "internal details of the implementation of the `panic!` and related macros",
+    issue = "none"
+)]
+#[doc(hidden)]
+#[derive(Debug, Copy, Clone)]
+pub enum ExtraInfo<'a> {
+    AssertInfo(&'a assert_info::AssertInfo<'a>),
 }
 
 /// An internal trait used by libstd to pass data from libstd to `panic_unwind`
