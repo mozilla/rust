@@ -326,6 +326,13 @@ pub enum ObligationCauseCode<'tcx> {
 
     /// If `X` is the concrete type of an opaque type `impl Y`, then `X` must implement `Y`
     OpaqueType,
+
+    /// Well-formed checking. If a `HirId` is provided,
+    /// it is used to perform HIR-based wf checking if an error
+    /// occurs, in order to generate a more precise error message.
+    /// This is purely for diagnostic purposes - it is always
+    /// correct to use `MiscObligation` instead
+    WellFormed(Option<hir::HirId>),
 }
 
 impl ObligationCauseCode<'_> {
