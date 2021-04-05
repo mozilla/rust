@@ -12,6 +12,7 @@ use crate::infer::error_reporting::{TyCategory, TypeAnnotationNeeded as ErrorCod
 use crate::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use crate::infer::{self, InferCtxt, TyCtxtInferExt};
 use rustc_data_structures::fx::FxHashMap;
+use rustc_data_structures::sync::Lrc;
 use rustc_errors::{pluralize, struct_span_err, Applicability, DiagnosticBuilder, ErrorReported};
 use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
@@ -29,7 +30,6 @@ use rustc_span::symbol::{kw, sym};
 use rustc_span::{ExpnKind, MultiSpan, Span, DUMMY_SP};
 use std::fmt;
 use std::iter;
-use std::rc::Rc;
 
 use crate::traits::query::evaluate_obligation::InferCtxtExt as _;
 use crate::traits::query::normalize::AtExt as _;
@@ -1082,7 +1082,7 @@ trait InferCtxtPrivExt<'tcx> {
 
     /// Walks up the chain of `DerivedObligationCause`,
     /// returning the `ObligationCauseCode` at the start of the chain
-    fn get_parent_code(&self, code: ObligationCauseCode<'tcx>) -> Rc<ObligationCauseCode<'tcx>>;
+    fn get_parent_code(&self, code: ObligationCauseCode<'tcx>) -> Lrc<ObligationCauseCode<'tcx>>;
 
     /// Gets the parent trait chain start
     fn get_parent_trait_ref(
@@ -1440,8 +1440,8 @@ impl<'a, 'tcx> InferCtxtPrivExt<'tcx> for InferCtxt<'a, 'tcx> {
         ));
     }
 
-    fn get_parent_code(&self, code: ObligationCauseCode<'tcx>) -> Rc<ObligationCauseCode<'tcx>> {
-        let mut code = Rc::new(code);
+    fn get_parent_code(&self, code: ObligationCauseCode<'tcx>) -> Lrc<ObligationCauseCode<'tcx>> {
+        let mut code = Lrc::new(code);
         loop {
             match &*code {
                 ObligationCauseCode::BuiltinDerivedObligation(data)

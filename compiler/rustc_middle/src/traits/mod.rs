@@ -13,6 +13,7 @@ use crate::mir::abstract_const::NotConstEvaluatable;
 use crate::ty::subst::SubstsRef;
 use crate::ty::{self, AdtKind, Ty, TyCtxt};
 
+use rustc_data_structures::sync::Lrc;
 use rustc_errors::{Applicability, DiagnosticBuilder};
 use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
@@ -24,7 +25,6 @@ use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::fmt;
 use std::ops::Deref;
-use std::rc::Rc;
 
 pub use self::select::{EvaluationCache, EvaluationResult, OverflowError, SelectionCache};
 
@@ -87,7 +87,7 @@ pub enum Reveal {
 #[derive(Clone, PartialEq, Eq, Hash, Lift)]
 pub struct ObligationCause<'tcx> {
     /// `None` for `ObligationCause::dummy`, `Some` otherwise.
-    data: Option<Rc<ObligationCauseData<'tcx>>>,
+    data: Option<Lrc<ObligationCauseData<'tcx>>>,
 }
 
 const DUMMY_OBLIGATION_CAUSE_DATA: ObligationCauseData<'static> =
@@ -131,7 +131,7 @@ impl<'tcx> ObligationCause<'tcx> {
         body_id: hir::HirId,
         code: ObligationCauseCode<'tcx>,
     ) -> ObligationCause<'tcx> {
-        ObligationCause { data: Some(Rc::new(ObligationCauseData { span, body_id, code })) }
+        ObligationCause { data: Some(Lrc::new(ObligationCauseData { span, body_id, code })) }
     }
 
     pub fn misc(span: Span, body_id: hir::HirId) -> ObligationCause<'tcx> {
@@ -148,7 +148,7 @@ impl<'tcx> ObligationCause<'tcx> {
     }
 
     pub fn make_mut(&mut self) -> &mut ObligationCauseData<'tcx> {
-        Rc::make_mut(self.data.get_or_insert_with(|| Rc::new(DUMMY_OBLIGATION_CAUSE_DATA)))
+        Lrc::make_mut(self.data.get_or_insert_with(|| Lrc::new(DUMMY_OBLIGATION_CAUSE_DATA)))
     }
 
     pub fn span(&self, tcx: TyCtxt<'tcx>) -> Span {
@@ -396,7 +396,7 @@ pub struct DerivedObligationCause<'tcx> {
     pub parent_trait_ref: ty::PolyTraitRef<'tcx>,
 
     /// The parent trait had this cause.
-    pub parent_code: Rc<ObligationCauseCode<'tcx>>,
+    pub parent_code: Lrc<ObligationCauseCode<'tcx>>,
 }
 
 #[derive(Clone, Debug, TypeFoldable, Lift)]
