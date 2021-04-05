@@ -200,6 +200,7 @@ impl AsmBuilderMethods<'tcx> for Builder<'a, 'll, 'tcx> {
 
         // Build the template string
         let mut template_str = String::new();
+        let mut labels = vec![];
         for piece in template {
             match *piece {
                 InlineAsmTemplatePiece::String(ref s) => {
@@ -212,6 +213,10 @@ impl AsmBuilderMethods<'tcx> for Builder<'a, 'll, 'tcx> {
                             }
                         }
                     } else {
+                        if let Some(label) = get_llvm_label_from_str(s) {
+                            labels.push(label.to_owned());
+                        }
+
                         template_str.push_str(s)
                     }
                 }
@@ -241,6 +246,30 @@ impl AsmBuilderMethods<'tcx> for Builder<'a, 'll, 'tcx> {
                         }
                     }
                 }
+            }
+        }
+
+        // Labels should be made local to prevent issues with inlined `asm!` and duplicate labels
+        // Fixes https://github.com/rust-lang/rust/issues/74262
+        for label in labels.iter() {
+            let ranges: Vec<_> = template_str
+                .match_indices(label)
+                .filter_map(|(idx, _)| {
+                    let label_end_idx = idx + label.len();
+                    let next_char = template_str[label_end_idx..].chars().nth(0);
+                    if next_char.is_none() || !llvm_ident_continuation(next_char.unwrap()) {
+                        Some(idx..label_end_idx)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // We add a constant length of 18 to the string every time
+            // from ${:private} and ${:uid}
+            for (i, range) in ranges.iter().enumerate() {
+                let real_range = range.start + (i * 18)..range.end + (i * 18);
+                template_str.replace_range(real_range, &format!("${{:private}}{}${{:uid}}", label))
             }
         }
 
@@ -880,4 +909,36 @@ fn llvm_fixup_output_type(
         },
         _ => layout.llvm_type(cx),
     }
+}
+
+// Valid llvm symbols: https://llvm.org/docs/AMDGPUOperandSyntax.html#symbols
+// First char is [a-zA-Z_.]
+fn llvm_ident_start(c: char) -> bool {
+    ('a'..='z').contains(&c) || ('A'..='Z').contains(&c) || '_' == c || '.' == c
+}
+
+// All subsequent chars are [a-zA-Z0-9_$.@]
+fn llvm_ident_continuation(c: char) -> bool {
+    ('a'..='z').contains(&c)
+        || ('A'..='Z').contains(&c)
+        || ('0'..='9').contains(&c)
+        || '_' == c
+        || '$' == c
+        || '.' == c
+        || '@' == c
+}
+
+/// Gets a LLVM label from a &str if it exists
+fn get_llvm_label_from_str(s: &str) -> Option<&str> {
+    if let Some(colon_idx) = s.find(':') {
+        let substr = &s[..colon_idx];
+        let mut chars = substr.chars();
+        if let Some(c) = chars.next() {
+            if llvm_ident_start(c) && chars.all(llvm_ident_continuation) {
+                return Some(substr);
+            }
+        }
+    }
+
+    None
 }
