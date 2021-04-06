@@ -64,6 +64,8 @@ pub fn target() -> Target {
                 Abi::AmdGpuKernel,
             ],
 
+            supports_stack_protector: false,
+
             ..Default::default()
         },
     }
