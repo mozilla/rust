@@ -662,7 +662,7 @@ impl<'a> Resolver<'a> {
                     let root_module = this.resolve_crate_root(root_ident);
                     this.add_module_candidates(root_module, &mut suggestions, filter_fn);
                 }
-                Scope::Module(module, _) => {
+                Scope::Module(module) => {
                     this.add_module_candidates(module, &mut suggestions, filter_fn);
                 }
                 Scope::RegisteredAttrs => {
