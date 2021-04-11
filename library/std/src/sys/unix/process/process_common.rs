@@ -289,7 +289,13 @@ impl Command {
             if errno != 0 {
                 return Err(io::Error::from_raw_os_error(errno));
             } else {
-                self.arg_max = limit.try_into().ok() - sys::os::page_size();
+                // FIXME: don't panic
+                let amax: isize = limit.try_into().unwrap();
+                let psize: isize = sys::os::page_size() as isize;
+                // POSIX says the headroom should be 2048.
+                // Most implementations do 4096. Let's just do a whole page.
+                debug_assert!(amax < 0 || amax > psize);
+                self.arg_max = Some(amax - psize);
             }
         }
         if self.arg_max.unwrap() < 0 {
