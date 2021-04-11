@@ -2,7 +2,7 @@
 use crate::ffi::OsStr;
 use crate::io;
 
-#[cfg(windows)]
+#[cfg(any(windows, doc))]
 use crate::ffi::OsString;
 
 /// Traits for handling a sized command.
@@ -32,19 +32,24 @@ pub trait CommandSized: core::marker::Sized {
 }
 
 /// Types that can be appended to a Windows command-line. Used for custom escaping.
-// FIXME: the force-quoted one should probably be its own type.
+// FIXME: The force-quoted one should conceptually be its own type.
+// FIXME: Explain why unix is here (to implement command_sized, apparently).
 #[unstable(feature = "command_sized", issue = "74549")]
 pub trait Arg {
+    /// Calculate size of arg in a cmdline.
     fn arg_size(&self, force_quotes: bool) -> Result<usize, Problem>;
-    #[cfg(unix)]
+    #[cfg(any(unix, doc))]
+    #[doc(cfg(unix))]
     /// Convert to more palatable form for Unix.
     fn to_plain(&self) -> &OsStr;
-    #[cfg(windows)]
+    #[cfg(any(windows, doc))]
+    #[doc(cfg(windows))]
     /// Retain the argument by copying. Wait, why we are retaining it?
     /// FIXME: Isn't information already lost when we put it into the
     /// vector, erasing type info? Why do we still use the args vector?
     fn to_os_string(&self) -> OsString;
-    #[cfg(windows)]
+    #[cfg(any(windows, doc))]
+    #[doc(cfg(windows))]
     /// Append argument to a cmdline.
     fn append_to(&self, cmd: &mut Vec<u16>, force_quotes: bool) -> Result<usize, Problem>;
 }
