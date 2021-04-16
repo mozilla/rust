@@ -571,12 +571,6 @@ fn incremental_verify_ich<CTX, K, V: Debug>(
 ) where
     CTX: QueryContext,
 {
-    assert!(
-        tcx.dep_graph().is_green(dep_node),
-        "fingerprint for green query instance not loaded from cache: {:?}",
-        dep_node,
-    );
-
     debug!("BEGIN verify_ich({:?})", dep_node);
     let mut hcx = tcx.create_stable_hashing_context();
 
