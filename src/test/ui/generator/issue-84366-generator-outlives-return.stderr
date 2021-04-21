@@ -1,0 +1,24 @@
+error[E0759]: `s` has lifetime `'a` but it needs to satisfy a `'static` lifetime requirement
+  --> $DIR/issue-84366-generator-outlives-return.rs:28:28
+   |
+LL | fn make_static_displayable<'a>(s: &'a str) -> Box<dyn fmt::Display> {
+   |                                   ------- this data with lifetime `'a`...
+LL |     let f = || { yield ""; "" };
+   |                            ^^
+LL |     // problem is: the closure type of `f` is 'static
+LL |     static_transfers_to_associated(&f, s)
+   |                                        - ...is captured here...
+   |
+note: ...and is required to live as long as `'static` here
+  --> $DIR/issue-84366-generator-outlives-return.rs:30:5
+   |
+LL |     static_transfers_to_associated(&f, s)
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: to declare that the trait object captures data from argument `s`, you can add an explicit `'a` lifetime bound
+   |
+LL | fn make_static_displayable<'a>(s: &'a str) -> Box<dyn fmt::Display + 'a> {
+   |                                                                    ^^^^
+
+error: aborting due to previous error
+
+For more information about this error, try `rustc --explain E0759`.

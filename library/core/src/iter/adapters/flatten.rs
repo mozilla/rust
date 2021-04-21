@@ -296,7 +296,7 @@ where
         R: Try<Ok = Acc>,
     {
         #[inline]
-        fn flatten<'a, T: IntoIterator, Acc, R: Try<Ok = Acc>>(
+        fn flatten<'a, T: IntoIterator, Acc: 'a, R: Try<Ok = Acc> + 'a>(
             frontiter: &'a mut Option<T::IntoIter>,
             fold: &'a mut impl FnMut(Acc, T::Item) -> R,
         ) -> impl FnMut(Acc, T) -> R + 'a {
@@ -330,9 +330,9 @@ where
         Fold: FnMut(Acc, Self::Item) -> Acc,
     {
         #[inline]
-        fn flatten<T: IntoIterator, Acc>(
-            fold: &mut impl FnMut(Acc, T::Item) -> Acc,
-        ) -> impl FnMut(Acc, T) -> Acc + '_ {
+        fn flatten<'a, T: IntoIterator + 'a, Acc: 'a>(
+            fold: &'a mut impl FnMut(Acc, T::Item) -> Acc,
+        ) -> impl FnMut(Acc, T) -> Acc + 'a {
             move |acc, x| x.into_iter().fold(acc, &mut *fold)
         }
 
@@ -385,7 +385,7 @@ where
         R: Try<Ok = Acc>,
     {
         #[inline]
-        fn flatten<'a, T: IntoIterator, Acc, R: Try<Ok = Acc>>(
+        fn flatten<'a, T: IntoIterator, Acc: 'a, R: Try<Ok = Acc> + 'a>(
             backiter: &'a mut Option<T::IntoIter>,
             fold: &'a mut impl FnMut(Acc, T::Item) -> R,
         ) -> impl FnMut(Acc, T) -> R + 'a
@@ -422,9 +422,9 @@ where
         Fold: FnMut(Acc, Self::Item) -> Acc,
     {
         #[inline]
-        fn flatten<T: IntoIterator, Acc>(
-            fold: &mut impl FnMut(Acc, T::Item) -> Acc,
-        ) -> impl FnMut(Acc, T) -> Acc + '_
+        fn flatten<'a, T: IntoIterator + 'a, Acc: 'a>(
+            fold: &'a mut impl FnMut(Acc, T::Item) -> Acc,
+        ) -> impl FnMut(Acc, T) -> Acc + 'a
         where
             T::IntoIter: DoubleEndedIterator,
         {
