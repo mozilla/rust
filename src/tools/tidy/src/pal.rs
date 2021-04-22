@@ -44,6 +44,7 @@ const EXCEPTION_PATHS: &[&str] = &[
     // This has the trailing slash so that sys_common is not excepted.
     "library/std/src/os", // Platform-specific public interfaces
     "library/rtstartup",  // Not sure what to do about this. magic stuff for mingw
+    "library/std/src/collections/hash/map.rs", // constant hash map seed for `wasm32-unknown-unknown`
     // Integration test for platform-specific run-time feature detection:
     "library/std/tests/run-time-detect.rs",
     "library/std/src/net/test.rs",
