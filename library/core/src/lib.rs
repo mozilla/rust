@@ -118,6 +118,7 @@
 #![feature(intra_doc_pointers)]
 #![feature(intrinsics)]
 #![feature(lang_items)]
+#![feature(linkage)]
 #![feature(link_llvm_intrinsics)]
 #![feature(llvm_asm)]
 #![feature(negative_impls)]
@@ -244,6 +245,7 @@ pub mod ops;
 pub mod any;
 pub mod array;
 pub mod ascii;
+pub mod backtrace;
 pub mod cell;
 pub mod char;
 pub mod ffi;
