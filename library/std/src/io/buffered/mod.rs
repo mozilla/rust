@@ -4,6 +4,7 @@ mod bufreader;
 mod bufwriter;
 mod linewriter;
 mod linewritershim;
+mod switchwriter;
 
 #[cfg(test)]
 mod tests;
@@ -16,6 +17,9 @@ pub use bufreader::BufReader;
 pub use bufwriter::BufWriter;
 pub use linewriter::LineWriter;
 use linewritershim::LineWriterShim;
+
+#[unstable(feature = "stdout_switchable_buffering", issue = "78515")]
+pub use switchwriter::{BufferMode, SwitchWriter};
 
 /// An error returned by [`BufWriter::into_inner`] which combines an error that
 /// happened while writing out the buffer, and the buffered writer object
