@@ -6,8 +6,8 @@ use crate::cmp::{self, Ordering};
 use crate::ops::{ControlFlow, Try};
 
 use super::super::TrustedRandomAccess;
+use super::super::{ByKey, ByPartialEq, Dedup};
 use super::super::{Chain, Cloned, Copied, Cycle, Enumerate, Filter, FilterMap, Fuse};
-use super::super::{Dedup, ByKey, ByPartialEq};
 use super::super::{FlatMap, Flatten};
 use super::super::{FromIterator, Intersperse, IntersperseWith, Product, Sum, Zip};
 use super::super::{
