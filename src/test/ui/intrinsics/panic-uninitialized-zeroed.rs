@@ -5,7 +5,7 @@
 
 // This test checks panic emitted from `mem::{uninitialized,zeroed}`.
 
-#![feature(never_type, arbitrary_enum_discriminant)]
+#![feature(arbitrary_enum_discriminant)]
 #![allow(deprecated, invalid_value)]
 
 use std::{
