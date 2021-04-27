@@ -67,6 +67,7 @@ pub fn const_alloc_to_llvm(cx: &CodegenCx<'ll, '_>, alloc: &Allocation) -> &'ll 
                 }
                 _ => {
                     // partially uninit, codegen as if it was initialized
+                    // (using some arbitrary value for uninit bytes)
                     let bytes = alloc.inspect_with_uninit_and_ptr_outside_interpreter(range);
                     cx.const_bytes(bytes)
                 }
