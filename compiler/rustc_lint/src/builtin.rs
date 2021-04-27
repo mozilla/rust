@@ -2297,7 +2297,7 @@ declare_lint! {
     /// ### Example
     ///
     /// ```rust
-    /// #![feature(generic_associated_types)]
+    /// #![feature(const_generics)]
     /// ```
     ///
     /// {{produces}}
