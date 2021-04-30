@@ -449,7 +449,7 @@ impl<K: DepKind> DepGraph<K> {
         if dep_node_debug.borrow().contains_key(&dep_node) {
             return;
         }
-        let debug_str = debug_str_gen();
+        let debug_str = self.with_ignore(debug_str_gen);
         dep_node_debug.borrow_mut().insert(dep_node, debug_str);
     }
 
