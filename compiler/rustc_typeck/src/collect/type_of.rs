@@ -808,7 +808,7 @@ fn infer_placeholder_type<'a>(
     // then the user may have written e.g. `const A = 42;`.
     // In this case, the parser has stashed a diagnostic for
     // us to improve in typeck so we do that now.
-    match tcx.sess.diagnostic().steal_diagnostic(span, StashKey::ItemNoType) {
+    match tcx.sess.diagnostic().steal_diagnostic(span.with_parent(None), StashKey::ItemNoType) {
         Some(mut err) => {
             // The parser provided a sub-optimal `HasPlaceholders` suggestion for the type.
             // We are typeck and have the real type, so remove that and suggest the actual type.

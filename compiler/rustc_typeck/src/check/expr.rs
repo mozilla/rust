@@ -340,7 +340,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             "type `{}` cannot be dereferenced",
                             oprnd_t,
                         );
-                        let sp = tcx.sess.source_map().start_point(expr.span);
+                        let sp = tcx.sess.source_map().start_point(expr.span).with_parent(None);
                         if let Some(sp) =
                             tcx.sess.parse_sess.ambiguous_block_expr_parse.borrow().get(&sp)
                         {
