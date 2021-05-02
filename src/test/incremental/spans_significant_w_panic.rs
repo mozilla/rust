@@ -17,7 +17,7 @@ pub fn main() {
 }
 
 #[cfg(rpass2)]
-#[rustc_clean(except="hir_owner_nodes,optimized_mir", cfg="rpass2")]
+#[rustc_clean(cfg="rpass2")]
 pub fn main() {
     if std::hint::black_box(false) {
         panic!()

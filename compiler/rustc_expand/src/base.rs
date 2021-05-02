@@ -14,7 +14,7 @@ use rustc_lint_defs::builtin::PROC_MACRO_BACK_COMPAT;
 use rustc_lint_defs::BuiltinLintDiagnostics;
 use rustc_parse::{self, nt_to_tokenstream, parser, MACRO_ARGUMENTS};
 use rustc_session::{parse::ParseSess, Limit, Session};
-use rustc_span::def_id::{CrateNum, DefId};
+use rustc_span::def_id::{CrateNum, DefId, LocalDefId};
 use rustc_span::edition::Edition;
 use rustc_span::hygiene::{AstPass, ExpnData, ExpnId, ExpnKind};
 use rustc_span::source_map::SourceMap;
@@ -833,6 +833,7 @@ pub type DeriveResolutions = Vec<(ast::Path, Annotatable, Option<Lrc<SyntaxExten
 
 pub trait ResolverExpand {
     fn next_node_id(&mut self) -> NodeId;
+    fn invocation_parent(&self, id: ExpnId) -> LocalDefId;
 
     fn resolve_dollar_crates(&mut self);
     fn visit_ast_fragment_with_placeholders(&mut self, expn_id: ExpnId, fragment: &AstFragment);
