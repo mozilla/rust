@@ -1,5 +1,5 @@
 error: `UnwindSafe`, `RefUnwindSafe` trait implementation will change in Rust 2021
-  --> $DIR/mir_calls_to_shims.rs:15:38
+  --> $DIR/mir_calls_to_shims.rs:14:38
    |
 LL |       let result = panic::catch_unwind(move || {
    |  ______________________________________^
@@ -17,7 +17,7 @@ LL | #![deny(disjoint_capture_migration)]
    = note: for more information, see <https://doc.rust-lang.org/nightly/edition-guide/rust-2021/disjoint-capture-in-closures.html>
 help: add a dummy let to cause `f` to be fully captured
    |
-LL |     let result = panic::catch_unwind(move || { let _ = &f; 
+LL |     let result = panic::catch_unwind(move || { let _ = &f;
 LL |
 LL |
 LL |         f.0()
