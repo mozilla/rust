@@ -465,6 +465,8 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                         if has_default {
                             // FIXME(const_generics): Actually infer parameter here?
                             tcx.const_param_default(param.def_id).into()
+                        } else if self.astconv.allow_ty_infer() {
+                            todo!()
                         } else {
                             self.inferred_params.push(inf.span);
                             tcx.ty_error().into()
@@ -1962,7 +1964,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                         }
                         has_err = true;
                         err_for_ty = true;
-                        (inf.span, "inferred")
+                        (inf.span, "generic")
                     }
                 };
                 let mut err = struct_span_err!(

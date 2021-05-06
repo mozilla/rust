@@ -1182,7 +1182,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             ast::GenericArg::Lifetime(lt) => GenericArg::Lifetime(self.lower_lifetime(&lt)),
             ast::GenericArg::Type(ty) => {
                 match ty.kind {
-                    TyKind::Infer => {
+                    TyKind::Infer if self.sess.features_untracked().generic_arg_infer => {
                         let hir_id = self.lower_node_id(ty.id);
                         return GenericArg::Infer(hir::InferArg { hir_id, span: ty.span });
                     }

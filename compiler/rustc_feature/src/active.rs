@@ -687,6 +687,9 @@ declare_features! (
     /// Allows qualified paths in struct expressions, struct patterns and tuple struct patterns.
     (active, more_qualified_paths, "1.54.0", Some(80080), None),
 
+    /// Infer generic args for both consts and types.
+    (active, generic_arg_infer, "1.54.0", Some(85077), None),
+
     // -------------------------------------------------------------------------
     // feature-group-end: actual feature gates
     // -------------------------------------------------------------------------
