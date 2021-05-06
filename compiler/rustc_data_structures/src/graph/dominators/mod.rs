@@ -1,9 +1,4 @@
 //! Finding the dominators in a control-flow graph.
-//!
-//! Algorithm based on Keith D. Cooper, Timothy J. Harvey, and Ken Kennedy,
-//! "A Simple, Fast Dominance Algorithm",
-//! Rice Computer Science TS-06-33870,
-//! <https://www.cs.rice.edu/~keith/EMBED/dom.pdf>.
 
 use super::iterate::reverse_post_order;
 use super::ControlFlowGraph;
@@ -29,53 +24,75 @@ fn dominators_given_rpo<G: ControlFlowGraph>(graph: G, rpo: &[G::Node]) -> Domin
         post_order_rank[node] = index;
     }
 
-    let mut immediate_dominators = IndexVec::from_elem_n(None, graph.num_nodes());
-    immediate_dominators[start_node] = Some(start_node);
+    // We take a slightly interesting approach to storing the dominators. Rather
+    // than storing in the "actual" index of the graph node, we store in the
+    // post order rank index. This means that when we need to find the closest
+    // dominator to a given node after computing the dominator sets, we can
+    // simply find the 2nd set bit (the first is the node itself).
+    let mut dominators =
+        IndexVec::from_elem_n(BitSet::new_filled(graph.num_nodes().index()), graph.num_nodes());
+
+    // The start node should have just the start node filled.
+    dominators[graph.start_node()].clear();
+    dominators[graph.start_node()].insert(post_order_rank[graph.start_node()]);
 
     let mut changed = true;
+    let mut temp = BitSet::new_empty(graph.num_nodes());
     while changed {
         changed = false;
 
         for &node in &rpo[1..] {
-            let mut new_idom = None;
-            for pred in graph.predecessors(node) {
-                if immediate_dominators[pred].is_some() {
-                    // (*) dominators for `pred` have been calculated
-                    new_idom = Some(if let Some(new_idom) = new_idom {
-                        intersect(&post_order_rank, &immediate_dominators, new_idom, pred)
-                    } else {
-                        pred
-                    });
+            let mut preds = graph.predecessors(node);
+            // There must be a predecessor, as this is a non-root node in a RPO
+            // traversal.
+            let first = preds.next().unwrap();
+            if let Some(pred) = preds.next() {
+                // there are two predecessors, so intersect the first two into
+                // temp.
+                temp.intersect_dest(&dominators[first], &dominators[pred]);
+                while let Some(pred) = preds.next() {
+                    temp.intersect_no_change(&dominators[pred]);
+                }
+                temp.insert(post_order_rank[node]);
+                if temp != dominators[node] {
+                    std::mem::swap(&mut dominators[node], &mut temp);
+                    changed = true;
+                }
+            } else {
+                let pred = first;
+                if node != pred {
+                    let (doms_node, doms_pred) = dominators.pick2_mut(node, pred);
+                    // There is only one predecessor.
+                    doms_node.remove(post_order_rank[node]);
+                    if doms_node != doms_pred {
+                        doms_node.clone_from(&doms_pred);
+                        changed = true;
+                    }
+                    doms_node.insert(post_order_rank[node]);
                 }
             }
-
-            if new_idom != immediate_dominators[node] {
-                immediate_dominators[node] = new_idom;
-                changed = true;
-            }
         }
+    }
+
+    // At this point for each node we have the full set of dominators (up to the
+    // root). We want to find the immediate dominators.
+
+    let mut immediate_dominators = IndexVec::from_elem_n(None, graph.num_nodes());
+    immediate_dominators[start_node] = Some(start_node);
+
+    for &node in &rpo[1..] {
+        // Our 'dominators' set contains the nodes that dominate this one (as
+        // computed above). The immediate dominator is the one closest to us.
+        //
+        // As noted above, the dominators are indexed by the postorder rank of
+        // each node, so we actually know that the idom is the 2nd bit set
+        // (where the first bit set is this node, as we dominate ourselves).
+
+        let post_order_idx = dominators[node].next_after(post_order_rank[node]).unwrap();
+        immediate_dominators[node] = Some(rpo[rpo.len() - 1 - post_order_idx]);
     }
 
     Dominators { post_order_rank, immediate_dominators }
-}
-
-fn intersect<Node: Idx>(
-    post_order_rank: &IndexVec<Node, usize>,
-    immediate_dominators: &IndexVec<Node, Option<Node>>,
-    mut node1: Node,
-    mut node2: Node,
-) -> Node {
-    while node1 != node2 {
-        while post_order_rank[node1] < post_order_rank[node2] {
-            node1 = immediate_dominators[node1].unwrap();
-        }
-
-        while post_order_rank[node2] < post_order_rank[node1] {
-            node2 = immediate_dominators[node2].unwrap();
-        }
-    }
-
-    node1
 }
 
 #[derive(Clone, Debug)]
