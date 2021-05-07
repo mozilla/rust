@@ -526,6 +526,15 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
 
         if self.tcx().trait_is_auto(def_id) {
             match self_ty.kind() {
+                ty::Placeholder(..)
+                | ty::Bound(..)
+                | ty::Infer(ty::FreshTy(_) | ty::FreshIntTy(_) | ty::FreshFloatTy(_)) => {
+                    bug!(
+                        "asked to assemble auto trait candidates of unexpected type: {:?}",
+                        self_ty
+                    );
+                }
+
                 ty::Dynamic(..) => {
                     // For object types, we don't know what the closed
                     // over types are. This means we conservatively
@@ -553,7 +562,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     // for an example of a test case that exercises
                     // this path.
                 }
-                ty::Infer(ty::TyVar(_)) => {
+                ty::Infer(_) => {
                     // The auto impl might apply; we don't know.
                     candidates.ambiguous = true;
                 }
@@ -571,15 +580,6 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                             candidates.vec.push(BuiltinCandidate { has_nested: false });
                         }
                     }
-                }
-
-                ty::Placeholder(..)
-                | ty::Bound(..)
-                | ty::Infer(ty::FreshTy(_) | ty::FreshIntTy(_) | ty::FreshFloatTy(_)) => {
-                    bug!(
-                        "asked to assemble auto trait candidates of unexpected type: {:?}",
-                        self_ty
-                    );
                 }
 
                 // Only consider auto impls if there are no manual impls for the root of `self_ty`.

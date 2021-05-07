@@ -1411,15 +1411,6 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 is_global(&cand.value) && other.evaluation.must_apply_modulo_regions()
             }
 
-            (AutoImplCandidate(_), _) | (_, AutoImplCandidate(_)) => {
-                bug!(
-                    "default implementations shouldn't be recorded \
-                    when there are other non param candidates: {:?} {:?}",
-                    other,
-                    victim
-                );
-            }
-
             (ProjectionCandidate(i), ProjectionCandidate(j))
             | (ObjectCandidate(i), ObjectCandidate(j)) => {
                 // Arbitrarily pick the lower numbered candidate for backwards
@@ -1514,6 +1505,19 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 } else {
                     false
                 }
+            }
+
+            (AutoImplCandidate(_), ImplCandidate(_) | ProjectionCandidate(_))
+            | (ImplCandidate(_) | ProjectionCandidate(_), AutoImplCandidate(_)) => false,
+
+            (AutoImplCandidate(_), _)
+            | (_, AutoImplCandidate(_)) => {
+                bug!(
+                    "default implementations shouldn't be recorded \
+                    when there are other global candidates: {:?} {:?}",
+                    other,
+                    victim
+                );
             }
 
             // Everything else is ambiguous

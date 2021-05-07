@@ -184,7 +184,7 @@ impl<'tcx> TyCtxt<'tcx> {
         // I think we'll cross that bridge when we get to it.
 
         if let Some(simp) =
-            fast_reject::simplify_type(self, self_ty, SimplifyParams::Yes, StripReferences::No)
+            fast_reject::simplify_type(self, self_ty, SimplifyParams::No, StripReferences::No)
         {
             if let Some(impls) = impls.non_blanket_impls.get(&simp) {
                 for &impl_def_id in impls {
