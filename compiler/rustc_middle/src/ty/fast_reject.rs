@@ -27,8 +27,11 @@ where
     UintSimplifiedType(ty::UintTy),
     FloatSimplifiedType(ty::FloatTy),
     AdtSimplifiedType(D),
+    ForeignSimplifiedType(DefId),
     StrSimplifiedType,
     ArraySimplifiedType,
+    SliceSimplifiedType,
+    RefSimplifiedType,
     PtrSimplifiedType,
     NeverSimplifiedType,
     TupleSimplifiedType(usize),
@@ -42,7 +45,18 @@ where
     OpaqueSimplifiedType(D),
     FunctionSimplifiedType(usize),
     ParameterSimplifiedType,
-    ForeignSimplifiedType(DefId),
+}
+
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+pub enum SimplifyParams {
+    Yes,
+    No,
+}
+
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+pub enum StripReferences {
+    Yes,
+    No,
 }
 
 /// Tries to simplify a type by dropping type parameters, deref'ing away any reference types, etc.
@@ -57,7 +71,8 @@ where
 pub fn simplify_type(
     tcx: TyCtxt<'_>,
     ty: Ty<'_>,
-    can_simplify_params: bool,
+    can_simplify_params: SimplifyParams,
+    strip_references: StripReferences,
 ) -> Option<SimplifiedType> {
     match *ty.kind() {
         ty::Bool => Some(BoolSimplifiedType),
@@ -67,7 +82,8 @@ pub fn simplify_type(
         ty::Float(float_type) => Some(FloatSimplifiedType(float_type)),
         ty::Adt(def, _) => Some(AdtSimplifiedType(def.did)),
         ty::Str => Some(StrSimplifiedType),
-        ty::Array(..) | ty::Slice(_) => Some(ArraySimplifiedType),
+        ty::Array(..) => Some(ArraySimplifiedType),
+        ty::Slice(..) => Some(SliceSimplifiedType),
         ty::RawPtr(_) => Some(PtrSimplifiedType),
         ty::Dynamic(ref trait_info, ..) => match trait_info.principal_def_id() {
             Some(principal_def_id) if !tcx.trait_is_auto(principal_def_id) => {
@@ -76,10 +92,14 @@ pub fn simplify_type(
             _ => Some(MarkerTraitObjectSimplifiedType),
         },
         ty::Ref(_, ty, _) => {
-            // since we introduce auto-refs during method lookup, we
-            // just treat &T and T as equivalent from the point of
-            // view of possibly unifying
-            simplify_type(tcx, ty, can_simplify_params)
+            if strip_references == StripReferences::Yes {
+                // since we introduce auto-refs during method lookup, we
+                // just treat &T and T as equivalent from the point of
+                // view of possibly unifying
+                simplify_type(tcx, ty, can_simplify_params, strip_references)
+            } else {
+                Some(RefSimplifiedType)
+            }
         }
         ty::FnDef(def_id, _) | ty::Closure(def_id, _) => Some(ClosureSimplifiedType(def_id)),
         ty::Generator(def_id, _, _) => Some(GeneratorSimplifiedType(def_id)),
@@ -90,7 +110,7 @@ pub fn simplify_type(
         ty::Tuple(ref tys) => Some(TupleSimplifiedType(tys.len())),
         ty::FnPtr(ref f) => Some(FunctionSimplifiedType(f.skip_binder().inputs().len())),
         ty::Projection(_) | ty::Param(_) => {
-            if can_simplify_params {
+            if can_simplify_params == SimplifyParams::Yes {
                 // In normalized types, projections don't unify with
                 // anything. when lazy normalization happens, this
                 // will change. It would still be nice to have a way
@@ -120,8 +140,11 @@ impl<D: Copy + Debug + Ord + Eq> SimplifiedTypeGen<D> {
             UintSimplifiedType(t) => UintSimplifiedType(t),
             FloatSimplifiedType(t) => FloatSimplifiedType(t),
             AdtSimplifiedType(d) => AdtSimplifiedType(map(d)),
+            ForeignSimplifiedType(d) => ForeignSimplifiedType(d),
             StrSimplifiedType => StrSimplifiedType,
             ArraySimplifiedType => ArraySimplifiedType,
+            SliceSimplifiedType => SliceSimplifiedType,
+            RefSimplifiedType => RefSimplifiedType,
             PtrSimplifiedType => PtrSimplifiedType,
             NeverSimplifiedType => NeverSimplifiedType,
             MarkerTraitObjectSimplifiedType => MarkerTraitObjectSimplifiedType,
@@ -133,7 +156,6 @@ impl<D: Copy + Debug + Ord + Eq> SimplifiedTypeGen<D> {
             OpaqueSimplifiedType(d) => OpaqueSimplifiedType(map(d)),
             FunctionSimplifiedType(n) => FunctionSimplifiedType(n),
             ParameterSimplifiedType => ParameterSimplifiedType,
-            ForeignSimplifiedType(d) => ForeignSimplifiedType(d),
         }
     }
 }
@@ -149,6 +171,8 @@ where
             | CharSimplifiedType
             | StrSimplifiedType
             | ArraySimplifiedType
+            | SliceSimplifiedType
+            | RefSimplifiedType
             | PtrSimplifiedType
             | NeverSimplifiedType
             | ParameterSimplifiedType
