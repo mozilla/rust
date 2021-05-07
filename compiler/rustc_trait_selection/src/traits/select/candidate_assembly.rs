@@ -295,11 +295,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
 
         self.assemble_candidates_from_projected_tys(obligation, &mut candidates);
         self.assemble_candidates_from_caller_bounds(stack, &mut candidates)?;
-        // Auto implementations have lower priority, so we only
-        // consider triggering a default if there is no other impl that can apply.
-        if candidates.vec.is_empty() {
-            self.assemble_candidates_from_auto_impls(obligation, &mut candidates);
-        }
+        self.assemble_candidates_from_auto_impls(obligation, &mut candidates);
         debug!("candidate list size: {}", candidates.vec.len());
         Ok(candidates)
     }
@@ -577,7 +573,23 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     }
                 }
 
-                _ => candidates.vec.push(AutoImplCandidate(def_id)),
+                ty::Placeholder(..)
+                | ty::Bound(..)
+                | ty::Infer(ty::FreshTy(_) | ty::FreshIntTy(_) | ty::FreshFloatTy(_)) => {
+                    bug!(
+                        "asked to assemble auto trait candidates of unexpected type: {:?}",
+                        self_ty
+                    );
+                }
+
+                // Only consider auto impls if there are no manual impls for the root of `self_ty`.
+                //
+                // It definitely is kind of sus :shrug:
+                _ => {
+                    if self.tcx().find_map_relevant_impl(def_id, self_ty, |_| Some(())).is_none() {
+                        candidates.vec.push(AutoImplCandidate(def_id))
+                    }
+                }
             }
         }
     }

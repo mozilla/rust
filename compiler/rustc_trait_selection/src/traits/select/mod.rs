@@ -1337,13 +1337,6 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         // This is a fix for #53123 and prevents winnowing from accidentally extending the
         // lifetime of a variable.
         match (&other.candidate, &victim.candidate) {
-            (_, AutoImplCandidate(..)) | (AutoImplCandidate(..), _) => {
-                bug!(
-                    "default implementations shouldn't be recorded \
-                    when there are other valid candidates"
-                );
-            }
-
             // (*)
             (
                 BuiltinCandidate { has_nested: false }
@@ -1385,6 +1378,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             (
                 ParamCandidate(ref cand),
                 ImplCandidate(..)
+                | AutoImplCandidate(_)
                 | ClosureCandidate
                 | GeneratorCandidate
                 | FnPointerCandidate
@@ -1402,6 +1396,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             }
             (
                 ImplCandidate(_)
+                | AutoImplCandidate(_)
                 | ClosureCandidate
                 | GeneratorCandidate
                 | FnPointerCandidate
@@ -1414,6 +1409,15 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 // Prefer these to a global where-clause bound
                 // (see issue #50825).
                 is_global(&cand.value) && other.evaluation.must_apply_modulo_regions()
+            }
+
+            (AutoImplCandidate(_), _) | (_, AutoImplCandidate(_)) => {
+                bug!(
+                    "default implementations shouldn't be recorded \
+                    when there are other non param candidates: {:?} {:?}",
+                    other,
+                    victim
+                );
             }
 
             (ProjectionCandidate(i), ProjectionCandidate(j))
