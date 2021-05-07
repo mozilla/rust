@@ -1315,6 +1315,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
     /// candidates and prefer where-clause candidates.
     ///
     /// See the comment for "SelectionCandidate" for more details.
+    #[instrument(level = "warn", skip(self, needs_infer))]
     fn candidate_should_be_dropped_in_favor_of(
         &mut self,
         victim: &EvaluatedCandidate<'tcx>,
@@ -1426,6 +1427,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             (
                 ObjectCandidate(_) | ProjectionCandidate(_),
                 ImplCandidate(..)
+                | AutoImplCandidate(_)
                 | ClosureCandidate
                 | GeneratorCandidate
                 | FnPointerCandidate
@@ -1437,6 +1439,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
 
             (
                 ImplCandidate(..)
+                | AutoImplCandidate(_)
                 | ClosureCandidate
                 | GeneratorCandidate
                 | FnPointerCandidate
