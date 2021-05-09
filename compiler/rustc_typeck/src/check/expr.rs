@@ -772,6 +772,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     }
                     break;
                 }
+                hir::Node::Item(_)
+                | hir::Node::ImplItem(_)
+                | hir::Node::TraitItem(_)
+                | hir::Node::Crate(_) => break,
                 _ => {
                     parent = self.tcx.hir().get_parent_node(parent);
                 }
@@ -877,7 +881,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 };
                 let mut parent = self.tcx.hir().get_parent_node(expr.hir_id);
                 while let Some(node) = self.tcx.hir().find(parent) {
-                    info!(?node);
                     match node {
                         hir::Node::Expr(hir::Expr {
                             kind: ExprKind::Match(_, _, hir::MatchSource::WhileDesugar),
@@ -887,6 +890,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             span_err();
                             break;
                         }
+                        hir::Node::Item(_)
+                        | hir::Node::ImplItem(_)
+                        | hir::Node::TraitItem(_)
+                        | hir::Node::Crate(_) => break,
                         _ => {
                             parent = self.tcx.hir().get_parent_node(parent);
                         }
