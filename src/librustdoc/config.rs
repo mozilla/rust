@@ -25,6 +25,7 @@ use crate::html::render::StylePath;
 use crate::html::static_files;
 use crate::opts;
 use crate::passes::{self, Condition, DefaultPassOption};
+use crate::scrape_examples::AllCallLocations;
 use crate::theme;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -156,6 +157,8 @@ crate struct Options {
     crate run_check: bool,
     /// Whether doctests should emit unused externs
     crate json_unused_externs: bool,
+
+    crate scrape_examples: Vec<String>,
 }
 
 impl fmt::Debug for Options {
@@ -273,6 +276,8 @@ crate struct RenderOptions {
     crate show_type_layout: bool,
     crate unstable_features: rustc_feature::UnstableFeatures,
     crate emit: Vec<EmitType>,
+    crate call_locations: Option<AllCallLocations>,
+    crate repository_url: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -627,6 +632,8 @@ impl Options {
         let run_check = matches.opt_present("check");
         let generate_redirect_map = matches.opt_present("generate-redirect-map");
         let show_type_layout = matches.opt_present("show-type-layout");
+        let repository_url = matches.opt_str("repository-url");
+        let scrape_examples = matches.opt_strs("scrape-examples");
 
         let (lint_opts, describe_lints, lint_cap, _) =
             get_cmd_lint_options(matches, error_format, &debugging_opts);
@@ -692,10 +699,13 @@ impl Options {
                     crate_name.as_deref(),
                 ),
                 emit,
+                call_locations: None,
+                repository_url,
             },
             crate_name,
             output_format,
             json_unused_externs,
+            scrape_examples,
         })
     }
 

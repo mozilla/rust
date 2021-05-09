@@ -124,6 +124,7 @@ crate struct SharedContext<'tcx> {
     /// to `Some(...)`, it'll store redirections and then generate a JSON file at the top level of
     /// the crate.
     redirections: Option<RefCell<FxHashMap<String, String>>>,
+    pub(super) repository_url: Option<String>,
 }
 
 impl SharedContext<'_> {
@@ -383,6 +384,7 @@ impl<'tcx> FormatRenderer<'tcx> for Context<'tcx> {
             unstable_features,
             generate_redirect_map,
             show_type_layout,
+            repository_url,
             ..
         } = options;
 
@@ -457,6 +459,7 @@ impl<'tcx> FormatRenderer<'tcx> for Context<'tcx> {
             errors: receiver,
             redirections: if generate_redirect_map { Some(Default::default()) } else { None },
             show_type_layout,
+            repository_url,
         };
 
         // Add the default themes to the `Vec` of stylepaths
