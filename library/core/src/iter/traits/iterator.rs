@@ -1638,7 +1638,7 @@ pub trait Iterator {
     /// ```
     #[unstable(feature = "iter_dedup", reason = "recently added", issue = "83748")]
     #[inline]
-    fn dedup(self) -> Dedup<Self, ByPartialEq, Self::Item>
+    fn dedup(self) -> Dedup<Self, ByPartialEq>
     where
         Self: Sized,
         Self::Item: PartialEq,
@@ -1685,7 +1685,7 @@ pub trait Iterator {
     /// ```
     #[unstable(feature = "iter_dedup", reason = "recently added", issue = "83748")]
     #[inline]
-    fn dedup_by<F>(self, same_bucket: F) -> Dedup<Self, F, Self::Item>
+    fn dedup_by<F>(self, same_bucket: F) -> Dedup<Self, F>
     where
         Self: Sized,
         F: FnMut(&Self::Item, &Self::Item) -> bool,
@@ -1729,7 +1729,7 @@ pub trait Iterator {
     /// ```
     #[unstable(feature = "iter_dedup", reason = "recently added", issue = "83748")]
     #[inline]
-    fn dedup_by_key<F, K>(self, key: F) -> Dedup<Self, ByKey<F>, Self::Item>
+    fn dedup_by_key<F, K>(self, key: F) -> Dedup<Self, ByKey<F>>
     where
         Self: Sized,
         F: FnMut(&Self::Item) -> K,
