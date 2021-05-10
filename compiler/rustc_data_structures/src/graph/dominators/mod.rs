@@ -2,12 +2,12 @@
 //!
 //! Algorithm based on Loukas Georgiadis,
 //! "Linear-Time Algorithms for Dominators and Related Problems",
-//! ftp://ftp.cs.princeton.edu/techreports/2005/737.pdf
+//! <ftp://ftp.cs.princeton.edu/techreports/2005/737.pdf>
 //!
 //! Additionally useful is the original Lengauer-Tarjan paper on this subject,
 //! "A Fast Algorithm for Finding Dominators in a Flowgraph"
 //! Thomas Lengauer and Robert Endre Tarjan.
-//! https://www.cs.princeton.edu/courses/archive/spr03/cs423/download/dominators.pdf
+//! <https://www.cs.princeton.edu/courses/archive/spr03/cs423/download/dominators.pdf>
 
 use super::ControlFlowGraph;
 use rustc_index::vec::{Idx, IndexVec};
@@ -199,9 +199,9 @@ pub fn dominators<G: ControlFlowGraph>(graph: G) -> Dominators<G::Node> {
 /// Evaluate the link-eval virtual forest, providing the currently minimum sdom
 /// value for the passed `node` (which may be itself).
 ///
-/// This maintains that for every vertex v, label[v] is such that:
+/// This maintains that for every vertex v, `label[v]` is such that:
 ///
-/// ```
+/// ```text
 /// semi[eval(v)] = min { semi[label[u]] | root_in_forest(v) +> u *> v }
 /// ```
 ///
