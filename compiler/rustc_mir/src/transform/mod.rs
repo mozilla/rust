@@ -35,6 +35,7 @@ pub mod function_item_references;
 pub mod generator;
 pub mod inline;
 pub mod instcombine;
+pub mod large_enums;
 pub mod lower_intrinsics;
 pub mod match_branches;
 pub mod multiple_return_terminators;
