@@ -274,6 +274,7 @@ pub trait Eq: PartialEq<Self> {
     //
     // This should never be implemented by hand.
     #[doc(hidden)]
+    #[cfg_attr(not(bootstrap), no_coverage)] // rust-lang/rust#84605
     #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
     fn assert_receiver_is_total_eq(&self) {}
@@ -282,7 +283,7 @@ pub trait Eq: PartialEq<Self> {
 /// Derive macro generating an impl of the trait `Eq`.
 #[rustc_builtin_macro]
 #[stable(feature = "builtin_macro_prelude", since = "1.38.0")]
-#[allow_internal_unstable(core_intrinsics, derive_eq, structural_match)]
+#[allow_internal_unstable(core_intrinsics, derive_eq, structural_match, no_coverage)]
 pub macro Eq($item:item) {
     /* compiler built-in */
 }
@@ -334,7 +335,6 @@ impl Ordering {
     /// # Examples
     ///
     /// ```
-    /// #![feature(ordering_helpers)]
     /// use std::cmp::Ordering;
     ///
     /// assert_eq!(Ordering::Less.is_eq(), false);
@@ -343,7 +343,8 @@ impl Ordering {
     /// ```
     #[inline]
     #[must_use]
-    #[unstable(feature = "ordering_helpers", issue = "79885")]
+    #[rustc_const_stable(feature = "ordering_helpers", since = "1.53.0")]
+    #[stable(feature = "ordering_helpers", since = "1.53.0")]
     pub const fn is_eq(self) -> bool {
         matches!(self, Equal)
     }
@@ -353,7 +354,6 @@ impl Ordering {
     /// # Examples
     ///
     /// ```
-    /// #![feature(ordering_helpers)]
     /// use std::cmp::Ordering;
     ///
     /// assert_eq!(Ordering::Less.is_ne(), true);
@@ -362,7 +362,8 @@ impl Ordering {
     /// ```
     #[inline]
     #[must_use]
-    #[unstable(feature = "ordering_helpers", issue = "79885")]
+    #[rustc_const_stable(feature = "ordering_helpers", since = "1.53.0")]
+    #[stable(feature = "ordering_helpers", since = "1.53.0")]
     pub const fn is_ne(self) -> bool {
         !matches!(self, Equal)
     }
@@ -372,7 +373,6 @@ impl Ordering {
     /// # Examples
     ///
     /// ```
-    /// #![feature(ordering_helpers)]
     /// use std::cmp::Ordering;
     ///
     /// assert_eq!(Ordering::Less.is_lt(), true);
@@ -381,7 +381,8 @@ impl Ordering {
     /// ```
     #[inline]
     #[must_use]
-    #[unstable(feature = "ordering_helpers", issue = "79885")]
+    #[rustc_const_stable(feature = "ordering_helpers", since = "1.53.0")]
+    #[stable(feature = "ordering_helpers", since = "1.53.0")]
     pub const fn is_lt(self) -> bool {
         matches!(self, Less)
     }
@@ -391,7 +392,6 @@ impl Ordering {
     /// # Examples
     ///
     /// ```
-    /// #![feature(ordering_helpers)]
     /// use std::cmp::Ordering;
     ///
     /// assert_eq!(Ordering::Less.is_gt(), false);
@@ -400,7 +400,8 @@ impl Ordering {
     /// ```
     #[inline]
     #[must_use]
-    #[unstable(feature = "ordering_helpers", issue = "79885")]
+    #[rustc_const_stable(feature = "ordering_helpers", since = "1.53.0")]
+    #[stable(feature = "ordering_helpers", since = "1.53.0")]
     pub const fn is_gt(self) -> bool {
         matches!(self, Greater)
     }
@@ -410,7 +411,6 @@ impl Ordering {
     /// # Examples
     ///
     /// ```
-    /// #![feature(ordering_helpers)]
     /// use std::cmp::Ordering;
     ///
     /// assert_eq!(Ordering::Less.is_le(), true);
@@ -419,7 +419,8 @@ impl Ordering {
     /// ```
     #[inline]
     #[must_use]
-    #[unstable(feature = "ordering_helpers", issue = "79885")]
+    #[rustc_const_stable(feature = "ordering_helpers", since = "1.53.0")]
+    #[stable(feature = "ordering_helpers", since = "1.53.0")]
     pub const fn is_le(self) -> bool {
         !matches!(self, Greater)
     }
@@ -429,7 +430,6 @@ impl Ordering {
     /// # Examples
     ///
     /// ```
-    /// #![feature(ordering_helpers)]
     /// use std::cmp::Ordering;
     ///
     /// assert_eq!(Ordering::Less.is_ge(), false);
@@ -438,7 +438,8 @@ impl Ordering {
     /// ```
     #[inline]
     #[must_use]
-    #[unstable(feature = "ordering_helpers", issue = "79885")]
+    #[rustc_const_stable(feature = "ordering_helpers", since = "1.53.0")]
+    #[stable(feature = "ordering_helpers", since = "1.53.0")]
     pub const fn is_ge(self) -> bool {
         !matches!(self, Less)
     }
@@ -982,6 +983,9 @@ pub trait PartialOrd<Rhs: ?Sized = Self>: PartialEq<Rhs> {
     #[stable(feature = "rust1", since = "1.0.0")]
     fn le(&self, other: &Rhs) -> bool {
         // Pattern `Some(Less | Eq)` optimizes worse than negating `None | Some(Greater)`.
+        // FIXME: The root cause was fixed upstream in LLVM with:
+        // https://github.com/llvm/llvm-project/commit/9bad7de9a3fb844f1ca2965f35d0c2a3d1e11775
+        // Revert this workaround once support for LLVM 12 gets dropped.
         !matches!(self.partial_cmp(other), None | Some(Greater))
     }
 

@@ -110,30 +110,36 @@ h3 {
 	font-size: 1.3em;
 }
 h1, h2, h3:not(.impl):not(.method):not(.type):not(.tymethod):not(.notable),
-h4:not(.method):not(.type):not(.tymethod):not(.associatedconstant) {
+h4:not(.method):not(.type):not(.tymethod):not(.associatedconstant):not(.associatedtype) {
 	font-weight: 500;
 	margin: 20px 0 15px 0;
 	padding-bottom: 6px;
 }
 h1.fqn {
+	display: flex;
 	border-bottom: 1px dashed;
 	margin-top: 0;
+
+	/* workaround to keep flex from breaking below 700 px width due to the float: right on the nav
+	   above the h1 */
+	padding-left: 1px;
 }
 h1.fqn > .in-band > a:hover {
 	text-decoration: underline;
 }
 h2, h3:not(.impl):not(.method):not(.type):not(.tymethod),
-h4:not(.method):not(.type):not(.tymethod):not(.associatedconstant) {
+h4:not(.method):not(.type):not(.tymethod):not(.associatedconstant):not(.associatedtype) {
 	border-bottom: 1px solid;
 }
-h3.impl, h3.method, h4.method, h3.type, h4.type, h4.associatedconstant {
+h3.impl, h3.method, h4.method, h3.type, h4.type, h4.associatedconstant, h4.associatedtype {
 	flex-basis: 100%;
 	font-weight: 600;
 	margin-top: 16px;
 	margin-bottom: 10px;
 	position: relative;
 }
-h3.impl, h3.method, h3.type {
+h3.impl, h3.method, h4.method.trait-impl, h3.type,
+h4.type.trait-impl, h4.associatedconstant.trait-impl, h4.associatedtype.trait-impl {
 	padding-left: 15px;
 }
 
@@ -141,6 +147,9 @@ h1, h2, h3, h4,
 .sidebar, a.source, .search-input, .content table td:first-child > a,
 .collapse-toggle, div.item-list .out-of-band,
 #source-sidebar, #sidebar-toggle,
+details.rustdoc-toggle > summary::before,
+details.undocumented > summary::before,
+.content ul.crate a.crate,
 /* This selector is for the items listed in the "all items" page. */
 #main > ul.docblock > li > a {
 	font-family: "Fira Sans", Arial, sans-serif;
@@ -148,7 +157,6 @@ h1, h2, h3, h4,
 
 .content ul.crate a.crate {
 	font-size: 16px/1.6;
-	font-family: "Fira Sans", Arial, sans-serif;
 }
 
 ol, ul {
@@ -198,7 +206,6 @@ li {
 	max-width: none;
 	overflow: visible;
 	margin-left: 0px;
-	min-width: 70em;
 }
 
 nav.sub {
@@ -349,7 +356,7 @@ nav.sub {
 	padding-left: 0;
 }
 
-.rustdoc:not(.source) .example-wrap {
+.rustdoc .example-wrap {
 	display: inline-flex;
 	margin-bottom: 10px;
 }
@@ -362,8 +369,6 @@ nav.sub {
 .example-wrap > pre.line-number {
 	overflow: initial;
 	border: 1px solid;
-	border-top-left-radius: 5px;
-	border-bottom-left-radius: 5px;
 	padding: 13px 8px;
 	text-align: right;
 }
@@ -373,7 +378,7 @@ nav.sub {
 	overflow-x: auto;
 }
 
-.rustdoc:not(.source) .example-wrap > pre {
+.rustdoc .example-wrap > pre {
 	margin: 0;
 }
 
@@ -382,28 +387,19 @@ nav.sub {
 	position: relative;
 }
 
-#results {
-	position: absolute;
-	right: 0;
-	left: 0;
-	overflow: auto;
-}
-
 #results > table {
 	width: 100%;
 	table-layout: fixed;
-	margin-bottom: 40px;
 }
 
-.content pre.line-numbers {
-	float: left;
-	border: none;
+.content > .example-wrap pre.line-numbers {
 	position: relative;
-
 	-webkit-user-select: none;
 	-moz-user-select: none;
 	-ms-user-select: none;
 	user-select: none;
+	border-top-left-radius: 5px;
+	border-bottom-left-radius: 5px;
 }
 .line-numbers span {
 	cursor: pointer;
@@ -450,10 +446,11 @@ nav.sub {
 }
 
 .content .out-of-band {
-	float: right;
+	flex-grow: 0;
+	text-align: right;
 	font-size: 23px;
 	margin: 0px;
-	padding: 0px;
+	padding: 0 0 0 12px;
 	font-weight: normal;
 }
 
@@ -476,6 +473,7 @@ h4 > code, h3 > code, .invisible > code {
 }
 
 .content .in-band {
+	flex-grow: 1;
 	margin: 0px;
 	padding: 0px;
 }
@@ -596,7 +594,10 @@ h4 > code, h3 > code, .invisible > code {
 	left: -19px;
 }
 
-.content .impl-items .method, .content .impl-items > .type, .impl-items > .associatedconstant {
+.content .impl-items .method, .content .impl-items > .type, .impl-items > .associatedconstant,
+.impl-items > .associatedtype, .content .impl-items details > summary > .type,
+.impl-items details > summary > .associatedconstant,
+.impl-items details > summary > .associatedtype {
 	margin-left: 20px;
 }
 
@@ -655,7 +656,9 @@ a {
 	display: initial;
 }
 
-.in-band:hover > .anchor, .impl:hover > .anchor {
+.in-band:hover > .anchor, .impl:hover > .anchor, .method.trait-impl:hover > .anchor,
+.type.trait-impl:hover > .anchor, .associatedconstant.trait-impl:hover > .anchor,
+.associatedtype.trait-impl:hover > .anchor {
 	display: inline-block;
 	position: absolute;
 }
@@ -866,7 +869,8 @@ body.blur > :not(#help) {
 		0 -1px 0 black;
 }
 
-.module-item .stab {
+.module-item .stab,
+.import-item .stab {
 	border-radius: 3px;
 	display: inline-block;
 	font-size: 80%;
@@ -877,7 +881,8 @@ body.blur > :not(#help) {
 	vertical-align: text-bottom;
 }
 
-.module-item.unstable {
+.module-item.unstable,
+.import-item.unstable {
 	opacity: 0.65;
 }
 
@@ -965,6 +970,10 @@ a.test-arrow:hover{
 	color: inherit;
 }
 
+.code-attribute {
+	font-weight: 300;
+}
+
 .collapse-toggle {
 	font-weight: 300;
 	position: absolute;
@@ -1029,10 +1038,11 @@ h3 > .collapse-toggle, h4 > .collapse-toggle {
 }
 
 .sub-variant, .sub-variant > h3 {
-	margin-top: 1px !important;
+	margin-top: 0px !important;
+	padding-top: 1px;
 }
 
-#main > .sub-variant > h3 {
+#main > details > .sub-variant > h3 {
 	font-size: 15px;
 	margin-left: 25px;
 	margin-bottom: 5px;
@@ -1054,12 +1064,6 @@ h3 > .collapse-toggle, h4 > .collapse-toggle {
 	margin-top: 3px;
 }
 
-.enum > .toggle-wrapper + .docblock, .struct > .toggle-wrapper + .docblock {
-	margin-left: 30px;
-	margin-bottom: 20px;
-	margin-top: 5px;
-}
-
 .docblock > .section-header:first-child {
 	margin-left: 15px;
 	margin-top: 0;
@@ -1069,30 +1073,10 @@ h3 > .collapse-toggle, h4 > .collapse-toggle {
 	left: -10px;
 }
 
-.enum > .collapsed, .struct > .collapsed {
-	margin-bottom: 25px;
-}
-
 #main > .variant, #main > .structfield {
 	display: block;
 }
 
-.attributes {
-	display: block;
-	margin-top: 0px !important;
-	margin-right: 0px;
-	margin-bottom: 0px !important;
-	margin-left: 30px;
-}
-.toggle-attributes.collapsed {
-	margin-bottom: 0;
-}
-.impl-items > .toggle-attributes {
-	margin-left: 20px;
-}
-.impl-items .attributes {
-	font-weight: 500;
-}
 
 :target > code {
 	opacity: 1;
@@ -1333,11 +1317,12 @@ h4 > .notable-traits {
 }
 
 #copy-path {
-	height: 30px;
-	font-size: 18px;
 	margin-left: 10px;
-	padding: 0 6px;
-	width: 28px;
+	padding: 0;
+	padding-left: 2px;
+}
+#copy-path> img {
+	margin-bottom: 2px;
 }
 
 #theme-choices {
@@ -1468,10 +1453,6 @@ h4 > .notable-traits {
 		padding: 0;
 	}
 
-	.content .in-band {
-		width: 100%;
-	}
-
 	.content h4 > .out-of-band {
 		position: inherit;
 	}
@@ -1488,16 +1469,13 @@ h4 > .notable-traits {
 		margin-left: 0;
 	}
 
-	.content .impl-items .method, .content .impl-items > .type, .impl-items > .associatedconstant {
+	.content .impl-items .method, .content .impl-items > .type, .impl-items > .associatedconstant,
+	.impl-items > .associatedtype {
 		display: flex;
 	}
 
 	.anchor {
 		display: none !important;
-	}
-
-	h1.fqn {
-		overflow: initial;
 	}
 
 	.theme-picker {
@@ -1582,6 +1560,10 @@ h4 > .notable-traits {
 	}
 
 	.impl > .collapse-toggle {
+		left: -10px;
+	}
+
+	.item-list > details.rustdoc-toggle > summary:not(.hideme)::before {
 		left: -10px;
 	}
 
@@ -1779,16 +1761,90 @@ div.name.expand::before {
 	top: 2px;
 }
 
-/* This part is to fix the "Expand attributes" part in the type declaration. */
-.type-decl > pre > .toggle-wrapper.toggle-attributes.top-attr {
-	margin-left: 0 !important;
+/* The hideme class is used on summary tags that contain a span with
+	placeholder text shown only when the toggle is closed. For instance,
+	"Expand description" or "Show methods". */
+details.rustdoc-toggle > summary.hideme {
+	cursor: pointer;
 }
-.type-decl > pre > .docblock.attributes.top-attr {
-	margin-left: 1.8em !important;
+
+details.rustdoc-toggle > summary::-webkit-details-marker,
+details.rustdoc-toggle > summary::marker,
+details.undocumented > summary::-webkit-details-marker,
+details.undocumented > summary::marker {
+	display: none;
 }
-.type-decl > pre > .toggle-attributes {
-	margin-left: 2.2em;
+
+details.rustdoc-toggle > summary.hideme > span {
+	margin-left: 9px;
 }
-.type-decl > pre > .docblock.attributes {
-	margin-left: 4em;
+
+details.rustdoc-toggle > summary::before {
+	content: "[+]";
+	font-weight: 300;
+	font-size: 0.8em;
+	letter-spacing: 1px;
+	cursor: pointer;
+}
+
+details.rustdoc-toggle.top-doc > summary,
+details.rustdoc-toggle.top-doc > summary::before,
+details.rustdoc-toggle.non-exhaustive > summary,
+details.rustdoc-toggle.non-exhaustive > summary::before {
+	font-family: 'Fira Sans';
+	font-size: 16px;
+}
+
+details.non-exhaustive {
+	margin-bottom: 8px;
+}
+
+details.rustdoc-toggle > summary.hideme::before {
+	position: relative;
+}
+
+details.rustdoc-toggle > summary:not(.hideme)::before {
+	position: absolute;
+	left: -23px;
+	top: initial;
+}
+
+.impl-items > details.rustdoc-toggle > summary:not(.hideme)::before,
+.undocumented > details.rustdoc-toggle > summary:not(.hideme)::before {
+	position: absolute;
+	top: 3px;
+	left: -2px;
+}
+
+/* When a "hideme" summary is open and the "Expand description" or "Show
+	methods" text is hidden, we want the [-] toggle that remains to not
+	affect the layout of the items to its right. To do that, we use
+	absolute positioning. Note that we also set position: relative
+	on the parent <details> to make this work properly. */
+details.rustdoc-toggle[open] > summary.hideme {
+	position: absolute;
+}
+
+details.rustdoc-toggle, details.undocumented {
+	position: relative;
+}
+
+details.rustdoc-toggle[open] > summary.hideme > span {
+	display: none;
+}
+
+details.rustdoc-toggle[open] > summary::before {
+	content: "[−]";
+	display: inline;
+}
+
+details.undocumented > summary::before {
+	content: "[+] Show hidden undocumented items";
+	cursor: pointer;
+	font-size: 16px;
+	font-weight: 300;
+}
+
+details.undocumented[open] > summary::before {
+	content: "[-] Hide undocumented items";
 }

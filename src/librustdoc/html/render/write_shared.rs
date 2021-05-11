@@ -16,7 +16,6 @@ use crate::clean::Crate;
 use crate::config::{EmitType, RenderOptions};
 use crate::docfs::PathError;
 use crate::error::Error;
-use crate::formats::FormatRenderer;
 use crate::html::{layout, static_files};
 
 crate static FILES_UNVERSIONED: Lazy<FxHashMap<&str, &[u8]>> = Lazy::new(|| {
@@ -208,6 +207,7 @@ pub(super) fn write_shared(
     }
     write_toolchain("brush.svg", static_files::BRUSH_SVG)?;
     write_toolchain("wheel.svg", static_files::WHEEL_SVG)?;
+    write_toolchain("clipboard.svg", static_files::CLIPBOARD_SVG)?;
     write_toolchain("down-arrow.svg", static_files::DOWN_ARROW_SVG)?;
 
     let mut themes: Vec<&String> = themes.iter().collect();
@@ -223,6 +223,7 @@ pub(super) fn write_shared(
             &format!(" = {}", serde_json::to_string(&themes).unwrap()),
         ),
     )?;
+    write_minify("search.js", static_files::SEARCH_JS)?;
     write_minify("settings.js", static_files::SETTINGS_JS)?;
     if cx.shared.include_sources {
         write_minify("source-script.js", static_files::sidebar::SOURCE_SCRIPT)?;
@@ -410,7 +411,7 @@ pub(super) fn write_shared(
     write_crate("search-index.js", &|| {
         let mut v = String::from("var searchIndex = JSON.parse('{\\\n");
         v.push_str(&all_indexes.join(",\\\n"));
-        v.push_str("\\\n}');\ninitSearch(searchIndex);");
+        v.push_str("\\\n}');\nif (window.initSearch) {window.initSearch(searchIndex)};");
         Ok(v.into_bytes())
     })?;
 
@@ -425,7 +426,7 @@ pub(super) fn write_shared(
             md_opts.output = cx.dst.clone();
             md_opts.external_html = (*cx.shared).layout.external_html.clone();
 
-            crate::markdown::render(&index_page, md_opts, cx.shared.edition)
+            crate::markdown::render(&index_page, md_opts, cx.shared.edition())
                 .map_err(|e| Error::new(e, &index_page))?;
         } else {
             let dst = cx.dst.join("index.html");
@@ -464,6 +465,8 @@ pub(super) fn write_shared(
     // Update the list of all implementors for traits
     let dst = cx.dst.join("implementors");
     for (&did, imps) in &cx.cache.implementors {
+        let did = did.expect_real();
+
         // Private modules can leak through to this phase of rustdoc, which
         // could contain implementations for otherwise private types. In some
         // rare cases we could find an implementation for an item which wasn't
@@ -496,11 +499,11 @@ pub(super) fn write_shared(
                 //
                 // If the implementation is from another crate then that crate
                 // should add it.
-                if imp.impl_item.def_id.krate == did.krate || !imp.impl_item.def_id.is_local() {
+                if imp.impl_item.def_id.krate() == did.krate || !imp.impl_item.def_id.is_local() {
                     None
                 } else {
                     Some(Implementor {
-                        text: imp.inner_impl().print(cx.cache(), false, cx.tcx()).to_string(),
+                        text: imp.inner_impl().print(false, cx).to_string(),
                         synthetic: imp.inner_impl().synthetic,
                         types: collect_paths_for_type(imp.inner_impl().for_.clone(), cx.cache()),
                     })

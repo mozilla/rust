@@ -53,7 +53,7 @@ span code {
 .docblock code, .docblock-short code {
 	background-color: #191f26;
 }
-pre {
+pre, .rustdoc.source .example-wrap {
 	color: #e6e1cf;
 	background-color: #191f26;
 }
@@ -224,7 +224,10 @@ a {
 	color: #39AFD7;
 }
 
-.collapse-toggle {
+.collapse-toggle,
+details.rustdoc-toggle > summary.hideme > span,
+details.rustdoc-toggle > summary::before,
+details.undocumented > summary::before {
 	color: #999;
 }
 
@@ -250,7 +253,8 @@ a {
 	color: #929292;
 }
 
-.module-item .stab {
+.module-item .stab,
+.import-item .stab {
 	color: #000;
 }
 
@@ -327,7 +331,8 @@ a.test-arrow:hover {
 	color: #c5c5c5;
 }
 
-.toggle-label {
+.toggle-label,
+.code-attribute {
 	color: #999;
 }
 
@@ -504,7 +509,7 @@ kbd {
 	color: #fff;
 }
 
-#theme-picker > img, #settings-menu > img {
+#theme-picker > img, #settings-menu > img, #copy-path > img {
 	filter: invert(100);
 }
 

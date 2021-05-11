@@ -1354,7 +1354,7 @@ extern "C" {
     pub fn LLVMBuildNeg(B: &Builder<'a>, V: &'a Value, Name: *const c_char) -> &'a Value;
     pub fn LLVMBuildFNeg(B: &Builder<'a>, V: &'a Value, Name: *const c_char) -> &'a Value;
     pub fn LLVMBuildNot(B: &Builder<'a>, V: &'a Value, Name: *const c_char) -> &'a Value;
-    pub fn LLVMRustSetHasUnsafeAlgebra(Instr: &Value);
+    pub fn LLVMRustSetFastMath(Instr: &Value);
 
     // Memory
     pub fn LLVMBuildAlloca(B: &Builder<'a>, Ty: &'a Type, Name: *const c_char) -> &'a Value;
@@ -2203,10 +2203,14 @@ extern "C" {
         SanitizerOptions: Option<&SanitizerOptions>,
         PGOGenPath: *const c_char,
         PGOUsePath: *const c_char,
+        InstrumentCoverage: bool,
+        InstrumentGCOV: bool,
         llvm_selfprofiler: *mut c_void,
         begin_callback: SelfProfileBeforePassCallback,
         end_callback: SelfProfileAfterPassCallback,
-    );
+        ExtraPasses: *const c_char,
+        ExtraPassesLen: size_t,
+    ) -> LLVMRustResult;
     pub fn LLVMRustPrintModule(
         M: &'a Module,
         Output: *const c_char,

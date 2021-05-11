@@ -177,7 +177,7 @@ impl Command {
     }
 
     pub fn arg(&mut self, arg: &OsStr) {
-        // Overwrite the trailing NULL pointer in `argv` and then add a new null
+        // Overwrite the trailing null pointer in `argv` and then add a new null
         // pointer.
         let arg = os2c(arg, &mut self.problem);
         self.arg_size += arg.to_bytes_with_nul().len() + mem::size_of::<*const u8>();

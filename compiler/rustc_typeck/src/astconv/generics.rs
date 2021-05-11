@@ -82,7 +82,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                         if param_type.is_suggestable() {
                             err.span_suggestion(
                                 tcx.def_span(src_def_id),
-                                "consider changing this type paramater to a `const`-generic",
+                                "consider changing this type parameter to be a `const` generic",
                                 format!("const {}: {}", param_name, param_type),
                                 Applicability::MaybeIncorrect,
                             );
@@ -107,6 +107,20 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                         format!("{{ {} }}", snippet),
                         Applicability::MaybeIncorrect,
                     );
+                }
+            }
+            (GenericArg::Const(cnst), GenericParamDefKind::Type { .. }) => {
+                let body = tcx.hir().body(cnst.value.body);
+                if let rustc_hir::ExprKind::Path(rustc_hir::QPath::Resolved(_, path)) =
+                    body.value.kind
+                {
+                    if let Res::Def(DefKind::Fn { .. }, id) = path.res {
+                        err.help(&format!(
+                            "`{}` is a function item, not a type",
+                            tcx.item_name(id)
+                        ));
+                        err.help("function item types cannot be named directly");
+                    }
                 }
             }
             _ => {}
@@ -264,9 +278,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                                 // another. This is an error. However, if we already know that
                                 // the arguments don't match up with the parameters, we won't issue
                                 // an additional error, as the user already knows what's wrong.
-                                if arg_count.correct.is_ok()
-                                    && arg_count.explicit_late_bound == ExplicitLateBound::No
-                                {
+                                if arg_count.correct.is_ok() {
                                     // We're going to iterate over the parameters to sort them out, and
                                     // show that order to the user as a possible order for the parameters
                                     let mut param_types_present = defs
@@ -286,7 +298,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                                                         ParamKindOrd::Const {
                                                             unordered: tcx
                                                                 .features()
-                                                                .const_generics,
+                                                                .unordered_const_ty_params(),
                                                         }
                                                     }
                                                 },
@@ -309,7 +321,9 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                                             GenericArg::Lifetime(_) => ParamKindOrd::Lifetime,
                                             GenericArg::Type(_) => ParamKindOrd::Type,
                                             GenericArg::Const(_) => ParamKindOrd::Const {
-                                                unordered: tcx.features().const_generics,
+                                                unordered: tcx
+                                                    .features()
+                                                    .unordered_const_ty_params(),
                                             },
                                         }),
                                         Some(&format!(
@@ -446,7 +460,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 }
 
                 if silent {
-                    return false;
+                    return true;
                 }
 
                 if provided > expected_max {

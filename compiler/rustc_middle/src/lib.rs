@@ -29,7 +29,6 @@
 #![feature(bool_to_option)]
 #![feature(box_patterns)]
 #![feature(box_syntax)]
-#![feature(const_fn)]
 #![feature(const_panic)]
 #![feature(core_intrinsics)]
 #![feature(discriminant_kind)]
@@ -51,6 +50,7 @@
 #![feature(control_flow_enum)]
 #![feature(associated_type_defaults)]
 #![feature(iter_zip)]
+#![feature(thread_local_const_init)]
 #![recursion_limit = "512"]
 
 #[macro_use]

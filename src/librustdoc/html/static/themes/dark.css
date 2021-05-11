@@ -26,7 +26,7 @@ h4:not(.method):not(.type):not(.tymethod) {
 .docblock code, .docblock-short code {
 	background-color: #2A2A2A;
 }
-pre {
+pre, .rustdoc.source .example-wrap {
 	background-color: #2A2A2A;
 }
 
@@ -186,7 +186,10 @@ a.test-arrow {
 	color: #dedede;
 }
 
-.collapse-toggle {
+.collapse-toggle,
+details.rustdoc-toggle > summary.hideme > span,
+details.rustdoc-toggle > summary::before,
+details.undocumented > summary::before {
 	color: #999;
 }
 
@@ -215,7 +218,8 @@ a.test-arrow {
 	box-shadow: 0 0 8px 4px #078dd8;
 }
 
-.module-item .stab {
+.module-item .stab,
+.import-item .stab {
 	color: #ddd;
 }
 
@@ -272,7 +276,8 @@ a.test-arrow:hover{
 	background-color: #4e8bca;
 }
 
-.toggle-label {
+.toggle-label,
+.code-attribute {
 	color: #999;
 }
 

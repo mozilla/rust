@@ -149,7 +149,7 @@ mod mut_ptr;
 /// again. [`write()`] can be used to overwrite data without causing it to be
 /// dropped.
 ///
-/// Note that even if `T` has size `0`, the pointer must be non-NULL and properly aligned.
+/// Note that even if `T` has size `0`, the pointer must be non-null and properly aligned.
 ///
 /// [valid]: self#safety
 ///
@@ -211,6 +211,7 @@ pub unsafe fn drop_in_place<T: ?Sized>(to_drop: *mut T) {
 #[stable(feature = "rust1", since = "1.0.0")]
 #[rustc_promotable]
 #[rustc_const_stable(feature = "const_ptr_null", since = "1.24.0")]
+#[rustc_diagnostic_item = "ptr_null"]
 pub const fn null<T>() -> *const T {
     0 as *const T
 }
@@ -229,6 +230,7 @@ pub const fn null<T>() -> *const T {
 #[stable(feature = "rust1", since = "1.0.0")]
 #[rustc_promotable]
 #[rustc_const_stable(feature = "const_ptr_null", since = "1.24.0")]
+#[rustc_diagnostic_item = "ptr_null_mut"]
 pub const fn null_mut<T>() -> *mut T {
     0 as *mut T
 }
@@ -313,7 +315,7 @@ pub const fn slice_from_raw_parts_mut<T>(data: *mut T, len: usize) -> *mut [T] {
 ///
 /// * Both `x` and `y` must be properly aligned.
 ///
-/// Note that even if `T` has size `0`, the pointers must be non-NULL and properly aligned.
+/// Note that even if `T` has size `0`, the pointers must be non-null and properly aligned.
 ///
 /// [valid]: self#safety
 ///
@@ -392,7 +394,7 @@ pub const unsafe fn swap<T>(x: *mut T, y: *mut T) {
 ///   beginning at `y` with the same size.
 ///
 /// Note that even if the effectively copied size (`count * size_of::<T>()`) is `0`,
-/// the pointers must be non-NULL and properly aligned.
+/// the pointers must be non-null and properly aligned.
 ///
 /// [valid]: self#safety
 ///
@@ -538,7 +540,7 @@ const unsafe fn swap_nonoverlapping_bytes(x: *mut u8, y: *mut u8, len: usize) {
 ///
 /// * `dst` must point to a properly initialized value of type `T`.
 ///
-/// Note that even if `T` has size `0`, the pointer must be non-NULL and properly aligned.
+/// Note that even if `T` has size `0`, the pointer must be non-null and properly aligned.
 ///
 /// [valid]: self#safety
 ///
@@ -586,7 +588,7 @@ pub const unsafe fn replace<T>(dst: *mut T, mut src: T) -> T {
 ///
 /// * `src` must point to a properly initialized value of type `T`.
 ///
-/// Note that even if `T` has size `0`, the pointer must be non-NULL and properly aligned.
+/// Note that even if `T` has size `0`, the pointer must be non-null and properly aligned.
 ///
 /// # Examples
 ///
@@ -711,15 +713,12 @@ pub const unsafe fn read<T>(src: *const T) -> T {
 /// whether `T` is [`Copy`]. If `T` is not [`Copy`], using both the returned
 /// value and the value at `*src` can [violate memory safety][read-ownership].
 ///
-/// Note that even if `T` has size `0`, the pointer must be non-NULL.
+/// Note that even if `T` has size `0`, the pointer must be non-null.
 ///
 /// [read-ownership]: read#ownership-of-the-returned-value
 /// [valid]: self#safety
 ///
 /// ## On `packed` structs
-///
-/// It is currently impossible to create raw pointers to unaligned fields
-/// of a packed struct.
 ///
 /// Attempting to create a raw pointer to an `unaligned` struct field with
 /// an expression such as `&packed.unaligned as *const FieldType` creates an
@@ -729,9 +728,13 @@ pub const unsafe fn read<T>(src: *const T) -> T {
 /// As a result, using `&packed.unaligned as *const FieldType` causes immediate
 /// *undefined behavior* in your program.
 ///
+/// Instead you must use the [`ptr::addr_of!`](addr_of) macro to
+/// create the pointer. You may use that returned pointer together with this
+/// function.
+///
 /// An example of what not to do and how this relates to `read_unaligned` is:
 ///
-/// ```no_run
+/// ```
 /// #[repr(packed, C)]
 /// struct Packed {
 ///     _padding: u8,
@@ -743,24 +746,15 @@ pub const unsafe fn read<T>(src: *const T) -> T {
 ///     unaligned: 0x01020304,
 /// };
 ///
-/// #[allow(unaligned_references)]
-/// let v = unsafe {
-///     // Here we attempt to take the address of a 32-bit integer which is not aligned.
-///     let unaligned =
-///         // A temporary unaligned reference is created here which results in
-///         // undefined behavior regardless of whether the reference is used or not.
-///         &packed.unaligned
-///         // Casting to a raw pointer doesn't help; the mistake already happened.
-///         as *const u32;
+/// // Take the address of a 32-bit integer which is not aligned.
+/// // In contrast to `&packed.unaligned as *const _`, this has no undefined behavior.
+/// let unaligned = std::ptr::addr_of!(packed.unaligned);
 ///
-///     let v = std::ptr::read_unaligned(unaligned);
-///
-///     v
-/// };
+/// let v = unsafe { std::ptr::read_unaligned(unaligned) };
+/// assert_eq!(v, 0x01020304);
 /// ```
 ///
 /// Accessing unaligned fields directly with e.g. `packed.unaligned` is safe however.
-// FIXME: Update docs based on outcome of RFC #2582 and friends.
 ///
 /// # Examples
 ///
@@ -816,7 +810,7 @@ pub const unsafe fn read_unaligned<T>(src: *const T) -> T {
 /// * `dst` must be properly aligned. Use [`write_unaligned`] if this is not the
 ///   case.
 ///
-/// Note that even if `T` has size `0`, the pointer must be non-NULL and properly aligned.
+/// Note that even if `T` has size `0`, the pointer must be non-null and properly aligned.
 ///
 /// [valid]: self#safety
 ///
@@ -908,14 +902,11 @@ pub const unsafe fn write<T>(dst: *mut T, src: T) {
 ///
 /// * `dst` must be [valid] for writes.
 ///
-/// Note that even if `T` has size `0`, the pointer must be non-NULL.
+/// Note that even if `T` has size `0`, the pointer must be non-null.
 ///
 /// [valid]: self#safety
 ///
 /// ## On `packed` structs
-///
-/// It is currently impossible to create raw pointers to unaligned fields
-/// of a packed struct.
 ///
 /// Attempting to create a raw pointer to an `unaligned` struct field with
 /// an expression such as `&packed.unaligned as *const FieldType` creates an
@@ -925,36 +916,32 @@ pub const unsafe fn write<T>(dst: *mut T, src: T) {
 /// As a result, using `&packed.unaligned as *const FieldType` causes immediate
 /// *undefined behavior* in your program.
 ///
-/// An example of what not to do and how this relates to `write_unaligned` is:
+/// Instead you must use the [`ptr::addr_of_mut!`](addr_of_mut)
+/// macro to create the pointer. You may use that returned pointer together with
+/// this function.
 ///
-/// ```no_run
+/// An example of how to do it and how this relates to `write_unaligned` is:
+///
+/// ```
 /// #[repr(packed, C)]
 /// struct Packed {
 ///     _padding: u8,
 ///     unaligned: u32,
 /// }
 ///
-/// let v = 0x01020304;
 /// let mut packed: Packed = unsafe { std::mem::zeroed() };
 ///
-/// #[allow(unaligned_references)]
-/// let v = unsafe {
-///     // Here we attempt to take the address of a 32-bit integer which is not aligned.
-///     let unaligned =
-///         // A temporary unaligned reference is created here which results in
-///         // undefined behavior regardless of whether the reference is used or not.
-///         &mut packed.unaligned
-///         // Casting to a raw pointer doesn't help; the mistake already happened.
-///         as *mut u32;
+/// // Take the address of a 32-bit integer which is not aligned.
+/// // In contrast to `&packed.unaligned as *mut _`, this has no undefined behavior.
+/// let unaligned = std::ptr::addr_of_mut!(packed.unaligned);
 ///
-///     std::ptr::write_unaligned(unaligned, v);
+/// unsafe { std::ptr::write_unaligned(unaligned, 42) };
 ///
-///     v
-/// };
+/// assert_eq!({packed.unaligned}, 42); // `{...}` forces copying the field instead of creating a reference.
 /// ```
 ///
-/// Accessing unaligned fields directly with e.g. `packed.unaligned` is safe however.
-// FIXME: Update docs based on outcome of RFC #2582 and friends.
+/// Accessing unaligned fields directly with e.g. `packed.unaligned` is safe however
+/// (as can be seen in the `assert_eq!` above).
 ///
 /// # Examples
 ///
@@ -1022,7 +1009,7 @@ pub const unsafe fn write_unaligned<T>(dst: *mut T, src: T) {
 /// However, storing non-[`Copy`] types in volatile memory is almost certainly
 /// incorrect.
 ///
-/// Note that even if `T` has size `0`, the pointer must be non-NULL and properly aligned.
+/// Note that even if `T` has size `0`, the pointer must be non-null and properly aligned.
 ///
 /// [valid]: self#safety
 /// [read-ownership]: read#ownership-of-the-returned-value
@@ -1092,7 +1079,7 @@ pub unsafe fn read_volatile<T>(src: *const T) -> T {
 ///
 /// * `dst` must be properly aligned.
 ///
-/// Note that even if `T` has size `0`, the pointer must be non-NULL and properly aligned.
+/// Note that even if `T` has size `0`, the pointer must be non-null and properly aligned.
 ///
 /// [valid]: self#safety
 ///
@@ -1494,7 +1481,7 @@ fnptr_impls_args! { A, B, C, D, E, F, G, H, I, J, K, L }
 ///
 /// Note, however, that the `expr` in `addr_of!(expr)` is still subject to all
 /// the usual rules. In particular, `addr_of!(*ptr::null())` is Undefined
-/// Behavior because it dereferences a NULL pointer.
+/// Behavior because it dereferences a null pointer.
 ///
 /// # Example
 ///
@@ -1534,7 +1521,7 @@ pub macro addr_of($place:expr) {
 ///
 /// Note, however, that the `expr` in `addr_of_mut!(expr)` is still subject to all
 /// the usual rules. In particular, `addr_of_mut!(*ptr::null_mut())` is Undefined
-/// Behavior because it dereferences a NULL pointer.
+/// Behavior because it dereferences a null pointer.
 ///
 /// # Examples
 ///

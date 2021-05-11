@@ -28,7 +28,7 @@ rustc_queries! {
 
     /// The indexed HIR. This can be conveniently accessed by `tcx.hir()`.
     /// Avoid calling this query directly.
-    query index_hir(_: CrateNum) -> &'tcx map::IndexedHir<'tcx> {
+    query index_hir(_: CrateNum) -> &'tcx crate::hir::IndexedHir<'tcx> {
         eval_always
         no_hash
         desc { "index HIR" }
@@ -50,6 +50,15 @@ rustc_queries! {
     query hir_owner(key: LocalDefId) -> Option<&'tcx crate::hir::Owner<'tcx>> {
         eval_always
         desc { |tcx| "HIR owner of `{}`", tcx.def_path_str(key.to_def_id()) }
+    }
+
+    /// Gives access to the HIR node's parent for the HIR owner `key`.
+    ///
+    /// This can be conveniently accessed by methods on `tcx.hir()`.
+    /// Avoid calling this query directly.
+    query hir_owner_parent(key: LocalDefId) -> hir::HirId {
+        eval_always
+        desc { |tcx| "HIR parent of `{}`", tcx.def_path_str(key.to_def_id()) }
     }
 
     /// Gives access to the HIR nodes and bodies inside the HIR owner `key`.
@@ -564,7 +573,7 @@ rustc_queries! {
     }
 
     /// Collects the associated items defined on a trait or impl.
-    query associated_items(key: DefId) -> ty::AssociatedItems<'tcx> {
+    query associated_items(key: DefId) -> ty::AssocItems<'tcx> {
         storage(ArenaCacheSelector<'tcx>)
         desc { |tcx| "collecting associated items of {}", tcx.def_path_str(key) }
     }
@@ -1055,6 +1064,8 @@ rustc_queries! {
         desc { "checking if the crate is_compiler_builtins" }
     }
     query has_global_allocator(_: CrateNum) -> bool {
+        // This query depends on untracked global state in CStore
+        eval_always
         fatal_cycle
         desc { "checking if the crate has_global_allocator" }
     }
@@ -1192,7 +1203,7 @@ rustc_queries! {
 
     /// Identifies the entry-point (e.g., the `main` function) for a given
     /// crate, returning `None` if there is no entry point (such as for library crates).
-    query entry_fn(_: CrateNum) -> Option<(LocalDefId, EntryFnType)> {
+    query entry_fn(_: CrateNum) -> Option<(DefId, EntryFnType)> {
         desc { "looking up the entry function of a crate" }
     }
     query plugin_registrar_fn(_: CrateNum) -> Option<DefId> {
@@ -1278,7 +1289,7 @@ rustc_queries! {
         desc { "testing if a region is late bound" }
     }
     /// For a given item (like a struct), gets the default lifetimes to be used
-    /// for each paramter if a trait object were to be passed for that parameter.
+    /// for each parameter if a trait object were to be passed for that parameter.
     /// For example, for `struct Foo<'a, T, U>`, this would be `['static, 'static]`.
     /// For `struct Foo<'a, T: 'a, U>`, this would instead be `['a, 'static]`.
     query object_lifetime_defaults_map(_: LocalDefId)

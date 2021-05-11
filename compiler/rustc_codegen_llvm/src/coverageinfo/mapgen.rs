@@ -248,7 +248,7 @@ fn save_function_record(
 ///
 /// We can find the unused functions (including generic functions) by the set difference of all MIR
 /// `DefId`s (`tcx` query `mir_keys`) minus the codegenned `DefId`s (`tcx` query
-/// `collect_and_partition_mono_items`).
+/// `codegened_and_inlined_items`).
 ///
 /// *HOWEVER* the codegenned `DefId`s are partitioned across multiple `CodegenUnit`s (CGUs), and
 /// this function is processing a `function_coverage_map` for the functions (`Instance`/`DefId`)
@@ -280,7 +280,8 @@ fn add_unused_functions<'ll, 'tcx>(cx: &CodegenCx<'ll, 'tcx>) {
 
     let mut unused_def_ids_by_file: FxHashMap<Symbol, Vec<DefId>> = FxHashMap::default();
     for &non_codegenned_def_id in all_def_ids.difference(codegenned_def_ids) {
-        // Make sure the non-codegenned (unused) function has a file_name
+        // Make sure the non-codegenned (unused) function has at least one MIR
+        // `Coverage` statement with a code region, and return its file name.
         if let Some(non_codegenned_file_name) = tcx.covered_file_name(non_codegenned_def_id) {
             let def_ids =
                 unused_def_ids_by_file.entry(*non_codegenned_file_name).or_insert_with(Vec::new);

@@ -24,6 +24,9 @@ crate static NORMALIZE_CSS: &str = include_str!("static/normalize.css");
 /// including search behavior and docblock folding, among others.
 crate static MAIN_JS: &str = include_str!("static/main.js");
 
+/// The file contents of `search.js`, which contains the search behavior.
+crate static SEARCH_JS: &str = include_str!("static/search.js");
+
 /// The file contents of `settings.js`, which contains the JavaScript used to handle the settings
 /// page.
 crate static SETTINGS_JS: &str = include_str!("static/settings.js");
@@ -37,6 +40,9 @@ crate static BRUSH_SVG: &[u8] = include_bytes!("static/brush.svg");
 
 /// The file contents of `wheel.svg`, the icon used for the settings button.
 crate static WHEEL_SVG: &[u8] = include_bytes!("static/wheel.svg");
+
+/// The file contents of `clipboard.svg`, the icon used for the "copy path" button.
+crate static CLIPBOARD_SVG: &[u8] = include_bytes!("static/clipboard.svg");
 
 /// The file contents of `down-arrow.svg`, the icon used for the crate choice combobox.
 crate static DOWN_ARROW_SVG: &[u8] = include_bytes!("static/down-arrow.svg");

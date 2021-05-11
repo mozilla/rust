@@ -183,6 +183,7 @@ impl Step for Cargotest {
             builder,
             cmd.arg(&cargo)
                 .arg(&out_dir)
+                .args(builder.config.cmd.test_args())
                 .env("RUSTC", builder.rustc(compiler))
                 .env("RUSTDOC", builder.rustdoc(compiler)),
         );
@@ -632,6 +633,26 @@ impl Step for Clippy {
 
         cargo.add_rustc_lib_path(builder, compiler);
 
+        if builder.try_run(&mut cargo.into()) {
+            // The tests succeeded; nothing to do.
+            return;
+        }
+
+        if !builder.config.cmd.bless() {
+            std::process::exit(1);
+        }
+
+        let mut cargo = builder.cargo(compiler, Mode::ToolRustc, SourceType::InTree, host, "run");
+        cargo.arg("-p").arg("clippy_dev");
+        // clippy_dev gets confused if it can't find `clippy/Cargo.toml`
+        cargo.current_dir(&builder.src.join("src").join("tools").join("clippy"));
+        if builder.config.rust_optimize {
+            cargo.env("PROFILE", "release");
+        } else {
+            cargo.env("PROFILE", "debug");
+        }
+        cargo.arg("--");
+        cargo.arg("bless");
         builder.run(&mut cargo.into());
     }
 }
@@ -810,23 +831,14 @@ impl Step for RustdocGUI {
             command.arg("src/test/rustdoc-gui/lib.rs").arg("-o").arg(&out_dir);
             builder.run(&mut command);
 
-            for file in fs::read_dir("src/test/rustdoc-gui").unwrap() {
-                let file = file.unwrap();
-                let file_path = file.path();
-                let file_name = file.file_name();
-
-                if !file_name.to_str().unwrap().ends_with(".goml") {
-                    continue;
-                }
-                let mut command = Command::new(&nodejs);
-                command
-                    .arg("src/tools/rustdoc-gui/tester.js")
-                    .arg("--doc-folder")
-                    .arg(out_dir.join("test_docs"))
-                    .arg("--test-file")
-                    .arg(file_path);
-                builder.run(&mut command);
-            }
+            let mut command = Command::new(&nodejs);
+            command
+                .arg("src/tools/rustdoc-gui/tester.js")
+                .arg("--doc-folder")
+                .arg(out_dir.join("test_docs"))
+                .arg("--tests-folder")
+                .arg("src/test/rustdoc-gui");
+            builder.run(&mut command);
         } else {
             builder.info("No nodejs found, skipping \"src/test/rustdoc-gui\" tests");
         }
@@ -1090,6 +1102,19 @@ struct Compiletest {
     compare_mode: Option<&'static str>,
 }
 
+impl Compiletest {
+    fn add_lld_flags(builder: &Builder<'_>, target: TargetSelection, flags: &mut Vec<String>) {
+        if builder.config.use_lld {
+            if builder.is_fuse_ld_lld(target) {
+                flags.push("-Clink-arg=-fuse-ld=lld".to_string());
+            }
+
+            let threads = if target.contains("windows") { "/threads:1" } else { "--threads=1" };
+            flags.push(format!("-Clink-arg=-Wl,{}", threads));
+        }
+    }
+}
+
 impl Step for Compiletest {
     type Output = ();
 
@@ -1207,6 +1232,11 @@ note: if you're sure you want to do this, please open an issue as to why. In the
             cmd.arg(pass);
         }
 
+        if let Some(ref run) = builder.config.cmd.run() {
+            cmd.arg("--run");
+            cmd.arg(run);
+        }
+
         if let Some(ref nodejs) = builder.config.nodejs {
             cmd.arg("--nodejs").arg(nodejs);
         }
@@ -1230,18 +1260,12 @@ note: if you're sure you want to do this, please open an issue as to why. In the
 
         let mut hostflags = flags.clone();
         hostflags.push(format!("-Lnative={}", builder.test_helpers_out(compiler.host).display()));
-        if builder.is_fuse_ld_lld(compiler.host) {
-            hostflags.push("-Clink-args=-fuse-ld=lld".to_string());
-            hostflags.push("-Clink-arg=-Wl,--threads=1".to_string());
-        }
+        Self::add_lld_flags(builder, compiler.host, &mut hostflags);
         cmd.arg("--host-rustcflags").arg(hostflags.join(" "));
 
         let mut targetflags = flags;
         targetflags.push(format!("-Lnative={}", builder.test_helpers_out(target).display()));
-        if builder.is_fuse_ld_lld(target) {
-            targetflags.push("-Clink-args=-fuse-ld=lld".to_string());
-            targetflags.push("-Clink-arg=-Wl,--threads=1".to_string());
-        }
+        Self::add_lld_flags(builder, target, &mut targetflags);
         cmd.arg("--target-rustcflags").arg(targetflags.join(" "));
 
         cmd.arg("--docck-python").arg(builder.python());
@@ -1689,6 +1713,9 @@ fn markdown_test(builder: &Builder<'_>, compiler: Compiler, markdown: &Path) -> 
     builder.info(&format!("doc tests for: {}", markdown.display()));
     let mut cmd = builder.rustdoc_cmd(compiler);
     builder.add_rust_test_threads(&mut cmd);
+    // allow for unstable options such as new editions
+    cmd.arg("-Z");
+    cmd.arg("unstable-options");
     cmd.arg("--test");
     cmd.arg(markdown);
     cmd.env("RUSTC_BOOTSTRAP", "1");

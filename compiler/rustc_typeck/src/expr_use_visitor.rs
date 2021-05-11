@@ -671,7 +671,7 @@ impl<'a, 'tcx> ExprUseVisitor<'a, 'tcx> {
     /// In the following example the closures `c` only captures `p.x`` even though `incr`
     /// is a capture of the nested closure
     ///
-    /// ```rust,ignore(cannot-test-this-because-pseduo-code)
+    /// ```rust,ignore(cannot-test-this-because-pseudo-code)
     /// let p = ..;
     /// let c = || {
     ///    let incr = 10;
@@ -715,7 +715,7 @@ impl<'a, 'tcx> ExprUseVisitor<'a, 'tcx> {
                             // The only places we want to fake read before creating the parent closure are the ones that
                             // are not local to it/ defined by it.
                             //
-                            // ```rust,ignore(cannot-test-this-because-pseduo-code)
+                            // ```rust,ignore(cannot-test-this-because-pseudo-code)
                             // let v1 = (0, 1);
                             // let c = || { // fake reads: v1
                             //    let v2 = (0, 1);
@@ -763,7 +763,9 @@ impl<'a, 'tcx> ExprUseVisitor<'a, 'tcx> {
                         PlaceBase::Local(*var_hir_id)
                     };
                     let place_with_id = PlaceWithHirId::new(
-                        capture_info.path_expr_id.unwrap_or(closure_expr.hir_id),
+                        capture_info.path_expr_id.unwrap_or(
+                            capture_info.capture_kind_expr_id.unwrap_or(closure_expr.hir_id),
+                        ),
                         place.base_ty,
                         place_base,
                         place.projections.clone(),

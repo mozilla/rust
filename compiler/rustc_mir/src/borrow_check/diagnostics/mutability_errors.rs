@@ -85,7 +85,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
                     if self.is_upvar_field_projection(access_place.as_ref()).is_some() {
                         reason = ", as it is not declared as mutable".to_string();
                     } else {
-                        let name = self.upvars[upvar_index.index()].name;
+                        let name = self.upvars[upvar_index.index()].place.to_string(self.infcx.tcx);
                         reason = format!(", as `{}` is not declared as mutable", name);
                     }
                 }
@@ -195,6 +195,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
                         "mutable borrow occurs due to use of {} in closure",
                         self.describe_any_place(access_place.as_ref()),
                     ),
+                    "mutable",
                 );
                 borrow_span
             }
@@ -642,15 +643,18 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
                                         .starts_with(&original_method_ident.name.to_string())
                             })
                             .map(|ident| format!("{}()", ident))
+                            .peekable()
                     });
 
-                if let Some(suggestions) = opt_suggestions {
-                    err.span_suggestions(
-                        path_segment.ident.span,
-                        &format!("use mutable method"),
-                        suggestions,
-                        Applicability::MaybeIncorrect,
-                    );
+                if let Some(mut suggestions) = opt_suggestions {
+                    if suggestions.peek().is_some() {
+                        err.span_suggestions(
+                            path_segment.ident.span,
+                            &format!("use mutable method"),
+                            suggestions,
+                            Applicability::MaybeIncorrect,
+                        );
+                    }
                 }
             }
         };
