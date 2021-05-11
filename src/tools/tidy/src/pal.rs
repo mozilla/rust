@@ -49,6 +49,9 @@ const EXCEPTION_PATHS: &[&str] = &[
     "library/std/src/net/test.rs",
     "library/std/src/net/addr",
     "library/std/src/net/udp",
+    // Doc issues; preferable to remove cfg.
+    "library/srd/src/sys/unix/ext/process.rs",
+    "library/srd/src/sys/windows/ext/process.rs",
     "library/std/src/sys_common/mod.rs",
     "library/std/src/sys_common/net.rs",
     "library/std/src/sys_common/backtrace.rs",

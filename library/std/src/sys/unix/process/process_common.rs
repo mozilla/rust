@@ -486,6 +486,7 @@ impl ChildStdio {
     }
 }
 
+#[unstable(feature = "command_sized", issue = "74549")]
 impl Arg for &OsStr {
     fn arg_size(&self, _: bool) -> Result<usize, Problem> {
         let mut nul_problem: Result<(), Problem> = Ok(());
@@ -498,7 +499,7 @@ impl Arg for &OsStr {
     }
 }
 
-// Avoids the &A: Arg error. But at what cost?
+#[unstable(feature = "command_sized", issue = "74549")]
 impl<'a, T> Arg for &'a T
 where
     T: Arg,

@@ -32,23 +32,26 @@ pub trait CommandSized: core::marker::Sized {
 }
 
 /// Types that can be appended to a Windows command-line. Used for custom escaping.
-// FIXME: The force-quoted one should conceptually be its own type.
-// FIXME: Explain why unix is here (to implement command_sized, apparently).
+///
+/// Do not implement this trait on Unix. Its existence is only due to the way CommandSized
+/// is defined.
+// FIXME: The force-quoted one should conceptually be its own type. Would be
+// iseful for xargs.
 #[unstable(feature = "command_sized", issue = "74549")]
 pub trait Arg {
     /// Calculate size of arg in a cmdline.
     fn arg_size(&self, force_quotes: bool) -> Result<usize, Problem>;
-    #[cfg(any(unix, doc))]
+    #[cfg(any(unix))]
     #[doc(cfg(unix))]
     /// Convert to more palatable form for Unix.
     fn to_plain(&self) -> &OsStr;
-    #[cfg(any(windows, doc))]
+    #[cfg(any(windows))]
     #[doc(cfg(windows))]
     /// Retain the argument by copying. Wait, why we are retaining it?
     /// FIXME: Isn't information already lost when we put it into the
     /// vector, erasing type info? Why do we still use the args vector?
     fn to_os_string(&self) -> OsString;
-    #[cfg(any(windows, doc))]
+    #[cfg(any(windows))]
     #[doc(cfg(windows))]
     /// Append argument to a cmdline.
     fn append_to(&self, cmd: &mut Vec<u16>, force_quotes: bool) -> Result<usize, Problem>;

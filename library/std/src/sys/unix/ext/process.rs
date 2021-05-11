@@ -346,6 +346,7 @@ fn args_ext(
 }
 
 #[unstable(feature = "command_sized", issue = "74549")]
+#[cfg(unix)] // doc hack
 impl process_ext::CommandSized for process::Command {
     impl_command_sized! { marg  maybe_arg_ext }
     impl_command_sized! { margs maybe_arg_ext }

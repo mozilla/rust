@@ -100,10 +100,6 @@ struct DropGuard<'a> {
     lock: &'a Mutex,
 }
 
-/// Argument type with no escaping.
-#[unstable(feature = "windows_raw_cmdline", issue = "74549")]
-pub struct RawArg<'a>(&'a OsStr);
-
 impl Command {
     pub fn new(program: &OsStr) -> Command {
         Command {
@@ -406,6 +402,7 @@ impl From<File> for Stdio {
     }
 }
 
+#[unstable(feature = "windows_raw_cmdline", issue = "74549")]
 impl Arg for &OsStr {
     fn append_to(&self, cmd: &mut Vec<u16>, force_quotes: bool) -> Result<usize, Problem> {
         append_arg(&mut Some(cmd), &self, force_quotes)
@@ -418,20 +415,7 @@ impl Arg for &OsStr {
     }
 }
 
-#[allow(dead_code)]
-impl Arg for RawArg<'_> {
-    fn append_to(&self, cmd: &mut Vec<u16>, _fq: bool) -> Result<usize, Problem> {
-        cmd.extend(self.0.encode_wide());
-        self.arg_size(_fq)
-    }
-    fn arg_size(&self, _: bool) -> Result<usize, Problem> {
-        Ok(self.0.encode_wide().count() + 1)
-    }
-    fn to_os_string(&self) -> OsString {
-        OsStr::to_os_string(&(self.0))
-    }
-}
-
+#[unstable(feature = "windows_raw_cmdline", issue = "74549")]
 impl<'a, T> Arg for &'a T
 where
     T: Arg,
