@@ -48,8 +48,9 @@ pub trait Arg {
     #[cfg(any(windows))]
     #[doc(cfg(windows))]
     /// Retain the argument by copying. Wait, why we are retaining it?
-    /// FIXME: Isn't information already lost when we put it into the
-    /// vector, erasing type info? Why do we still use the args vector?
+    // FIXME: Isn't information already lost when we put it into the
+    // vector, erasing type info? Why do we still use the args vector?
+    // Okay, apparently we are putting it in a CommandArgs<>. Hmm.
     fn to_os_string(&self) -> OsString;
     #[cfg(any(windows))]
     #[doc(cfg(windows))]
