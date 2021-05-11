@@ -86,10 +86,7 @@ impl From<Problem> for io::Error {
     }
 }
 
-/// Implementation for the above trait. You get two pieces to fill in:
-/// one is the function (_ext or vanilla), one is the "translator" in
-/// case we need to say the Arg is really an &OsStr. If we don't, we
-/// have std::convert::identity.
+/// Implementation for the above trait.
 macro_rules! impl_command_sized {
     (prelude) => {
         use crate::sys::process::{Arg, Problem};

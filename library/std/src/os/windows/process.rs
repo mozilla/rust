@@ -8,7 +8,7 @@ use crate::os::windows::io::{AsRawHandle, FromRawHandle, IntoRawHandle, RawHandl
 use crate::process;
 use crate::sealed::Sealed;
 use crate::sys;
-use crate::sys::windows::ext::ffi::OsStrExt;
+use crate::os::windows::ffi::OsStrExt;
 #[unstable(feature = "windows_raw_cmdline", issue = "74549")]
 pub use crate::sys_common::process_ext::{Arg, Problem};
 use crate::sys_common::{process_ext, AsInner, AsInnerMut, FromInner, IntoInner};
