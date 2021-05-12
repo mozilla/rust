@@ -105,7 +105,7 @@ fn compute_components(
                 // we must enforce that requiring `closure: 'a` also requires that.
                 // the return type of the closure outlive `a`.
                 // We do not require that any of the closure's *argument* types outlive 'a
-                // - this is sound, because there is no rule that would allow us to conclide
+                // - this is sound, because there is no rule that would allow us to conclude
                 // anything about the argument types from the fact that `closure: 'a` holds
                 // (the arguments of a closure do not appear in the output type of a trait impl
                 // for any trait implemented for a closure).
