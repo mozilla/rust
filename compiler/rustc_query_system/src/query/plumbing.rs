@@ -17,7 +17,7 @@ use rustc_data_structures::profiling::TimingGuard;
 use rustc_data_structures::sharded::{get_shard_index_by_hash, Sharded};
 use rustc_data_structures::sync::{Lock, LockGuard};
 use rustc_data_structures::thin_vec::ThinVec;
-use rustc_errors::{Diagnostic, DiagnosticBuilder, FatalError};
+use rustc_errors::{DiagnosticBuilder, FatalError};
 use rustc_span::{Span, DUMMY_SP};
 use std::collections::hash_map::Entry;
 use std::fmt::Debug;
@@ -442,7 +442,7 @@ where
 fn execute_job<CTX, K, V>(
     tcx: CTX,
     key: K,
-    dep_node: Option<DepNode<CTX::DepKind>>,
+    mut dep_node_opt: Option<DepNode<CTX::DepKind>>,
     query: &QueryVtable<CTX, K, V>,
     job_id: QueryJobId<CTX::DepKind>,
     compute: fn(CTX::DepContext, K) -> V,
@@ -463,51 +463,55 @@ where
         return (result, dep_node_index);
     }
 
-    let (result, dep_node_index) = if query.anon {
-        force_query_with_job(
-            tcx,
-            job_id,
-            || {
-                tcx.dep_context().dep_graph().with_anon_task(
-                    *tcx.dep_context(),
-                    query.dep_kind,
-                    || compute(*tcx.dep_context(), key),
-                )
-            },
-            CTX::store_diagnostics_for_anon_node,
-        )
-    } else {
+    if !query.eval_always && !query.anon {
         // `to_dep_node` is expensive for some `DepKind`s.
-        let dep_node = dep_node.unwrap_or_else(|| query.to_dep_node(*tcx.dep_context(), &key));
-        let loaded = if query.eval_always {
-            None
-        } else {
-            // The diagnostics for this query will be
-            // promoted to the current session during
-            // `try_mark_green()`, so we can ignore them here.
-            tcx.start_query(job_id, None, || {
-                try_load_from_disk_and_cache_in_memory(tcx, &key, &dep_node, query, compute)
+        let dep_node =
+            *dep_node_opt.get_or_insert_with(&|| query.to_dep_node(*tcx.dep_context(), &key));
+
+        // The diagnostics for this query will be promoted to the current session during
+        // `try_mark_green()`, so we can ignore them here.
+        if let Some(ret) = tcx.start_query(job_id, None, || {
+            try_load_from_disk_and_cache_in_memory(tcx, &key, &dep_node, query, compute)
+        }) {
+            return ret;
+        }
+    }
+
+    let prof_timer = tcx.dep_context().profiler().query_provider();
+    let diagnostics = Lock::new(ThinVec::new());
+
+    let (result, dep_node_index) = tcx.start_query(job_id, Some(&diagnostics), || {
+        if query.anon {
+            tcx.dep_context().dep_graph().with_anon_task(*tcx.dep_context(), query.dep_kind, || {
+                compute(*tcx.dep_context(), key)
             })
-        };
-        if let Some((result, dep_node_index)) = loaded {
-            (result, dep_node_index)
         } else {
-            force_query_with_job(
-                tcx,
-                job_id,
-                || {
-                    tcx.dep_context().dep_graph().with_task(
-                        dep_node,
-                        *tcx.dep_context(),
-                        key,
-                        compute,
-                        query.hash_result,
-                    )
-                },
-                CTX::store_diagnostics,
+            // `to_dep_node` is expensive for some `DepKind`s.
+            let dep_node =
+                *dep_node_opt.get_or_insert_with(&|| query.to_dep_node(*tcx.dep_context(), &key));
+
+            tcx.dep_context().dep_graph().with_task(
+                dep_node,
+                *tcx.dep_context(),
+                key,
+                compute,
+                query.hash_result,
             )
         }
-    };
+    });
+
+    let diagnostics = diagnostics.into_inner();
+
+    prof_timer.finish_with_query_invocation_id(dep_node_index.into());
+
+    if unlikely!(!diagnostics.is_empty()) {
+        if query.anon {
+            tcx.store_diagnostics_for_anon_node(dep_node_index, diagnostics)
+        } else {
+            tcx.store_diagnostics(dep_node_index, diagnostics)
+        }
+    }
+
     (result, dep_node_index)
 }
 
@@ -616,30 +620,6 @@ fn incremental_verify_ich<CTX, K, V: Debug>(
             .emit();
         panic!("Found unstable fingerprints for {:?}: {:?}", dep_node, result);
     }
-}
-
-fn force_query_with_job<CTX, V>(
-    tcx: CTX,
-    job_id: QueryJobId<CTX::DepKind>,
-    invoke: impl FnOnce() -> (V, DepNodeIndex),
-    store_diagnostics: fn(&CTX, DepNodeIndex, ThinVec<Diagnostic>),
-) -> (V, DepNodeIndex)
-where
-    CTX: QueryContext,
-{
-    let prof_timer = tcx.dep_context().profiler().query_provider();
-
-    let diagnostics = Lock::new(ThinVec::new());
-    let (result, dep_node_index) = tcx.start_query(job_id, Some(&diagnostics), invoke);
-    let diagnostics = diagnostics.into_inner();
-
-    prof_timer.finish_with_query_invocation_id(dep_node_index.into());
-
-    if unlikely!(!diagnostics.is_empty()) {
-        store_diagnostics(&tcx, dep_node_index, diagnostics);
-    }
-
-    (result, dep_node_index)
 }
 
 /// Ensure that either this query has all green inputs or been executed.
