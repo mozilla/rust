@@ -482,7 +482,7 @@ where
 
     let (result, dep_node_index) = tcx.start_query(job_id, Some(&diagnostics), || {
         if query.anon {
-            tcx.dep_context().dep_graph().with_anon_task(*tcx.dep_context(), query.dep_kind, || {
+            dep_graph.with_anon_task(*tcx.dep_context(), query.dep_kind, || {
                 compute(*tcx.dep_context(), key)
             })
         } else {
@@ -490,13 +490,7 @@ where
             let dep_node =
                 *dep_node_opt.get_or_insert_with(&|| query.to_dep_node(*tcx.dep_context(), &key));
 
-            tcx.dep_context().dep_graph().with_task(
-                dep_node,
-                *tcx.dep_context(),
-                key,
-                compute,
-                query.hash_result,
-            )
+            dep_graph.with_task(dep_node, *tcx.dep_context(), key, compute, query.hash_result)
         }
     });
 
