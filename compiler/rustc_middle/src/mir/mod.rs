@@ -2423,8 +2423,12 @@ impl<'tcx> Debug for Rvalue<'tcx> {
 /// Two constants are equal if they are the same constant. Note that
 /// this does not necessarily mean that they are `==` in Rust. In
 /// particular, one must be wary of `NaN`!
+///
+/// Constants can't implement PartialEq due to span being a footgun for MIR optimizations. Two
+/// constants that are equal but have different spans would compare unequal and implementing
+/// PartialEq ignoring span would make diagnostics be reported on the other diagnostic side.
 
-#[derive(Clone, Copy, PartialEq, PartialOrd, TyEncodable, TyDecodable, Hash, HashStable)]
+#[derive(Clone, Copy, PartialOrd, TyEncodable, TyDecodable, Hash, HashStable)]
 pub struct Constant<'tcx> {
     pub span: Span,
 
@@ -2463,6 +2467,13 @@ impl Constant<'tcx> {
     }
     pub fn ty(&self) -> Ty<'tcx> {
         self.literal.ty()
+    }
+}
+
+impl PartialEq for Constant<'tcx> {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.user_ty == other.user_ty && self.literal == other.literal
     }
 }
 
