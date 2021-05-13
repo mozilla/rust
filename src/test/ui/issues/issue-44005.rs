@@ -12,8 +12,9 @@ impl<'a, 'b, T: 'a> Foo<'a> for &'b T {
 }
 
 pub fn uncallable<T, F>(x: T, f: F)
-    where T: for<'a> Foo<'a>,
-          F: for<'a> Fn(<T as Foo<'a>>::Bar)
+where
+    T: for<'a> Foo<'a>,
+    F: for<'a> Fn(<T as Foo<'a>>::Bar),
 {
     f(x.foo());
 }
@@ -26,4 +27,4 @@ pub fn broken<F: Fn(&i32)>(x: &i32, f: F) {
     uncallable(x, |y| f(y));
 }
 
-fn main() { }
+fn main() {}

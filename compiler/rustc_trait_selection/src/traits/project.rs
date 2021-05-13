@@ -1,5 +1,7 @@
 //! Code for projecting associated types out of trait references.
 
+use std::collections::BTreeMap;
+
 use super::specialization_graph;
 use super::translate_substs;
 use super::util;
@@ -336,8 +338,8 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
         let folded_with_placeholders = with_placeholders.super_fold_with(self);
         debug!(?folded_with_placeholders);
 
-        let mut replacer = ty::fold::PlaceholderReplacer {
-            tcx: self.tcx(),
+        let mut replacer = PlaceholderReplacer {
+            infcx,
             mapped_regions,
             mapped_types,
             mapped_consts,
@@ -493,6 +495,82 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
         } else {
             let constant = constant.super_fold_with(self);
             constant.eval(self.selcx.tcx(), self.param_env)
+        }
+    }
+}
+
+pub struct PlaceholderReplacer<'me, 'tcx> {
+    pub infcx: &'me InferCtxt<'me, 'tcx>,
+    pub mapped_regions: BTreeMap<ty::PlaceholderRegion, ty::BoundRegion>,
+    pub mapped_types: BTreeMap<ty::PlaceholderType, ty::BoundTy>,
+    pub mapped_consts: BTreeMap<ty::PlaceholderConst<'tcx>, ty::BoundVar>,
+    pub current_index: ty::DebruijnIndex,
+}
+
+impl TypeFolder<'tcx> for PlaceholderReplacer<'_, 'tcx> {
+    fn tcx<'b>(&'b self) -> TyCtxt<'tcx> {
+        self.infcx.tcx
+    }
+
+    fn fold_binder<T: TypeFoldable<'tcx>>(
+        &mut self,
+        t: ty::Binder<'tcx, T>,
+    ) -> ty::Binder<'tcx, T> {
+        self.current_index.shift_in(1);
+        let t = t.super_fold_with(self);
+        self.current_index.shift_out(1);
+        t
+    }
+
+    fn fold_region(&mut self, r0: ty::Region<'tcx>) -> ty::Region<'tcx> {
+        let r1 = r0.fold_with(&mut OpportunisticRegionResolver::new(self.infcx));
+
+        let r2 = match *r1 {
+            ty::RePlaceholder(p) => {
+                let replace_var = self.mapped_regions.get(&p);
+                match replace_var {
+                    Some(replace_var) => {
+                        self.tcx().mk_region(ty::ReLateBound(self.current_index, *replace_var))
+                    }
+                    None => r1,
+                }
+            }
+            _ => r1,
+        };
+
+        debug!(?r0, ?r1, ?r2, "fold_region");
+
+        r2
+    }
+
+    fn fold_ty(&mut self, ty: Ty<'tcx>) -> Ty<'tcx> {
+        match *ty.kind() {
+            ty::Placeholder(p) => {
+                let replace_var = self.mapped_types.get(&p);
+                match replace_var {
+                    Some(replace_var) => {
+                        self.tcx().mk_ty(ty::Bound(self.current_index, *replace_var))
+                    }
+                    None => ty,
+                }
+            }
+
+            _ => ty.super_fold_with(self),
+        }
+    }
+
+    fn fold_const(&mut self, ct: &'tcx ty::Const<'tcx>) -> &'tcx ty::Const<'tcx> {
+        if let ty::Const { val: ty::ConstKind::Placeholder(p), ty } = *ct {
+            let replace_var = self.mapped_consts.get(&p);
+            match replace_var {
+                Some(replace_var) => self.tcx().mk_const(ty::Const {
+                    val: ty::ConstKind::Bound(self.current_index, *replace_var),
+                    ty,
+                }),
+                None => ct,
+            }
+        } else {
+            ct.super_fold_with(self)
         }
     }
 }

@@ -99,6 +99,32 @@ impl<'cx, 'tcx> TypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
     }
 
     #[instrument(level = "debug", skip(self))]
+    fn fold_binder<T>(&mut self, t: ty::Binder<'tcx, T>) -> ty::Binder<'tcx, T>
+    where
+        T: TypeFoldable<'tcx>,
+    {
+        let infcx = self.infcx;
+        let bound_vars = t.bound_vars();
+        let (with_placeholders, mapped_regions, mapped_types, mapped_consts) =
+            infcx.replace_bound_vars_with_placeholders_mapped(t);
+        debug!(?with_placeholders);
+        let folded_with_placeholders = with_placeholders.super_fold_with(self);
+        debug!(?folded_with_placeholders);
+
+        let mut replacer = crate::traits::project::PlaceholderReplacer {
+            infcx,
+            mapped_regions,
+            mapped_types,
+            mapped_consts,
+            current_index: ty::INNERMOST,
+        };
+        let replaced = folded_with_placeholders.super_fold_with(&mut replacer);
+        let bound = ty::Binder::bind_with_vars(replaced, bound_vars);
+        debug!(?bound);
+        bound
+    }
+
+    #[instrument(level = "debug", skip(self))]
     fn fold_ty(&mut self, ty: Ty<'tcx>) -> Ty<'tcx> {
         if !ty.has_projections() {
             return ty;
