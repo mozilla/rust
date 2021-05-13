@@ -109,9 +109,7 @@ enum Scope<'a> {
     DeriveHelpersCompat,
     MacroRules(MacroRulesScopeRef<'a>),
     CrateRoot,
-    // The node ID is for reporting the `PROC_MACRO_DERIVE_RESOLUTION_FALLBACK`
-    // lint if it should be reported.
-    Module(Module<'a>, Option<NodeId>),
+    Module(Module<'a>),
     RegisteredAttrs,
     MacroUsePrelude,
     BuiltinAttrs,
@@ -1490,7 +1488,7 @@ impl<'a> Resolver<'a> {
 
         self.visit_scopes(ScopeSet::All(TypeNS, false), parent_scope, ctxt, |this, scope, _, _| {
             match scope {
-                Scope::Module(module, _) => {
+                Scope::Module(module) => {
                     this.traits_in_module(module, assoc_item, &mut found_traits);
                 }
                 Scope::StdLibPrelude => {
@@ -1720,7 +1718,7 @@ impl<'a> Resolver<'a> {
         };
         let mut scope = match ns {
             _ if is_absolute_path => Scope::CrateRoot,
-            TypeNS | ValueNS => Scope::Module(module, None),
+            TypeNS | ValueNS => Scope::Module(module),
             MacroNS => Scope::DeriveHelpers(parent_scope.expansion),
         };
         let mut ctxt = ctxt.normalize_to_macros_2_0();
@@ -1787,7 +1785,7 @@ impl<'a> Resolver<'a> {
                     MacroRulesScope::Invocation(invoc_id) => {
                         Scope::MacroRules(self.invocation_parent_scopes[&invoc_id].macro_rules)
                     }
-                    MacroRulesScope::Empty => Scope::Module(module, None),
+                    MacroRulesScope::Empty => Scope::Module(module),
                 },
                 Scope::CrateRoot => match ns {
                     TypeNS => {
@@ -1796,16 +1794,10 @@ impl<'a> Resolver<'a> {
                     }
                     ValueNS | MacroNS => break,
                 },
-                Scope::Module(module, prev_lint_id) => {
+                Scope::Module(module) => {
                     use_prelude = !module.no_implicit_prelude;
-                    let derive_fallback_lint_id = match scope_set {
-                        ScopeSet::Late(.., lint_id) => lint_id,
-                        _ => None,
-                    };
-                    match self.hygienic_lexical_parent(module, &mut ctxt, derive_fallback_lint_id) {
-                        Some((parent_module, lint_id)) => {
-                            Scope::Module(parent_module, lint_id.or(prev_lint_id))
-                        }
+                    match self.hygienic_lexical_parent(module, &mut ctxt) {
+                        Some(parent_module) => Scope::Module(parent_module),
                         None => {
                             ctxt.adjust(ExpnId::root());
                             match ns {
@@ -1945,45 +1937,13 @@ impl<'a> Resolver<'a> {
         &mut self,
         module: Module<'a>,
         ctxt: &mut SyntaxContext,
-        derive_fallback_lint_id: Option<NodeId>,
-    ) -> Option<(Module<'a>, Option<NodeId>)> {
+    ) -> Option<Module<'a>> {
         if !module.expansion.outer_expn_is_descendant_of(*ctxt) {
-            return Some((self.macro_def_scope(ctxt.remove_mark()), None));
+            return Some(self.macro_def_scope(ctxt.remove_mark()));
         }
 
         if let ModuleKind::Block(..) = module.kind {
-            return Some((module.parent.unwrap().nearest_item_scope(), None));
-        }
-
-        // We need to support the next case under a deprecation warning
-        // ```
-        // struct MyStruct;
-        // ---- begin: this comes from a proc macro derive
-        // mod implementation_details {
-        //     // Note that `MyStruct` is not in scope here.
-        //     impl SomeTrait for MyStruct { ... }
-        // }
-        // ---- end
-        // ```
-        // So we have to fall back to the module's parent during lexical resolution in this case.
-        if derive_fallback_lint_id.is_some() {
-            if let Some(parent) = module.parent {
-                // Inner module is inside the macro, parent module is outside of the macro.
-                if module.expansion != parent.expansion
-                    && module.expansion.is_descendant_of(parent.expansion)
-                {
-                    // The macro is a proc macro derive
-                    if let Some(def_id) = module.expansion.expn_data().macro_def_id {
-                        let ext = self.get_macro_by_def_id(def_id);
-                        if ext.builtin_name.is_none()
-                            && ext.macro_kind() == MacroKind::Derive
-                            && parent.expansion.outer_expn_is_descendant_of(*ctxt)
-                        {
-                            return Some((parent, derive_fallback_lint_id));
-                        }
-                    }
-                }
-            }
+            return Some(module.parent.unwrap().nearest_item_scope());
         }
 
         None

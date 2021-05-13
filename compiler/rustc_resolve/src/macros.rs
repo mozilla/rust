@@ -24,7 +24,7 @@ use rustc_hir::def_id::{self, CrateNum};
 use rustc_hir::PrimTy;
 use rustc_middle::middle::stability;
 use rustc_middle::ty;
-use rustc_session::lint::builtin::{LEGACY_DERIVE_HELPERS, PROC_MACRO_DERIVE_RESOLUTION_FALLBACK};
+use rustc_session::lint::builtin::LEGACY_DERIVE_HELPERS;
 use rustc_session::lint::builtin::{SOFT_UNSTABLE, UNUSED_MACROS};
 use rustc_session::lint::BuiltinLintDiagnostics;
 use rustc_session::parse::feature_err;
@@ -801,7 +801,7 @@ impl<'a> Resolver<'a> {
                             Err((Determinacy::Determined, _)) => Err(Determinacy::Determined),
                         }
                     }
-                    Scope::Module(module, derive_fallback_lint_id) => {
+                    Scope::Module(module) => {
                         let adjusted_parent_scope = &ParentScope { module, ..*parent_scope };
                         let binding = this.resolve_ident_in_module_unadjusted_ext(
                             ModuleOrUniformRoot::Module(module),
@@ -814,21 +814,6 @@ impl<'a> Resolver<'a> {
                         );
                         match binding {
                             Ok(binding) => {
-                                if let Some(lint_id) = derive_fallback_lint_id {
-                                    this.lint_buffer.buffer_lint_with_diagnostic(
-                                        PROC_MACRO_DERIVE_RESOLUTION_FALLBACK,
-                                        lint_id,
-                                        orig_ident.span,
-                                        &format!(
-                                            "cannot find {} `{}` in this scope",
-                                            ns.descr(),
-                                            ident
-                                        ),
-                                        BuiltinLintDiagnostics::ProcMacroDeriveResolutionFallback(
-                                            orig_ident.span,
-                                        ),
-                                    );
-                                }
                                 let misc_flags = if ptr::eq(module, this.graph_root) {
                                     Flags::MISC_SUGGEST_CRATE
                                 } else if module.is_normal() {
