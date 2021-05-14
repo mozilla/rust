@@ -1,4 +1,3 @@
-#![feature(plugin_registrar)]
 #![feature(box_syntax, rustc_private)]
 
 extern crate rustc_ast;

@@ -1,6 +1,6 @@
 // force-host
 
-#![feature(plugin_registrar, rustc_private)]
+#![feature(rustc_private)]
 #![feature(box_syntax)]
 
 extern crate rustc_driver;

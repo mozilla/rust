@@ -1,6 +1,5 @@
 // force-host
 
-#![feature(plugin_registrar)]
 #![feature(box_syntax, rustc_private)]
 
 // Load rustc as a plugin to get macros.

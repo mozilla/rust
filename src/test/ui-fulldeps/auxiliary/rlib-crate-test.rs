@@ -1,7 +1,7 @@
 // no-prefer-dynamic
 
 #![crate_type = "rlib"]
-#![feature(plugin_registrar, rustc_private)]
+#![feature(rustc_private)]
 
 extern crate rustc_middle;
 extern crate rustc_driver;
