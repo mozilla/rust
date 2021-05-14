@@ -55,18 +55,13 @@ fn load_plugin(
     metadata_loader: &dyn MetadataLoader,
     ident: Ident,
 ) {
-    let lib =
-        locator::find_plugin_registrar(sess, metadata_loader, ident.span, ident.name);
+    let lib = locator::find_plugin_registrar(sess, metadata_loader, ident.span, ident.name);
     let fun = dylink_registrar(sess, ident.span, lib);
     plugins.push(fun);
 }
 
 // Dynamically link a registrar function into the compiler process.
-fn dylink_registrar(
-    sess: &Session,
-    span: Span,
-    path: PathBuf,
-) -> PluginRegistrarFn {
+fn dylink_registrar(sess: &Session, span: Span, path: PathBuf) -> PluginRegistrarFn {
     use rustc_metadata::dynamic_lib::DynamicLibrary;
 
     // Make sure the path contains a / or the linker will search for it.
