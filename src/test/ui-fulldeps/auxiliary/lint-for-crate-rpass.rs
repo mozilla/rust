@@ -64,8 +64,8 @@ fake_lint_pass! {
     Symbol::intern("crate_grey"), Symbol::intern("crate_green")
 }
 
-#[plugin_registrar]
-pub fn plugin_registrar(reg: &mut Registry) {
+#[no_mangle]
+fn __rustc_plugin_registrar(reg: &mut Registry) {
     reg.lint_store.register_lints(&[
         &CRATE_NOT_OKAY,
         &CRATE_NOT_RED,

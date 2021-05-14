@@ -186,44 +186,6 @@ warning: `#[macro_escape]` is a deprecated synonym for `#[macro_use]`
 LL | #[macro_escape]
    | ^^^^^^^^^^^^^^^
 
-warning: use of deprecated attribute `plugin_registrar`: compiler plugins are deprecated. See https://github.com/rust-lang/rust/pull/64675
-  --> $DIR/issue-43106-gating-of-builtin-attrs.rs:227:17
-   |
-LL |     mod inner { #![plugin_registrar] }
-   |                 ^^^^^^^^^^^^^^^^^^^^ help: may be removed in a future compiler version
-   |
-   = note: `#[warn(deprecated)]` on by default
-
-warning: use of deprecated attribute `plugin_registrar`: compiler plugins are deprecated. See https://github.com/rust-lang/rust/pull/64675
-  --> $DIR/issue-43106-gating-of-builtin-attrs.rs:235:5
-   |
-LL |     #[plugin_registrar] struct S;
-   |     ^^^^^^^^^^^^^^^^^^^ help: may be removed in a future compiler version
-
-warning: use of deprecated attribute `plugin_registrar`: compiler plugins are deprecated. See https://github.com/rust-lang/rust/pull/64675
-  --> $DIR/issue-43106-gating-of-builtin-attrs.rs:240:5
-   |
-LL |     #[plugin_registrar] type T = S;
-   |     ^^^^^^^^^^^^^^^^^^^ help: may be removed in a future compiler version
-
-warning: use of deprecated attribute `plugin_registrar`: compiler plugins are deprecated. See https://github.com/rust-lang/rust/pull/64675
-  --> $DIR/issue-43106-gating-of-builtin-attrs.rs:245:5
-   |
-LL |     #[plugin_registrar] impl S { }
-   |     ^^^^^^^^^^^^^^^^^^^ help: may be removed in a future compiler version
-
-warning: use of deprecated attribute `plugin_registrar`: compiler plugins are deprecated. See https://github.com/rust-lang/rust/pull/64675
-  --> $DIR/issue-43106-gating-of-builtin-attrs.rs:222:1
-   |
-LL | #[plugin_registrar]
-   | ^^^^^^^^^^^^^^^^^^^ help: may be removed in a future compiler version
-
-warning: use of deprecated attribute `plugin_registrar`: compiler plugins are deprecated. See https://github.com/rust-lang/rust/pull/64675
-  --> $DIR/issue-43106-gating-of-builtin-attrs.rs:45:1
-   |
-LL | #![plugin_registrar]
-   | ^^^^^^^^^^^^^^^^^^^^ help: may be removed in a future compiler version
-
 warning: use of deprecated attribute `crate_id`: no longer used.
   --> $DIR/issue-43106-gating-of-builtin-attrs.rs:90:1
    |
@@ -576,36 +538,6 @@ warning: unused attribute
    |
 LL |     #[macro_export] impl S { }
    |     ^^^^^^^^^^^^^^^
-
-warning: unused attribute
-  --> $DIR/issue-43106-gating-of-builtin-attrs.rs:222:1
-   |
-LL | #[plugin_registrar]
-   | ^^^^^^^^^^^^^^^^^^^
-
-warning: unused attribute
-  --> $DIR/issue-43106-gating-of-builtin-attrs.rs:227:17
-   |
-LL |     mod inner { #![plugin_registrar] }
-   |                 ^^^^^^^^^^^^^^^^^^^^
-
-warning: unused attribute
-  --> $DIR/issue-43106-gating-of-builtin-attrs.rs:235:5
-   |
-LL |     #[plugin_registrar] struct S;
-   |     ^^^^^^^^^^^^^^^^^^^
-
-warning: unused attribute
-  --> $DIR/issue-43106-gating-of-builtin-attrs.rs:240:5
-   |
-LL |     #[plugin_registrar] type T = S;
-   |     ^^^^^^^^^^^^^^^^^^^
-
-warning: unused attribute
-  --> $DIR/issue-43106-gating-of-builtin-attrs.rs:245:5
-   |
-LL |     #[plugin_registrar] impl S { }
-   |     ^^^^^^^^^^^^^^^^^^^
 
 warning: unused attribute
   --> $DIR/issue-43106-gating-of-builtin-attrs.rs:300:5

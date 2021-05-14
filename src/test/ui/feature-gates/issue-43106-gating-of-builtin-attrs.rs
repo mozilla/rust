@@ -219,35 +219,6 @@ mod macro_export {
     //~^ WARN unused attribute
 }
 
-#[plugin_registrar]
-//~^ WARN unused attribute
-//~| WARN use of deprecated attribute
-//~| HELP may be removed in a future compiler version
-mod plugin_registrar {
-    mod inner { #![plugin_registrar] }
-    //~^ WARN unused attribute
-    //~| WARN use of deprecated attribute
-    //~| HELP may be removed in a future compiler version
-    //~| NOTE `#[warn(deprecated)]` on by default
-
-    // for `fn f()` case, see gated-plugin_registrar.rs
-
-    #[plugin_registrar] struct S;
-    //~^ WARN unused attribute
-    //~| WARN use of deprecated attribute
-    //~| HELP may be removed in a future compiler version
-
-    #[plugin_registrar] type T = S;
-    //~^ WARN unused attribute
-    //~| WARN use of deprecated attribute
-    //~| HELP may be removed in a future compiler version
-
-    #[plugin_registrar] impl S { }
-    //~^ WARN unused attribute
-    //~| WARN use of deprecated attribute
-    //~| HELP may be removed in a future compiler version
-}
-
 // At time of unit test authorship, if compiling without `--test` then
 // non-crate-level #[test] attributes seem to be ignored.
 

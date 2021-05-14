@@ -19,8 +19,8 @@ use rustc_hir::Node;
 use rustc_lint::{LateContext, LateLintPass, LintArray, LintContext, LintPass};
 use rustc_span::source_map;
 
-#[plugin_registrar]
-pub fn plugin_registrar(reg: &mut Registry) {
+#[no_mangle]
+fn __rustc_plugin_registrar(reg: &mut Registry) {
     reg.lint_store.register_lints(&[&MISSING_ALLOWED_ATTR]);
     reg.lint_store.register_late_pass(|| box MissingAllowedAttrPass);
 }

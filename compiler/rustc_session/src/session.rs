@@ -831,12 +831,6 @@ impl Session {
             )
     }
 
-    /// Returns the symbol name for the registrar function,
-    /// given the crate `Svh` and the function `DefIndex`.
-    pub fn generate_plugin_registrar_symbol(&self, disambiguator: CrateDisambiguator) -> String {
-        format!("__rustc_plugin_registrar_{}__", disambiguator.to_fingerprint().to_hex())
-    }
-
     pub fn generate_proc_macro_decls_symbol(&self, disambiguator: CrateDisambiguator) -> String {
         format!("__rustc_proc_macro_decls_{}__", disambiguator.to_fingerprint().to_hex())
     }

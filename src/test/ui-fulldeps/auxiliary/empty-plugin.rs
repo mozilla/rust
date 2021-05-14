@@ -6,5 +6,5 @@
 extern crate rustc_driver;
 use rustc_driver::plugin::Registry;
 
-#[plugin_registrar]
-pub fn plugin_registrar(_: &mut Registry) {}
+#[no_mangle]
+fn __rustc_plugin_registrar(_: &mut Registry) {}
