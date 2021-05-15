@@ -35,17 +35,10 @@
 
 // check-pass
 
-#![feature(test, plugin_registrar)]
+#![feature(test)]
 #![warn(unused_attributes, unknown_lints)]
 //~^ NOTE the lint level is defined here
 //~| NOTE the lint level is defined here
-
-// Exception, a gated and deprecated attribute.
-
-#![plugin_registrar]
-//~^ WARN unused attribute
-//~| WARN use of deprecated attribute
-//~| HELP may be removed in a future compiler version
 
 // UNGATED WHITE-LISTED BUILT-IN ATTRIBUTES
 
