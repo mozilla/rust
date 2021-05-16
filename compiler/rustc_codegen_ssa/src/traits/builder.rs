@@ -16,6 +16,7 @@ use crate::MemFlags;
 use rustc_middle::ty::layout::{HasParamEnv, TyAndLayout};
 use rustc_middle::ty::Ty;
 use rustc_span::Span;
+use rustc_target::abi::call::FnAbi;
 use rustc_target::abi::{Abi, Align, Scalar, Size};
 use rustc_target::spec::HasTargetSpec;
 
@@ -33,45 +34,78 @@ pub trait BuilderMethods<'a, 'tcx>:
     + CoverageInfoBuilderMethods<'tcx>
     + DebugInfoBuilderMethods
     + ArgAbiMethods<'tcx>
-    + AbiBuilderMethods<'tcx>
+    + AbiBuilderMethods
     + IntrinsicCallMethods<'tcx>
     + AsmBuilderMethods<'tcx>
     + StaticBuilderMethods
     + HasParamEnv<'tcx>
     + HasTargetSpec
 {
+    /// IR builder (like `Self`) that doesn't have a set (insert) position, and
+    /// cannot be used until positioned (which converted it to `Self`).
+    // FIXME(eddyb) maybe move this associated type to a different trait, and/or
+    // provide an `UnpositionedBuilderMethods` trait for operations involving it.
+    type Unpositioned;
+
+    fn unpositioned(cx: &'a Self::CodegenCx) -> Self::Unpositioned;
+    fn position_at_end(bx: Self::Unpositioned, llbb: Self::BasicBlock) -> Self;
+    fn into_unpositioned(self) -> Self::Unpositioned;
+
     fn new_block<'b>(cx: &'a Self::CodegenCx, llfn: Self::Function, name: &'b str) -> Self;
-    fn with_cx(cx: &'a Self::CodegenCx) -> Self;
     fn build_sibling_block(&self, name: &str) -> Self;
     fn cx(&self) -> &Self::CodegenCx;
     fn llbb(&self) -> Self::BasicBlock;
     fn set_span(&mut self, span: Span);
 
-    fn position_at_end(&mut self, llbb: Self::BasicBlock);
-    fn ret_void(&mut self);
-    fn ret(&mut self, v: Self::Value);
-    fn br(&mut self, dest: Self::BasicBlock);
+    // Terminator instructions (the final instruction in a block).
+    // These methods take the IR builder by value and return an unpositioned one
+    // (in order to make it impossible to accidentally add more instructions).
+
+    fn ret_void(self) -> Self::Unpositioned;
+    fn ret(self, v: Self::Value) -> Self::Unpositioned;
+    fn br(self, dest: Self::BasicBlock) -> Self::Unpositioned;
     fn cond_br(
-        &mut self,
+        self,
         cond: Self::Value,
         then_llbb: Self::BasicBlock,
         else_llbb: Self::BasicBlock,
-    );
+    ) -> Self::Unpositioned;
     fn switch(
-        &mut self,
+        self,
         v: Self::Value,
         else_llbb: Self::BasicBlock,
         cases: impl ExactSizeIterator<Item = (u128, Self::BasicBlock)>,
-    );
+    ) -> Self::Unpositioned;
+    fn unreachable(self) -> Self::Unpositioned;
+
+    // EH (exception handling) terminator instructions.
+    // Just like regular terminators, these methods transform the IR builder type,
+    // but they can also return values (for various reasons).
+    // FIXME(eddyb) a lot of these are LLVM-specific, redesign them.
+
     fn invoke(
-        &mut self,
+        self,
         llfn: Self::Value,
         args: &[Self::Value],
         then: Self::BasicBlock,
         catch: Self::BasicBlock,
         funclet: Option<&Self::Funclet>,
-    ) -> Self::Value;
-    fn unreachable(&mut self);
+        fn_abi_for_attrs: Option<&FnAbi<'tcx, Ty<'tcx>>>,
+    ) -> (Self::Unpositioned, Self::Value);
+    fn resume(self, exn: Self::Value) -> (Self::Unpositioned, Self::Value);
+    fn cleanup_ret(
+        self,
+        funclet: &Self::Funclet,
+        unwind: Option<Self::BasicBlock>,
+    ) -> (Self::Unpositioned, Self::Value);
+    fn catch_switch(
+        self,
+        parent: Option<Self::Value>,
+        unwind: Option<Self::BasicBlock>,
+        handlers: &[Self::BasicBlock],
+    ) -> (Self::Unpositioned, Self::Value);
+
+    // Regular (intra-block) instructions.
 
     fn add(&mut self, lhs: Self::Value, rhs: Self::Value) -> Self::Value;
     fn fadd(&mut self, lhs: Self::Value, rhs: Self::Value) -> Self::Value;
@@ -233,21 +267,8 @@ pub trait BuilderMethods<'a, 'tcx>:
         num_clauses: usize,
     ) -> Self::Value;
     fn set_cleanup(&mut self, landing_pad: Self::Value);
-    fn resume(&mut self, exn: Self::Value) -> Self::Value;
     fn cleanup_pad(&mut self, parent: Option<Self::Value>, args: &[Self::Value]) -> Self::Funclet;
-    fn cleanup_ret(
-        &mut self,
-        funclet: &Self::Funclet,
-        unwind: Option<Self::BasicBlock>,
-    ) -> Self::Value;
     fn catch_pad(&mut self, parent: Self::Value, args: &[Self::Value]) -> Self::Funclet;
-    fn catch_switch(
-        &mut self,
-        parent: Option<Self::Value>,
-        unwind: Option<Self::BasicBlock>,
-        num_handlers: usize,
-    ) -> Self::Value;
-    fn add_handler(&mut self, catch_switch: Self::Value, handler: Self::BasicBlock);
     fn set_personality_fn(&mut self, personality: Self::Value);
 
     fn atomic_cmpxchg(
@@ -288,6 +309,7 @@ pub trait BuilderMethods<'a, 'tcx>:
         llfn: Self::Value,
         args: &[Self::Value],
         funclet: Option<&Self::Funclet>,
+        fn_abi_for_attrs: Option<&FnAbi<'tcx, Ty<'tcx>>>,
     ) -> Self::Value;
     fn zext(&mut self, val: Self::Value, dest_ty: Self::Type) -> Self::Value;
 

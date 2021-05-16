@@ -75,13 +75,13 @@ fn get_simple_intrinsic(cx: &CodegenCx<'ll, '_>, name: Symbol) -> Option<&'ll Va
 
 impl IntrinsicCallMethods<'tcx> for Builder<'a, 'll, 'tcx> {
     fn codegen_intrinsic_call(
-        &mut self,
+        mut self,
         instance: ty::Instance<'tcx>,
         fn_abi: &FnAbi<'tcx, Ty<'tcx>>,
         args: &[OperandRef<'tcx, &'ll Value>],
         llresult: &'ll Value,
         span: Span,
-    ) {
+    ) -> Self {
         let tcx = self.tcx;
         let callee_ty = instance.ty(tcx, ty::ParamEnv::reveal_all());
 
@@ -97,44 +97,45 @@ impl IntrinsicCallMethods<'tcx> for Builder<'a, 'll, 'tcx> {
         let name = tcx.item_name(def_id);
         let name_str = &*name.as_str();
 
-        let llret_ty = self.layout_of(ret_ty).llvm_type(self);
+        let llret_ty = self.layout_of(ret_ty).llvm_type(&self);
         let result = PlaceRef::new_sized(llresult, fn_abi.ret.layout);
 
-        let simple = get_simple_intrinsic(self, name);
+        let simple = get_simple_intrinsic(&self, name);
         let llval = match name {
             _ if simple.is_some() => self.call(
                 simple.unwrap(),
                 &args.iter().map(|arg| arg.immediate()).collect::<Vec<_>>(),
                 None,
+                None,
             ),
             sym::likely => {
                 let expect = self.get_intrinsic(&("llvm.expect.i1"));
-                self.call(expect, &[args[0].immediate(), self.const_bool(true)], None)
+                self.call(expect, &[args[0].immediate(), self.const_bool(true)], None, None)
             }
             sym::unlikely => {
                 let expect = self.get_intrinsic(&("llvm.expect.i1"));
-                self.call(expect, &[args[0].immediate(), self.const_bool(false)], None)
+                self.call(expect, &[args[0].immediate(), self.const_bool(false)], None, None)
             }
             kw::Try => {
                 try_intrinsic(
-                    self,
+                    &mut self,
                     args[0].immediate(),
                     args[1].immediate(),
                     args[2].immediate(),
                     llresult,
                 );
-                return;
+                return self;
             }
             sym::breakpoint => {
                 let llfn = self.get_intrinsic(&("llvm.debugtrap"));
-                self.call(llfn, &[], None)
+                self.call(llfn, &[], None, None)
             }
             sym::va_copy => {
                 let intrinsic = self.cx().get_intrinsic(&("llvm.va_copy"));
-                self.call(intrinsic, &[args[0].immediate(), args[1].immediate()], None)
+                self.call(intrinsic, &[args[0].immediate(), args[1].immediate()], None, None)
             }
             sym::va_arg => {
-                match fn_abi.ret.layout.abi {
+                let (new_bx, val) = match fn_abi.ret.layout.abi {
                     abi::Abi::Scalar(ref scalar) => {
                         match scalar.value {
                             Primitive::Int(..) => {
@@ -143,8 +144,10 @@ impl IntrinsicCallMethods<'tcx> for Builder<'a, 'll, 'tcx> {
                                     // less than 4 bytes in length. If it is, promote
                                     // the integer to a `i32` and truncate the result
                                     // back to the smaller type.
-                                    let promoted_result = emit_va_arg(self, args[0], tcx.types.i32);
-                                    self.trunc(promoted_result, llret_ty)
+                                    let (mut new_bx, promoted_result) =
+                                        emit_va_arg(self, args[0], tcx.types.i32);
+                                    let val = new_bx.trunc(promoted_result, llret_ty);
+                                    (new_bx, val)
                                 } else {
                                     emit_va_arg(self, args[0], ret_ty)
                                 }
@@ -157,14 +160,16 @@ impl IntrinsicCallMethods<'tcx> for Builder<'a, 'll, 'tcx> {
                         }
                     }
                     _ => bug!("the va_arg intrinsic does not work with non-scalar types"),
-                }
+                };
+                self = new_bx;
+                val
             }
 
             sym::volatile_load | sym::unaligned_volatile_load => {
                 let tp_ty = substs.type_at(0);
                 let mut ptr = args[0].immediate();
                 if let PassMode::Cast(ty) = fn_abi.ret.mode {
-                    ptr = self.pointercast(ptr, self.type_ptr_to(ty.llvm_type(self)));
+                    ptr = self.pointercast(ptr, self.type_ptr_to(ty.llvm_type(&self)));
                 }
                 let load = self.volatile_load(ptr);
                 let align = if name == sym::unaligned_volatile_load {
@@ -179,13 +184,13 @@ impl IntrinsicCallMethods<'tcx> for Builder<'a, 'll, 'tcx> {
             }
             sym::volatile_store => {
                 let dst = args[0].deref(self.cx());
-                args[1].val.volatile_store(self, dst);
-                return;
+                args[1].val.volatile_store(&mut self, dst);
+                return self;
             }
             sym::unaligned_volatile_store => {
                 let dst = args[0].deref(self.cx());
-                args[1].val.unaligned_volatile_store(self, dst);
-                return;
+                args[1].val.unaligned_volatile_store(&mut self, dst);
+                return self;
             }
             sym::prefetch_read_data
             | sym::prefetch_write_data
@@ -208,6 +213,7 @@ impl IntrinsicCallMethods<'tcx> for Builder<'a, 'll, 'tcx> {
                         self.const_i32(cache_type),
                     ],
                     None,
+                    None,
                 )
             }
             sym::ctlz
@@ -222,22 +228,23 @@ impl IntrinsicCallMethods<'tcx> for Builder<'a, 'll, 'tcx> {
             | sym::saturating_add
             | sym::saturating_sub => {
                 let ty = arg_tys[0];
-                match int_type_width_signed(ty, self) {
+                match int_type_width_signed(ty, &self) {
                     Some((width, signed)) => match name {
                         sym::ctlz | sym::cttz => {
                             let y = self.const_bool(false);
                             let llfn = self.get_intrinsic(&format!("llvm.{}.i{}", name, width));
-                            self.call(llfn, &[args[0].immediate(), y], None)
+                            self.call(llfn, &[args[0].immediate(), y], None, None)
                         }
                         sym::ctlz_nonzero | sym::cttz_nonzero => {
                             let y = self.const_bool(true);
                             let llvm_name = &format!("llvm.{}.i{}", &name_str[..4], width);
                             let llfn = self.get_intrinsic(llvm_name);
-                            self.call(llfn, &[args[0].immediate(), y], None)
+                            self.call(llfn, &[args[0].immediate(), y], None, None)
                         }
                         sym::ctpop => self.call(
                             self.get_intrinsic(&format!("llvm.ctpop.i{}", width)),
                             &[args[0].immediate()],
+                            None,
                             None,
                         ),
                         sym::bswap => {
@@ -248,12 +255,14 @@ impl IntrinsicCallMethods<'tcx> for Builder<'a, 'll, 'tcx> {
                                     self.get_intrinsic(&format!("llvm.bswap.i{}", width)),
                                     &[args[0].immediate()],
                                     None,
+                                    None,
                                 )
                             }
                         }
                         sym::bitreverse => self.call(
                             self.get_intrinsic(&format!("llvm.bitreverse.i{}", width)),
                             &[args[0].immediate()],
+                            None,
                             None,
                         ),
                         sym::rotate_left | sym::rotate_right => {
@@ -264,7 +273,7 @@ impl IntrinsicCallMethods<'tcx> for Builder<'a, 'll, 'tcx> {
                             let llvm_name =
                                 &format!("llvm.fsh{}.i{}", if is_left { 'l' } else { 'r' }, width);
                             let llfn = self.get_intrinsic(llvm_name);
-                            self.call(llfn, &[val, val, raw_shift], None)
+                            self.call(llfn, &[val, val, raw_shift], None, None)
                         }
                         sym::saturating_add | sym::saturating_sub => {
                             let is_add = name == sym::saturating_add;
@@ -277,7 +286,7 @@ impl IntrinsicCallMethods<'tcx> for Builder<'a, 'll, 'tcx> {
                                 width
                             );
                             let llfn = self.get_intrinsic(llvm_name);
-                            self.call(llfn, &[lhs, rhs], None)
+                            self.call(llfn, &[lhs, rhs], None, None)
                         }
                         _ => bug!(),
                     },
@@ -291,15 +300,17 @@ impl IntrinsicCallMethods<'tcx> for Builder<'a, 'll, 'tcx> {
                                 name, ty
                             ),
                         );
-                        return;
+                        return self;
                     }
                 }
             }
 
             _ if name_str.starts_with("simd_") => {
-                match generic_simd_intrinsic(self, name, callee_ty, args, ret_ty, llret_ty, span) {
+                match generic_simd_intrinsic(
+                    &mut self, name, callee_ty, args, ret_ty, llret_ty, span,
+                ) {
                     Ok(llval) => llval,
-                    Err(()) => return,
+                    Err(()) => return self,
                 }
             }
 
@@ -308,30 +319,32 @@ impl IntrinsicCallMethods<'tcx> for Builder<'a, 'll, 'tcx> {
 
         if !fn_abi.ret.is_ignore() {
             if let PassMode::Cast(ty) = fn_abi.ret.mode {
-                let ptr_llty = self.type_ptr_to(ty.llvm_type(self));
+                let ptr_llty = self.type_ptr_to(ty.llvm_type(&self));
                 let ptr = self.pointercast(result.llval, ptr_llty);
                 self.store(llval, ptr, result.align);
             } else {
-                OperandRef::from_immediate_or_packed_pair(self, llval, result.layout)
+                OperandRef::from_immediate_or_packed_pair(&mut self, llval, result.layout)
                     .val
-                    .store(self, result);
+                    .store(&mut self, result);
             }
         }
+
+        self
     }
 
     fn abort(&mut self) {
         let fnname = self.get_intrinsic(&("llvm.trap"));
-        self.call(fnname, &[], None);
+        self.call(fnname, &[], None, None);
     }
 
     fn assume(&mut self, val: Self::Value) {
         let assume_intrinsic = self.get_intrinsic("llvm.assume");
-        self.call(assume_intrinsic, &[val], None);
+        self.call(assume_intrinsic, &[val], None, None);
     }
 
     fn expect(&mut self, cond: Self::Value, expected: bool) -> Self::Value {
         let expect = self.get_intrinsic(&"llvm.expect.i1");
-        self.call(expect, &[cond, self.const_bool(expected)], None)
+        self.call(expect, &[cond, self.const_bool(expected)], None, None)
     }
 
     fn sideeffect(&mut self) {
@@ -340,18 +353,18 @@ impl IntrinsicCallMethods<'tcx> for Builder<'a, 'll, 'tcx> {
         // codegen backend being used, and so is unable to check the LLVM version.
         if unsafe { llvm::LLVMRustVersionMajor() } < 12 {
             let fnname = self.get_intrinsic(&("llvm.sideeffect"));
-            self.call(fnname, &[], None);
+            self.call(fnname, &[], None, None);
         }
     }
 
     fn va_start(&mut self, va_list: &'ll Value) -> &'ll Value {
         let intrinsic = self.cx().get_intrinsic("llvm.va_start");
-        self.call(intrinsic, &[va_list], None)
+        self.call(intrinsic, &[va_list], None, None)
     }
 
     fn va_end(&mut self, va_list: &'ll Value) -> &'ll Value {
         let intrinsic = self.cx().get_intrinsic("llvm.va_end");
-        self.call(intrinsic, &[va_list], None)
+        self.call(intrinsic, &[va_list], None, None)
     }
 }
 
@@ -363,7 +376,7 @@ fn try_intrinsic(
     dest: &'ll Value,
 ) {
     if bx.sess().panic_strategy() == PanicStrategy::Abort {
-        bx.call(try_func, &[data], None);
+        bx.call(try_func, &[data], None, None);
         // Return 0 unconditionally from the intrinsic call;
         // we can never unwind.
         let ret_align = bx.tcx().data_layout.i32_align.abi;
@@ -392,13 +405,15 @@ fn codegen_msvc_try(
     dest: &'ll Value,
 ) {
     let llfn = get_rust_try_fn(bx, &mut |mut bx| {
+        let cx = bx.cx;
+
         bx.set_personality_fn(bx.eh_personality());
 
-        let mut normal = bx.build_sibling_block("normal");
-        let mut catchswitch = bx.build_sibling_block("catchswitch");
+        let normal = bx.build_sibling_block("normal");
+        let catchswitch = bx.build_sibling_block("catchswitch");
         let mut catchpad_rust = bx.build_sibling_block("catchpad_rust");
         let mut catchpad_foreign = bx.build_sibling_block("catchpad_foreign");
-        let mut caught = bx.build_sibling_block("caught");
+        let caught = bx.build_sibling_block("caught");
 
         let try_func = llvm::get_param(bx.llfn(), 0);
         let data = llvm::get_param(bx.llfn(), 1);
@@ -461,13 +476,12 @@ fn codegen_msvc_try(
         // More information can be found in libstd's seh.rs implementation.
         let ptr_align = bx.tcx().data_layout.pointer_align.abi;
         let slot = bx.alloca(bx.type_i8p(), ptr_align);
-        bx.invoke(try_func, &[data], normal.llbb(), catchswitch.llbb(), None);
+        bx.invoke(try_func, &[data], normal.llbb(), catchswitch.llbb(), None, None);
 
-        normal.ret(bx.const_i32(0));
+        normal.ret(cx.const_i32(0));
 
-        let cs = catchswitch.catch_switch(None, None, 2);
-        catchswitch.add_handler(cs, catchpad_rust.llbb());
-        catchswitch.add_handler(cs, catchpad_foreign.llbb());
+        let (_, cs) =
+            catchswitch.catch_switch(None, None, &[catchpad_rust.llbb(), catchpad_foreign.llbb()]);
 
         // We can't use the TypeDescriptor defined in libpanic_unwind because it
         // might be in another DLL and the SEH encoding only supports specifying
@@ -483,14 +497,14 @@ fn codegen_msvc_try(
         //
         // When modifying, make sure that the type_name string exactly matches
         // the one used in src/libpanic_unwind/seh.rs.
-        let type_info_vtable = bx.declare_global("??_7type_info@@6B@", bx.type_i8p());
-        let type_name = bx.const_bytes(b"rust_panic\0");
+        let type_info_vtable = cx.declare_global("??_7type_info@@6B@", cx.type_i8p());
+        let type_name = cx.const_bytes(b"rust_panic\0");
         let type_info =
-            bx.const_struct(&[type_info_vtable, bx.const_null(bx.type_i8p()), type_name], false);
-        let tydesc = bx.declare_global("__rust_panic_type_info", bx.val_ty(type_info));
+            cx.const_struct(&[type_info_vtable, cx.const_null(cx.type_i8p()), type_name], false);
+        let tydesc = cx.declare_global("__rust_panic_type_info", cx.val_ty(type_info));
         unsafe {
             llvm::LLVMRustSetLinkage(tydesc, llvm::Linkage::LinkOnceODRLinkage);
-            llvm::SetUniqueComdat(bx.llmod, tydesc);
+            llvm::SetUniqueComdat(cx.llmod, tydesc);
             llvm::LLVMSetInitializer(tydesc, type_info);
         }
 
@@ -500,25 +514,25 @@ fn codegen_msvc_try(
         // since our exception object effectively contains a Box.
         //
         // Source: MicrosoftCXXABI::getAddrOfCXXCatchHandlerType in clang
-        let flags = bx.const_i32(8);
+        let flags = cx.const_i32(8);
         let funclet = catchpad_rust.catch_pad(cs, &[tydesc, flags, slot]);
         let ptr = catchpad_rust.load(slot, ptr_align);
-        catchpad_rust.call(catch_func, &[data, ptr], Some(&funclet));
+        catchpad_rust.call(catch_func, &[data, ptr], Some(&funclet), None);
         catchpad_rust.catch_ret(&funclet, caught.llbb());
 
         // The flag value of 64 indicates a "catch-all".
-        let flags = bx.const_i32(64);
-        let null = bx.const_null(bx.type_i8p());
+        let flags = cx.const_i32(64);
+        let null = cx.const_null(cx.type_i8p());
         let funclet = catchpad_foreign.catch_pad(cs, &[null, flags, null]);
-        catchpad_foreign.call(catch_func, &[data, null], Some(&funclet));
+        catchpad_foreign.call(catch_func, &[data, null], Some(&funclet), None);
         catchpad_foreign.catch_ret(&funclet, caught.llbb());
 
-        caught.ret(bx.const_i32(1));
+        caught.ret(cx.const_i32(1));
     });
 
     // Note that no invoke is used here because by definition this function
     // can't panic (that's what it's catching).
-    let ret = bx.call(llfn, &[try_func, data, catch_func], None);
+    let ret = bx.call(llfn, &[try_func, data, catch_func], None, None);
     let i32_align = bx.tcx().data_layout.i32_align.abi;
     bx.store(ret, dest, i32_align);
 }
@@ -541,7 +555,9 @@ fn codegen_gnu_try(
     catch_func: &'ll Value,
     dest: &'ll Value,
 ) {
-    let llfn = get_rust_try_fn(bx, &mut |mut bx| {
+    let llfn = get_rust_try_fn(bx, &mut |bx| {
+        let cx = bx.cx;
+
         // Codegens the shims described above:
         //
         //   bx:
@@ -554,14 +570,14 @@ fn codegen_gnu_try(
         //      (%ptr, _) = landingpad
         //      call %catch_func(%data, %ptr)
         //      ret 1
-        let mut then = bx.build_sibling_block("then");
+        let then = bx.build_sibling_block("then");
         let mut catch = bx.build_sibling_block("catch");
 
         let try_func = llvm::get_param(bx.llfn(), 0);
         let data = llvm::get_param(bx.llfn(), 1);
         let catch_func = llvm::get_param(bx.llfn(), 2);
-        bx.invoke(try_func, &[data], then.llbb(), catch.llbb(), None);
-        then.ret(bx.const_i32(0));
+        bx.invoke(try_func, &[data], then.llbb(), catch.llbb(), None, None);
+        then.ret(cx.const_i32(0));
 
         // Type indicator for the exception being thrown.
         //
@@ -569,18 +585,18 @@ fn codegen_gnu_try(
         // being thrown.  The second value is a "selector" indicating which of
         // the landing pad clauses the exception's type had been matched to.
         // rust_try ignores the selector.
-        let lpad_ty = bx.type_struct(&[bx.type_i8p(), bx.type_i32()], false);
-        let vals = catch.landing_pad(lpad_ty, bx.eh_personality(), 1);
-        let tydesc = bx.const_null(bx.type_i8p());
+        let lpad_ty = cx.type_struct(&[cx.type_i8p(), cx.type_i32()], false);
+        let vals = catch.landing_pad(lpad_ty, cx.eh_personality(), 1);
+        let tydesc = cx.const_null(cx.type_i8p());
         catch.add_clause(vals, tydesc);
         let ptr = catch.extract_value(vals, 0);
-        catch.call(catch_func, &[data, ptr], None);
-        catch.ret(bx.const_i32(1));
+        catch.call(catch_func, &[data, ptr], None, None);
+        catch.ret(cx.const_i32(1));
     });
 
     // Note that no invoke is used here because by definition this function
     // can't panic (that's what it's catching).
-    let ret = bx.call(llfn, &[try_func, data, catch_func], None);
+    let ret = bx.call(llfn, &[try_func, data, catch_func], None, None);
     let i32_align = bx.tcx().data_layout.i32_align.abi;
     bx.store(ret, dest, i32_align);
 }
@@ -595,7 +611,9 @@ fn codegen_emcc_try(
     catch_func: &'ll Value,
     dest: &'ll Value,
 ) {
-    let llfn = get_rust_try_fn(bx, &mut |mut bx| {
+    let llfn = get_rust_try_fn(bx, &mut |bx| {
+        let cx = bx.cx;
+
         // Codegens the shims described above:
         //
         //   bx:
@@ -613,53 +631,53 @@ fn codegen_emcc_try(
         //      %catch_data[1] = %is_rust_panic
         //      call %catch_func(%data, %catch_data)
         //      ret 1
-        let mut then = bx.build_sibling_block("then");
+        let then = bx.build_sibling_block("then");
         let mut catch = bx.build_sibling_block("catch");
 
         let try_func = llvm::get_param(bx.llfn(), 0);
         let data = llvm::get_param(bx.llfn(), 1);
         let catch_func = llvm::get_param(bx.llfn(), 2);
-        bx.invoke(try_func, &[data], then.llbb(), catch.llbb(), None);
-        then.ret(bx.const_i32(0));
+        bx.invoke(try_func, &[data], then.llbb(), catch.llbb(), None, None);
+        then.ret(cx.const_i32(0));
 
         // Type indicator for the exception being thrown.
         //
         // The first value in this tuple is a pointer to the exception object
         // being thrown.  The second value is a "selector" indicating which of
         // the landing pad clauses the exception's type had been matched to.
-        let tydesc = bx.eh_catch_typeinfo();
-        let lpad_ty = bx.type_struct(&[bx.type_i8p(), bx.type_i32()], false);
-        let vals = catch.landing_pad(lpad_ty, bx.eh_personality(), 2);
+        let tydesc = cx.eh_catch_typeinfo();
+        let lpad_ty = cx.type_struct(&[cx.type_i8p(), cx.type_i32()], false);
+        let vals = catch.landing_pad(lpad_ty, cx.eh_personality(), 2);
         catch.add_clause(vals, tydesc);
-        catch.add_clause(vals, bx.const_null(bx.type_i8p()));
+        catch.add_clause(vals, cx.const_null(cx.type_i8p()));
         let ptr = catch.extract_value(vals, 0);
         let selector = catch.extract_value(vals, 1);
 
         // Check if the typeid we got is the one for a Rust panic.
-        let llvm_eh_typeid_for = bx.get_intrinsic("llvm.eh.typeid.for");
-        let rust_typeid = catch.call(llvm_eh_typeid_for, &[tydesc], None);
+        let llvm_eh_typeid_for = cx.get_intrinsic("llvm.eh.typeid.for");
+        let rust_typeid = catch.call(llvm_eh_typeid_for, &[tydesc], None, None);
         let is_rust_panic = catch.icmp(IntPredicate::IntEQ, selector, rust_typeid);
-        let is_rust_panic = catch.zext(is_rust_panic, bx.type_bool());
+        let is_rust_panic = catch.zext(is_rust_panic, cx.type_bool());
 
         // We need to pass two values to catch_func (ptr and is_rust_panic), so
         // create an alloca and pass a pointer to that.
-        let ptr_align = bx.tcx().data_layout.pointer_align.abi;
-        let i8_align = bx.tcx().data_layout.i8_align.abi;
+        let ptr_align = cx.tcx.data_layout.pointer_align.abi;
+        let i8_align = cx.tcx.data_layout.i8_align.abi;
         let catch_data =
-            catch.alloca(bx.type_struct(&[bx.type_i8p(), bx.type_bool()], false), ptr_align);
-        let catch_data_0 = catch.inbounds_gep(catch_data, &[bx.const_usize(0), bx.const_usize(0)]);
+            catch.alloca(cx.type_struct(&[cx.type_i8p(), cx.type_bool()], false), ptr_align);
+        let catch_data_0 = catch.inbounds_gep(catch_data, &[cx.const_usize(0), cx.const_usize(0)]);
         catch.store(ptr, catch_data_0, ptr_align);
-        let catch_data_1 = catch.inbounds_gep(catch_data, &[bx.const_usize(0), bx.const_usize(1)]);
+        let catch_data_1 = catch.inbounds_gep(catch_data, &[cx.const_usize(0), cx.const_usize(1)]);
         catch.store(is_rust_panic, catch_data_1, i8_align);
-        let catch_data = catch.bitcast(catch_data, bx.type_i8p());
+        let catch_data = catch.bitcast(catch_data, cx.type_i8p());
 
-        catch.call(catch_func, &[data, catch_data], None);
-        catch.ret(bx.const_i32(1));
+        catch.call(catch_func, &[data, catch_data], None, None);
+        catch.ret(cx.const_i32(1));
     });
 
     // Note that no invoke is used here because by definition this function
     // can't panic (that's what it's catching).
-    let ret = bx.call(llfn, &[try_func, data, catch_func], None);
+    let ret = bx.call(llfn, &[try_func, data, catch_func], None, None);
     let i32_align = bx.tcx().data_layout.i32_align.abi;
     bx.store(ret, dest, i32_align);
 }
@@ -1073,7 +1091,7 @@ fn generic_simd_intrinsic(
         };
         let llvm_name = &format!("llvm.{0}.v{1}{2}", intr_name, in_len, elem_ty_str);
         let f = bx.declare_cfn(&llvm_name, llvm::UnnamedAddr::No, fn_ty);
-        let c = bx.call(f, &args.iter().map(|arg| arg.immediate()).collect::<Vec<_>>(), None);
+        let c = bx.call(f, &args.iter().map(|arg| arg.immediate()).collect::<Vec<_>>(), None, None);
         Ok(c)
     }
 
@@ -1258,7 +1276,8 @@ fn generic_simd_intrinsic(
                 llvm_elem_vec_ty,
             ),
         );
-        let v = bx.call(f, &[args[1].immediate(), alignment, mask, args[0].immediate()], None);
+        let v =
+            bx.call(f, &[args[1].immediate(), alignment, mask, args[0].immediate()], None, None);
         return Ok(v);
     }
 
@@ -1385,7 +1404,8 @@ fn generic_simd_intrinsic(
             llvm::UnnamedAddr::No,
             bx.type_func(&[llvm_elem_vec_ty, llvm_pointer_vec_ty, alignment_ty, mask_ty], ret_t),
         );
-        let v = bx.call(f, &[args[0].immediate(), args[1].immediate(), alignment, mask], None);
+        let v =
+            bx.call(f, &[args[0].immediate(), args[1].immediate(), alignment, mask], None, None);
         return Ok(v);
     }
 
@@ -1712,7 +1732,7 @@ unsupported {} from `{}` with element `{}` of size `{}` to `{}`"#,
             llvm::UnnamedAddr::No,
             bx.type_func(&[vec_ty, vec_ty], vec_ty),
         );
-        let v = bx.call(f, &[lhs, rhs], None);
+        let v = bx.call(f, &[lhs, rhs], None, None);
         return Ok(v);
     }
 
