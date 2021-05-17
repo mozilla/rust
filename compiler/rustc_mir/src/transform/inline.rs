@@ -215,8 +215,8 @@ impl Inliner<'tcx> {
             // a lower `DefPathHash` than the callee. This ensures that the callee will
             // not inline us. This trick only works even with incremental compilation,
             // since `DefPathHash` is stable.
-            if self.tcx.def_path_hash(caller_def_id)
-                < self.tcx.def_path_hash(callee_def_id.to_def_id())
+            if self.tcx.def_path_hash(caller_def_id).local_hash()
+                < self.tcx.def_path_hash(callee_def_id.to_def_id()).local_hash()
             {
                 return Ok(());
             }
