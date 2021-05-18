@@ -1,0 +1,11 @@
+error[E0477]: the type `[closure@$DIR/issue-84366-closure-outlives-ret.rs:25:13: 25:33]` does not fulfill the required lifetime
+  --> $DIR/issue-84366-closure-outlives-ret.rs:27:5
+   |
+LL |     static_transfers_to_associated(&f, s)
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: type must satisfy the static lifetime
+
+error: aborting due to previous error
+
+For more information about this error, try `rustc --explain E0477`.

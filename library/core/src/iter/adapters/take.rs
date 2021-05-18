@@ -82,7 +82,7 @@ where
         Fold: FnMut(Acc, Self::Item) -> R,
         R: Try<Ok = Acc>,
     {
-        fn check<'a, T, Acc, R: Try<Ok = Acc>>(
+        fn check<'a, T, Acc: 'a, R: Try<Ok = Acc> + 'a>(
             n: &'a mut usize,
             mut fold: impl FnMut(Acc, T) -> R + 'a,
         ) -> impl FnMut(Acc, T) -> ControlFlow<R, Acc> + 'a {
