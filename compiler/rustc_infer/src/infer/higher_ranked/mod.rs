@@ -80,13 +80,15 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
 
     /// Like `replace_bound_vars_with_placeholders`, but also returns the
     /// `UniverseIndex` the new placeholder reside in.
-    pub fn replace_bound_vars_with_placeholders_mapped<T>(&self, binder: ty::Binder<'tcx, T>)
-        -> (
-            T,
-            BTreeMap<ty::PlaceholderRegion, ty::BoundRegion>,
-            BTreeMap<ty::PlaceholderType, ty::BoundTy>,
-            BTreeMap<ty::PlaceholderConst<'tcx>, ty::BoundVar>,
-        )
+    pub fn replace_bound_vars_with_placeholders_mapped<T>(
+        &self,
+        binder: ty::Binder<'tcx, T>,
+    ) -> (
+        T,
+        BTreeMap<ty::PlaceholderRegion, ty::BoundRegion>,
+        BTreeMap<ty::PlaceholderType, ty::BoundTy>,
+        BTreeMap<ty::PlaceholderConst<'tcx>, ty::BoundVar>,
+    )
     where
         T: TypeFoldable<'tcx>,
     {
@@ -102,19 +104,13 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         let mut mapped_consts: BTreeMap<ty::PlaceholderConst<'tcx>, ty::BoundVar> = BTreeMap::new();
 
         let fld_r = |br: ty::BoundRegion| {
-            let p = ty::PlaceholderRegion {
-                universe: next_universe,
-                name: br.kind,
-            };
+            let p = ty::PlaceholderRegion { universe: next_universe, name: br.kind };
             mapped_regions.insert(p, br);
             self.tcx.mk_region(ty::RePlaceholder(p))
         };
 
         let fld_t = |bound_ty: ty::BoundTy| {
-            let p = ty::PlaceholderType {
-                universe: next_universe,
-                name: bound_ty.var,
-            };
+            let p = ty::PlaceholderType { universe: next_universe, name: bound_ty.var };
             mapped_types.insert(p, bound_ty);
             self.tcx.mk_ty(ty::Placeholder(p))
         };
@@ -125,10 +121,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 name: ty::BoundConst { var: bound_var, ty },
             };
             mapped_consts.insert(p, bound_var);
-            self.tcx.mk_const(ty::Const {
-                val: ty::ConstKind::Placeholder(p),
-                ty,
-            })
+            self.tcx.mk_const(ty::Const { val: ty::ConstKind::Placeholder(p), ty })
         };
 
         let (result, map) = self.tcx.replace_bound_vars(binder, fld_r, fld_t, fld_c);

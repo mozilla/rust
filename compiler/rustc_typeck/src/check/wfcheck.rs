@@ -644,14 +644,13 @@ fn check_item_type(tcx: TyCtxt<'_>, item_id: hir::HirId, ty_span: Span, allow_fo
     });
 }
 
+#[tracing::instrument(level = "debug", skip(tcx, ast_self_ty, ast_trait_ref))]
 fn check_impl<'tcx>(
     tcx: TyCtxt<'tcx>,
     item: &'tcx hir::Item<'tcx>,
     ast_self_ty: &hir::Ty<'_>,
     ast_trait_ref: &Option<hir::TraitRef<'_>>,
 ) {
-    debug!("check_impl: {:?}", item);
-
     for_item(tcx, item).with_fcx(|fcx| {
         match *ast_trait_ref {
             Some(ref ast_trait_ref) => {
@@ -669,6 +668,7 @@ fn check_impl<'tcx>(
                     ast_trait_ref.path.span,
                     Some(item),
                 );
+                debug!(?obligations);
                 for obligation in obligations {
                     fcx.register_predicate(obligation);
                 }
