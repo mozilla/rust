@@ -1,0 +1,11 @@
+error: implementation of `FamilyLt` is not general enough
+  --> $DIR/issue-62529-1.rs:80:10
+   |
+LL |     task(annotate(
+   |          ^^^^^^^^ implementation of `FamilyLt` is not general enough
+   |
+   = note: `RefMutFamily<usize>` must implement `FamilyLt<'0>`, for any lifetime `'0`...
+   = note: ...but it actually implements `FamilyLt<'1>`, for some specific lifetime `'1`
+
+error: aborting due to previous error
+

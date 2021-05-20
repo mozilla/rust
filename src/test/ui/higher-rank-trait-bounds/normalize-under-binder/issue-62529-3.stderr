@@ -1,0 +1,9 @@
+error[E0284]: type annotations needed: cannot satisfy `for<'a> <_ as ATC<'a>>::Type == ()`
+  --> $DIR/issue-62529-3.rs:25:9
+   |
+LL |         call(f, ());
+   |         ^^^^ cannot satisfy `for<'a> <_ as ATC<'a>>::Type == ()`
+
+error: aborting due to previous error
+
+For more information about this error, try `rustc --explain E0284`.
