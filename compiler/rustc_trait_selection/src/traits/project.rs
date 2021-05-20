@@ -329,8 +329,6 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
         T: TypeFoldable<'tcx>,
     {
         let infcx = self.selcx.infcx();
-        // TODO
-        // let V = new inference variable();
         let bound_vars = t.bound_vars();
         let (with_placeholders, mapped_regions, mapped_types, mapped_consts) =
             infcx.replace_bound_vars_with_placeholders_mapped(t);
@@ -349,34 +347,6 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
         let bound = ty::Binder::bind_with_vars(replaced, bound_vars);
         debug!(?bound);
         bound
-
-        // self.obligations.push(Quantify([!U1_0 -> 'a] folded_with_placehodlers, ?V))
-        //
-        // return V
-
-        // Example: We start in the universe U0:
-        //
-        //     for<'a> fn(<T as Foo<'a>>::Bar)
-        //
-        // We will instantiate a new universe U1, replace `'a` with a placeholder `!U1_0` in the universe `U1`,
-        // and recursively normalize to
-        //
-        //     fn(?X)
-        //
-        // along with some obligations O (pushed into the vec).
-        //
-        // ?X is in the universe U1 ("only names things visible to U') and
-        // hence may name `!U1_0`.
-        //
-        // The problem is we cannot return `?X` because we have to return a type in the universe U0.
-        //
-        // XXX problem, ?X may have inference variables. So what we want to do is
-        //
-        //
-
-        //     for<'a> fn(<?X as Foo<'a>>::Bar)
-        //
-        // impl<A, 'a> Foo<'a> for &'a u32 { }
     }
 
     fn fold_ty(&mut self, ty: Ty<'tcx>) -> Ty<'tcx> {
@@ -492,7 +462,12 @@ impl TypeFolder<'tcx> for PlaceholderReplacer<'_, 'tcx> {
     }
 
     fn fold_region(&mut self, r0: ty::Region<'tcx>) -> ty::Region<'tcx> {
-        let r1 = r0.fold_with(&mut OpportunisticRegionResolver::new(self.infcx));
+        let r1 = self
+            .infcx
+            .inner
+            .borrow_mut()
+            .unwrap_region_constraints()
+            .opportunistic_resolve_region(self.infcx.tcx, r0);
 
         let r2 = match *r1 {
             ty::RePlaceholder(p) => {
