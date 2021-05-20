@@ -162,12 +162,16 @@ impl<T: Write + Send> Terminal for TerminfoTerminal<T> {
 
     fn supports_attr(&self, attr: Attr) -> bool {
         match attr {
-            Attr::ForegroundColor(_) | Attr::BackgroundColor(_) => self.num_colors > 0,
+            Attr::ForegroundColor(_) | Attr::BackgroundColor(_) => self.supports_ansi_colors(),
             _ => {
                 let cap = cap_for_attr(attr);
                 self.ti.strings.get(cap).is_some()
             }
         }
+    }
+
+    fn supports_ansi_colors(&self) -> bool {
+        self.num_colors > 0
     }
 
     fn reset(&mut self) -> io::Result<bool> {

@@ -4,6 +4,7 @@
 
 use std::io;
 use std::io::prelude::*;
+use std::os::windows::{io::AsRawHandle, raw::HANDLE};
 
 use crate::color;
 use crate::Attr;
@@ -22,7 +23,6 @@ type SHORT = i16;
 type WORD = u16;
 type DWORD = u32;
 type BOOL = i32;
-type HANDLE = *mut u8;
 
 #[allow(non_snake_case)]
 #[repr(C)]
@@ -54,7 +54,7 @@ struct CONSOLE_SCREEN_BUFFER_INFO {
 #[link(name = "kernel32")]
 extern "system" {
     fn SetConsoleTextAttribute(handle: HANDLE, attr: WORD) -> BOOL;
-    fn GetStdHandle(which: DWORD) -> HANDLE;
+    fn GetConsoleMode(handle: HANDLE, mode: *mut DWORD) -> BOOL;
     fn GetConsoleScreenBufferInfo(handle: HANDLE, info: *mut CONSOLE_SCREEN_BUFFER_INFO) -> BOOL;
 }
 
@@ -99,17 +99,8 @@ impl<T: Write + Send + 'static> WinConsole<T> {
         accum |= color_to_bits(self.foreground);
         accum |= color_to_bits(self.background) << 4;
 
+        let out = std::io::stdout().as_raw_handle();
         unsafe {
-            // Magic -11 means stdout, from
-            // https://docs.microsoft.com/en-us/windows/console/getstdhandle
-            //
-            // You may be wondering, "but what about stderr?", and the answer
-            // to that is that setting terminal attributes on the stdout
-            // handle also sets them for stderr, since they go to the same
-            // terminal! Admittedly, this is fragile, since stderr could be
-            // redirected to a different console. This is good enough for
-            // rustc though. See #13400.
-            let out = GetStdHandle(-11i32 as DWORD);
             SetConsoleTextAttribute(out, accum);
         }
     }
@@ -120,11 +111,10 @@ impl<T: Write + Send + 'static> WinConsole<T> {
 
         let fg;
         let bg;
+        let stdout = std::io::stdout().as_raw_handle();
         unsafe {
             let mut buffer_info = MaybeUninit::<CONSOLE_SCREEN_BUFFER_INFO>::uninit();
-            if GetConsoleScreenBufferInfo(GetStdHandle(-11i32 as DWORD), buffer_info.as_mut_ptr())
-                != 0
-            {
+            if GetConsoleScreenBufferInfo(stdout, buffer_info.as_mut_ptr()) != 0 {
                 let buffer_info = buffer_info.assume_init();
                 fg = bits_to_color(buffer_info.wAttributes);
                 bg = bits_to_color(buffer_info.wAttributes >> 4);
@@ -192,6 +182,21 @@ impl<T: Write + Send + 'static> Terminal for WinConsole<T> {
         match attr {
             Attr::ForegroundColor(_) | Attr::BackgroundColor(_) => true,
             _ => false,
+        }
+    }
+
+    fn supports_ansi_colors(&self) -> bool {
+        // From https://docs.microsoft.com/en-us/windows/console/getconsolemode
+        const ENABLE_VIRTUAL_TERMINAL_PROCESSING: DWORD = 0x0004;
+
+        let stdout = std::io::stdout().as_raw_handle();
+        let mut mode: DWORD = 0;
+        unsafe {
+            if GetConsoleMode(stdout, &mut mode) != 0 {
+                mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING != 0
+            } else {
+                false
+            }
         }
     }
 

@@ -173,6 +173,12 @@ pub trait Terminal: Write {
     /// Returns `true` if the given terminal attribute is supported.
     fn supports_attr(&self, attr: Attr) -> bool;
 
+    /// Returns `true` if the terminal supports ANSI color codes.
+    ///
+    /// ANSI color codes can be buffered along with the output,
+    /// but not all Windows terminals support them.
+    fn supports_ansi_colors(&self) -> bool;
+
     /// Resets all terminal attributes and colors to their defaults.
     ///
     /// Returns `Ok(true)` if the terminal was reset, `Ok(false)` otherwise, and `Err(e)` if there

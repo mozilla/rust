@@ -9,7 +9,7 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use core::panic::{BoxMeUp, Location, PanicInfo};
+use core::panic::{BoxMeUp, Location, PanicDescription, PanicInfo};
 
 use crate::any::Any;
 use crate::fmt;
@@ -453,7 +453,8 @@ pub fn begin_panic_fmt(msg: &fmt::Arguments<'_>) -> ! {
         intrinsics::abort()
     }
 
-    let info = PanicInfo::internal_constructor(Some(msg), Location::caller());
+    let info =
+        PanicInfo::internal_constructor(Some(PanicDescription::Message(msg)), Location::caller());
     begin_panic_handler(&info)
 }
 
@@ -462,12 +463,12 @@ pub fn begin_panic_fmt(msg: &fmt::Arguments<'_>) -> ! {
 #[unwind(allowed)]
 pub fn begin_panic_handler(info: &PanicInfo<'_>) -> ! {
     struct PanicPayload<'a> {
-        inner: &'a fmt::Arguments<'a>,
+        inner: &'a PanicDescription<'a>,
         string: Option<String>,
     }
 
     impl<'a> PanicPayload<'a> {
-        fn new(inner: &'a fmt::Arguments<'a>) -> PanicPayload<'a> {
+        fn new(inner: &'a PanicDescription<'a>) -> PanicPayload<'a> {
             PanicPayload { inner, string: None }
         }
 
@@ -478,7 +479,7 @@ pub fn begin_panic_handler(info: &PanicInfo<'_>) -> ! {
             // Lazily, the first time this gets called, run the actual string formatting.
             self.string.get_or_insert_with(|| {
                 let mut s = String::new();
-                drop(s.write_fmt(*inner));
+                drop(write!(s, "{}", *inner));
                 s
             })
         }
@@ -511,12 +512,18 @@ pub fn begin_panic_handler(info: &PanicInfo<'_>) -> ! {
     }
 
     let loc = info.location().unwrap(); // The current implementation always returns Some
-    let msg = info.message().unwrap(); // The current implementation always returns Some
+    let descr = info.description().unwrap(); // The current implementation always returns Some
+
     crate::sys_common::backtrace::__rust_end_short_backtrace(move || {
-        if let Some(msg) = msg.as_str() {
-            rust_panic_with_hook(&mut StrPanicPayload(msg), info.message(), loc);
+        let descr_str = match descr {
+            PanicDescription::Message(message) => message.as_str(),
+            _ => None,
+        };
+
+        if let Some(descr_str) = descr_str {
+            rust_panic_with_hook(&mut StrPanicPayload(descr_str), info.description(), loc);
         } else {
-            rust_panic_with_hook(&mut PanicPayload::new(msg), info.message(), loc);
+            rust_panic_with_hook(&mut PanicPayload::new(&descr), info.description(), loc);
         }
     })
 }
@@ -582,7 +589,7 @@ pub fn begin_panic<M: Any + Send>(msg: M) -> ! {
 /// abort or unwind.
 fn rust_panic_with_hook(
     payload: &mut dyn BoxMeUp,
-    message: Option<&fmt::Arguments<'_>>,
+    description: Option<PanicDescription<'_>>,
     location: &Location<'_>,
 ) -> ! {
     let (must_abort, panics) = panic_count::increase();
@@ -600,7 +607,7 @@ fn rust_panic_with_hook(
         } else {
             // Unfortunately, this does not print a backtrace, because creating
             // a `Backtrace` will allocate, which we must to avoid here.
-            let panicinfo = PanicInfo::internal_constructor(message, location);
+            let panicinfo = PanicInfo::internal_constructor(description, location);
             util::dumb_print(format_args!(
                 "{}\npanicked after panic::always_abort(), aborting.\n",
                 panicinfo
@@ -610,7 +617,7 @@ fn rust_panic_with_hook(
     }
 
     unsafe {
-        let mut info = PanicInfo::internal_constructor(message, location);
+        let mut info = PanicInfo::internal_constructor(description, location);
         HOOK_LOCK.read();
         match HOOK {
             // Some platforms (like wasm) know that printing to stderr won't ever actually

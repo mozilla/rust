@@ -21,6 +21,7 @@ pub struct TestOpts {
     pub nocapture: bool,
     pub color: ColorConfig,
     pub format: OutputFormat,
+    pub pretty_print_assertions: bool,
     pub test_threads: Option<usize>,
     pub skip: Vec<String>,
     pub time_options: Option<TestTimeOptions>,
@@ -137,6 +138,11 @@ fn optgroups() -> getopts::Options {
 
             `CRITICAL_TIME` here means the limit that should not be exceeded by test.
             ",
+        )
+        .optflag(
+            "",
+            "pretty-print-assertions",
+            "Pretty-print assertion failures using experimental formatting.",
         );
     opts
 }
@@ -243,6 +249,8 @@ fn parse_opts_impl(matches: getopts::Matches) -> OptRes {
     let test_threads = get_test_threads(&matches)?;
     let color = get_color_config(&matches)?;
     let format = get_format(&matches, quiet, allow_unstable)?;
+    let pretty_print_assertions =
+        unstable_optflag!(matches, allow_unstable, "pretty-print-assertions");
 
     let options = Options::new().display_output(matches.opt_present("show-output"));
 
@@ -259,6 +267,7 @@ fn parse_opts_impl(matches: getopts::Matches) -> OptRes {
         nocapture,
         color,
         format,
+        pretty_print_assertions,
         test_threads,
         skip,
         time_options,

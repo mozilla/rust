@@ -500,6 +500,7 @@ pub fn test_opts(config: &Config) -> test::TestOpts {
             Err(_) => false,
         },
         color: config.color,
+        pretty_print_assertions: false,
         test_threads: None,
         skip: vec![],
         list: false,
