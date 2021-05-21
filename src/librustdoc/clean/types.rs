@@ -2178,7 +2178,6 @@ crate struct ImportSource {
 #[derive(Clone, Debug)]
 crate struct Macro {
     crate source: String,
-    crate imported_from: Option<Symbol>,
 }
 
 #[derive(Clone, Debug)]
