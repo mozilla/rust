@@ -27,20 +27,20 @@
 //! globally routable by an RFC, then in a future release [`Ipv4Addr::is_reserved()`] will return
 //! `false` for such addresses, while [`Ipv4Addr::is_global`] will return true.
 //!
-//! [`IpAddr`]: crate::net::IpAddr
-//! [`Ipv4Addr`]: crate::net::Ipv4Addr
-//! [`IpAddr::is_global()`]: crate::net::IpAddr::is_global()
-//! [`IpAddr::is_multicast()`]: crate::net::IpAddr::is_multicast()
-//! [`Ipv4Addr::is_reserved()`]: crate::net::Ipv4Addr::is_reserved()
-//! [`Ipv4Addr::is_global()`]: crate::net::Ipv4Addr::is_global()
-//! [`Ipv6Addr`]: crate::net::Ipv6Addr
-//! [`SocketAddr`]: crate::net::SocketAddr
-//! [`SocketAddrV4`]: crate::net::SocketAddrV4
-//! [`SocketAddrV6`]: crate::net::SocketAddrV6
-//! [`TcpListener`]: crate::net::TcpListener
-//! [`TcpStream`]: crate::net::TcpStream
-//! [`ToSocketAddrs`]: crate::net::ToSocketAddrs
-//! [`UdpSocket`]: crate::net::UdpSocket
+//! [`IpAddr`]: ../../std/net/enum.IpAddr.html
+//! [`Ipv4Addr`]: ../../std/net/struct.Ipv4Addr.html
+//! [`IpAddr::is_global()`]: ../../std/net/enum.IpAddr.html#method.is_global
+//! [`IpAddr::is_multicast()`]: ../../std/net/enum.IpAddr.html#method.is_multicast
+//! [`Ipv4Addr::is_reserved()`]: ../../std/net/struct.Ipv4Addr.html#method.is_reserved
+//! [`Ipv4Addr::is_global()`]: ../../std/net/struct.Ipv4Addr.html#method.is_global
+//! [`Ipv6Addr`]: ../../std/net/struct.Ipv6Addr.html
+//! [`SocketAddr`]: ../../std/net/enum.SocketAddr.html
+//! [`SocketAddrV4`]: ../../std/net/struct.SocketAddrV4.html
+//! [`SocketAddrV6`]: ../../std/net/struct.SocketAddrV6.html
+//! [`TcpListener`]: ../../std/net/struct.TcpListener.html
+//! [`TcpStream`]: ../../std/net/struct.TcpStream.html
+//! [`ToSocketAddrs`]: ../../std/net/trait.ToSocketAddrs.html
+//! [`UdpSocket`]: ../../std/net/struct.UdpSocket.html
 //! [IETF RFCs]: https://tools.ietf.org/rfc/index
 
 #![stable(feature = "rust1", since = "1.0.0")]
@@ -63,30 +63,41 @@ mod ip;
 mod parser;
 mod tcp;
 #[cfg(test)]
-mod test;
+mod tests;
 mod udp;
 
-/// Possible values which can be passed to the [`TcpStream::shutdown`] method.
+/// Possible values which can be passed to the [`shutdown`] method of
+/// [`TcpStream`].
+///
+/// [`shutdown`]: struct.TcpStream.html#method.shutdown
+/// [`TcpStream`]: struct.TcpStream.html
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[stable(feature = "rust1", since = "1.0.0")]
 pub enum Shutdown {
     /// The reading portion of the [`TcpStream`] should be shut down.
     ///
-    /// All currently blocked and future [reads] will return [`Ok`]`(0)`.
+    /// All currently blocked and future [reads] will return [`Ok(0)`].
     ///
-    /// [reads]: crate::io::Read
+    /// [`TcpStream`]: ../../std/net/struct.TcpStream.html
+    /// [reads]: ../../std/io/trait.Read.html
+    /// [`Ok(0)`]: ../../std/result/enum.Result.html#variant.Ok
     #[stable(feature = "rust1", since = "1.0.0")]
     Read,
     /// The writing portion of the [`TcpStream`] should be shut down.
     ///
     /// All currently blocked and future [writes] will return an error.
     ///
-    /// [writes]: crate::io::Write
+    /// [`TcpStream`]: ../../std/net/struct.TcpStream.html
+    /// [writes]: ../../std/io/trait.Write.html
     #[stable(feature = "rust1", since = "1.0.0")]
     Write,
     /// Both the reading and the writing portions of the [`TcpStream`] should be shut down.
     ///
     /// See [`Shutdown::Read`] and [`Shutdown::Write`] for more information.
+    ///
+    /// [`TcpStream`]: ../../std/net/struct.TcpStream.html
+    /// [`Shutdown::Read`]: #variant.Read
+    /// [`Shutdown::Write`]: #variant.Write
     #[stable(feature = "rust1", since = "1.0.0")]
     Both,
 }
@@ -116,6 +127,6 @@ where
         }
     }
     Err(last_err.unwrap_or_else(|| {
-        Error::new_const(ErrorKind::InvalidInput, &"could not resolve to any addresses")
+        Error::new(ErrorKind::InvalidInput, "could not resolve to any addresses")
     }))
 }
