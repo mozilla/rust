@@ -477,6 +477,7 @@ impl Build {
         unsafe {
             job::setup(self);
         }
+        env::set_var("CMAKE", self.config.cmake.as_ref().expect("cmake config"));
 
         if let Subcommand::Format { check, paths } = &self.config.cmd {
             return format::format(self, *check, &paths);
