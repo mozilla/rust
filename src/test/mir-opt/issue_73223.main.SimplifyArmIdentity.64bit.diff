@@ -26,6 +26,8 @@
       let mut _25: &i32;                   // in scope 0 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
       let _26: &i32;                       // in scope 0 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
       let mut _27: std::option::Option<std::fmt::Arguments>; // in scope 0 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
+      let mut _29: &i32;                   // in scope 0 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
+      let mut _30: &i32;                   // in scope 0 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
       scope 1 {
           debug split => _1;               // in scope 1 at $DIR/issue-73223.rs:2:9: 2:14
           let _6: std::option::Option<i32>; // in scope 1 at $DIR/issue-73223.rs:7:9: 7:14
@@ -77,7 +79,7 @@
           discriminant(_6) = 1;            // scope 1 at $DIR/issue-73223.rs:7:17: 7:28
           StorageDead(_7);                 // scope 1 at $DIR/issue-73223.rs:7:27: 7:28
           StorageLive(_8);                 // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
-          StorageLive(_9);                 // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
+          nop;                             // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
           StorageLive(_10);                // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
           _10 = &_1;                       // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
           StorageLive(_11);                // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
@@ -89,14 +91,14 @@
                                            // + span: $SRC_DIR/core/src/macros/mod.rs:LL:COL
                                            // + literal: Const { ty: &i32, val: Unevaluated(Unevaluated { def: WithOptConstParam { did: DefId(0:3 ~ issue_73223[2d0f]::main), const_param_did: None }, substs: [], promoted: Some(promoted[0]) }) }
           _11 = _28;                       // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
-          (_9.0: &i32) = move _10;         // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
-          (_9.1: &i32) = move _11;         // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
+          _29 = move _10;                  // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
+          _30 = move _11;                  // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
           StorageDead(_11);                // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
           StorageDead(_10);                // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
           StorageLive(_13);                // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
-          _13 = (_9.0: &i32);              // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
+          _13 = _29;                       // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
           StorageLive(_14);                // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
-          _14 = (_9.1: &i32);              // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
+          _14 = _30;                       // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
           StorageLive(_15);                // scope 4 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
           StorageLive(_16);                // scope 4 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
           StorageLive(_17);                // scope 4 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
@@ -150,7 +152,7 @@
           StorageDead(_15);                // scope 4 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
           StorageDead(_14);                // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
           StorageDead(_13);                // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
-          StorageDead(_9);                 // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
+          nop;                             // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
           StorageDead(_8);                 // scope 3 at $SRC_DIR/core/src/macros/mod.rs:LL:COL
           nop;                             // scope 0 at $DIR/issue-73223.rs:1:11: 9:2
           StorageDead(_6);                 // scope 1 at $DIR/issue-73223.rs:9:1: 9:2
