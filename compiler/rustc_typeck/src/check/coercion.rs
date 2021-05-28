@@ -713,8 +713,13 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         //! into a closure or a `proc`.
 
         let b = self.shallow_resolve(b);
-        let InferOk { value: b, mut obligations } =
-            self.normalize_associated_types_in_as_infer_ok(self.cause.span, b);
+        let (b, mut obligations) = if self.tcx().sess.opts.debugging_opts.project_under_binders {
+            let InferOk { value: b, obligations } =
+                self.normalize_associated_types_in_as_infer_ok(self.cause.span, b);
+            (b, obligations)
+        } else {
+            (b, vec![])
+        };
         debug!("coerce_from_fn_item(a={:?}, b={:?})", a, b);
 
         match b.kind() {

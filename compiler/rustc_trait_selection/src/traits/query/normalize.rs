@@ -103,6 +103,9 @@ impl<'cx, 'tcx> TypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
     where
         T: TypeFoldable<'tcx>,
     {
+        if !self.tcx().sess.opts.debugging_opts.project_under_binders || !t.as_ref().skip_binder().has_escaping_bound_vars() {
+            return t.super_fold_with(self);
+        }
         let infcx = self.infcx;
         let bound_vars = t.bound_vars();
         let (with_placeholders, mapped_regions, mapped_types, mapped_consts) =

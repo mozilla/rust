@@ -998,7 +998,11 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
         );
         for user_annotation in self.user_type_annotations {
             let CanonicalUserTypeAnnotation { span, ref user_ty, inferred_ty } = *user_annotation;
-            let inferred_ty = self.normalize(inferred_ty, Locations::All(span));
+            let inferred_ty = if self.tcx().sess.opts.debugging_opts.project_under_binders {
+                self.normalize(inferred_ty, Locations::All(span))
+            } else {
+                inferred_ty
+            };
             let (annotation, _) =
                 self.infcx.instantiate_canonical_with_fresh_inference_vars(span, user_ty);
             match annotation {
