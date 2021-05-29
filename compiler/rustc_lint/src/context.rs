@@ -373,6 +373,7 @@ impl LintStore {
                     Level::ForceWarn => "--force-warns",
                     Level::Deny => "-D",
                     Level::Forbid => "-F",
+                    Level::Expect => unreachable!("lints with the level of `expect` should not run this code"),
                 },
                 lint_name
             );
