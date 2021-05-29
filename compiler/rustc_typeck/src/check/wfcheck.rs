@@ -1124,14 +1124,16 @@ fn check_method_receiver<'fcx, 'tcx>(
     let receiver_ty = sig.inputs()[0];
 
     let receiver_ty = if fcx.tcx.sess.opts.debugging_opts.project_under_binders {
-        let receiver_ty =
-            fcx.tcx.liberate_late_bound_regions(method.def_id, ty::Binder::bind(receiver_ty, fcx.tcx));
+        let receiver_ty = fcx
+            .tcx
+            .liberate_late_bound_regions(method.def_id, ty::Binder::bind(receiver_ty, fcx.tcx));
         let receiver_ty = fcx.normalize_associated_types_in(span, receiver_ty);
         receiver_ty
     } else {
         let receiver_ty = fcx.normalize_associated_types_in(span, receiver_ty);
-        let receiver_ty =
-            fcx.tcx.liberate_late_bound_regions(method.def_id, ty::Binder::bind(receiver_ty, fcx.tcx));
+        let receiver_ty = fcx
+            .tcx
+            .liberate_late_bound_regions(method.def_id, ty::Binder::bind(receiver_ty, fcx.tcx));
         receiver_ty
     };
     let receiver_ty =

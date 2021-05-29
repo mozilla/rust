@@ -995,10 +995,11 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         let get_lifetimes = |sig| {
             use rustc_hir::def::Namespace;
             let mut s = String::new();
-            let (_, sig, lts) = ty::print::FmtPrinter::new(self.tcx, &mut s, Namespace::TypeNS)
+            let (_, sig, reg) = ty::print::FmtPrinter::new(self.tcx, &mut s, Namespace::TypeNS)
                 .name_all_regions(sig)
                 .unwrap();
-            (lts, sig)
+            let lts: Vec<String> = reg.into_iter().map(|(_, kind)| kind.to_string()).collect();
+            (if lts.is_empty() { String::new() } else { format!("for<{}> ", lts.join(", ")) }, sig)
         };
 
         let (lt1, sig1) = get_lifetimes(sig1);

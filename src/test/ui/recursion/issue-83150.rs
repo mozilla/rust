@@ -1,7 +1,5 @@
 // build-fail
  //~^ overflow evaluating
-// compile-flags: -Zproject_under_binders=no
- #![recursion_limit="45"]
 fn main() {
     let mut iter = 0u8..1;
     func(&mut iter)

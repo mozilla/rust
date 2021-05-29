@@ -1775,13 +1775,62 @@ impl<F: fmt::Write> FmtPrinter<'_, '_, F> {
     }
 }
 
+fn shift_region(tcx: TyCtxt<'tcx>, region: ty::Region<'tcx>, shift: u32) -> ty::Region<'tcx> {
+    match region {
+        ty::ReLateBound(db, br) => {
+            tcx.reuse_or_mk_region(region, ty::ReLateBound(db.shifted_in(shift), *br))
+        }
+        _ => region,
+    }
+}
+
+struct RegionFolder<'a, 'tcx> {
+    tcx: TyCtxt<'tcx>,
+    current_index: ty::DebruijnIndex,
+    fold_region_fn:
+        &'a mut (dyn FnMut(ty::Region<'tcx>, ty::DebruijnIndex) -> ty::Region<'tcx> + 'a),
+}
+
+impl<'a, 'tcx> ty::TypeFolder<'tcx> for RegionFolder<'a, 'tcx> {
+    fn tcx<'b>(&'b self) -> TyCtxt<'tcx> {
+        self.tcx
+    }
+
+    fn fold_binder<T: TypeFoldable<'tcx>>(
+        &mut self,
+        t: ty::Binder<'tcx, T>,
+    ) -> ty::Binder<'tcx, T> {
+        self.current_index.shift_in(1);
+        let t = t.super_fold_with(self);
+        self.current_index.shift_out(1);
+        t
+    }
+
+    fn fold_ty(&mut self, t: Ty<'tcx>) -> Ty<'tcx> {
+        match *t.kind() {
+            _ if t.has_vars_bound_at_or_above(self.current_index) || t.has_placeholders() => {
+                return t.super_fold_with(self);
+            }
+            _ => {}
+        }
+        t
+    }
+
+    fn fold_region(&mut self, r: ty::Region<'tcx>) -> ty::Region<'tcx> {
+        match *r {
+            ty::ReLateBound(debruijn, _) if debruijn < self.current_index => r,
+            _ => (self.fold_region_fn)(r, self.current_index),
+        }
+    }
+}
+
 // HACK(eddyb) limited to `FmtPrinter` because of `binder_depth`,
 // `region_index` and `used_region_names`.
 impl<F: fmt::Write> FmtPrinter<'_, 'tcx, F> {
     pub fn name_all_regions<T>(
         mut self,
         value: &ty::Binder<'tcx, T>,
-    ) -> Result<(Self, T, String), fmt::Error>
+    ) -> Result<(Self, T, BTreeMap<ty::BoundRegionKind, ty::Region<'tcx>>), fmt::Error>
     where
         T: Print<'tcx, Self, Output = Self, Error = fmt::Error> + TypeFoldable<'tcx>,
     {
@@ -1802,22 +1851,18 @@ impl<F: fmt::Write> FmtPrinter<'_, 'tcx, F> {
             self.prepare_late_bound_region_info(value);
         }
 
-        let mut binders_string = "".to_string();
         let mut empty = true;
-        let mut start_or_continue =
-            |cx: &mut Self, binders_string: &mut String, start: &str, cont: &str| {
-                let w = if empty {
-                    empty = false;
-                    start
-                } else {
-                    cont
-                };
-                let _ = write!(cx, "{}", w);
-                let _ = write!(binders_string, "{}", w);
+        let mut start_or_continue = |cx: &mut Self, start: &str, cont: &str| {
+            let w = if empty {
+                empty = false;
+                start
+            } else {
+                cont
             };
-        let do_continue = |cx: &mut Self, binders_string: &mut String, cont: Symbol| {
+            let _ = write!(cx, "{}", w);
+        };
+        let do_continue = |cx: &mut Self, cont: Symbol| {
             let _ = write!(cx, "{}", cont);
-            let _ = write!(binders_string, "{}", cont.to_string());
         };
 
         define_scoped_cx!(self);
@@ -1834,11 +1879,11 @@ impl<F: fmt::Write> FmtPrinter<'_, 'tcx, F> {
             for var in bound_vars {
                 match var {
                     ty::BoundVariableKind::Region(ty::BrNamed(_, name)) => {
-                        start_or_continue(&mut self, &mut binders_string, "for<", ", ");
-                        do_continue(&mut self, &mut binders_string, name);
+                        start_or_continue(&mut self, "for<", ", ");
+                        do_continue(&mut self, name);
                     }
                     ty::BoundVariableKind::Region(ty::BrAnon(i)) => {
-                        start_or_continue(&mut self, &mut binders_string, "for<", ", ");
+                        start_or_continue(&mut self, "for<", ", ");
                         let name = loop {
                             let name = name_by_region_index(region_index);
                             region_index += 1;
@@ -1846,11 +1891,11 @@ impl<F: fmt::Write> FmtPrinter<'_, 'tcx, F> {
                                 break name;
                             }
                         };
-                        do_continue(&mut self, &mut binders_string, name);
+                        do_continue(&mut self, name);
                         region_map.insert(i + 1, name);
                     }
                     ty::BoundVariableKind::Region(ty::BrEnv) => {
-                        start_or_continue(&mut self, &mut binders_string, "for<", ", ");
+                        start_or_continue(&mut self, "for<", ", ");
                         let name = loop {
                             let name = name_by_region_index(region_index);
                             region_index += 1;
@@ -1858,46 +1903,44 @@ impl<F: fmt::Write> FmtPrinter<'_, 'tcx, F> {
                                 break name;
                             }
                         };
-                        do_continue(&mut self, &mut binders_string, name);
+                        do_continue(&mut self, name);
                         region_map.insert(0, name);
                     }
                     _ => continue,
                 }
             }
-            start_or_continue(&mut self, &mut binders_string, "", "> ");
+            start_or_continue(&mut self, "", "> ");
 
-            self.tcx
-                .replace_late_bound_regions(value.clone(), |br| {
-                    let kind = match br.kind {
-                        ty::BrNamed(_, _) => br.kind,
-                        ty::BrAnon(i) => {
-                            let name = region_map[&(i + 1)];
-                            ty::BrNamed(DefId::local(CRATE_DEF_INDEX), name)
-                        }
-                        ty::BrEnv => {
-                            let name = region_map[&0];
-                            ty::BrNamed(DefId::local(CRATE_DEF_INDEX), name)
-                        }
-                    };
-                    self.tcx.mk_region(ty::ReLateBound(
-                        ty::INNERMOST,
-                        ty::BoundRegion { var: br.var, kind },
-                    ))
-                })
-                .0
+            self.tcx.replace_late_bound_regions(value.clone(), |br| {
+                let kind = match br.kind {
+                    ty::BrNamed(_, _) => br.kind,
+                    ty::BrAnon(i) => {
+                        let name = region_map[&(i + 1)];
+                        ty::BrNamed(DefId::local(CRATE_DEF_INDEX), name)
+                    }
+                    ty::BrEnv => {
+                        let name = region_map[&0];
+                        ty::BrNamed(DefId::local(CRATE_DEF_INDEX), name)
+                    }
+                };
+                self.tcx.mk_region(ty::ReLateBound(
+                    ty::INNERMOST,
+                    ty::BoundRegion { var: br.var, kind },
+                ))
+            })
         } else {
             let mut region_map: BTreeMap<ty::BoundRegionKind, ty::Region<'tcx>> = BTreeMap::new();
-            let new_value = self.tcx.fold_regions(
-                value.clone().skip_binder(),
-                &mut false,
-                |r, current_index| {
+            let new_value = value.clone().skip_binder().fold_with(&mut RegionFolder {
+                tcx: self.tcx,
+                current_index: ty::INNERMOST,
+                fold_region_fn: &mut |r, current_index| {
                     match *r {
                         ty::ReLateBound(db, br) if db == current_index => {
                             let region = region_map.entry(br.kind).or_insert_with(|| {
-                                start_or_continue(&mut self, &mut binders_string, "for<", ", ");
+                                start_or_continue(&mut self, "for<", ", ");
                                 let kind = match br.kind {
                                     ty::BrNamed(_, name) => {
-                                        do_continue(&mut self, &mut binders_string, name);
+                                        do_continue(&mut self, name);
                                         br.kind
                                     }
                                     ty::BrAnon(_) | ty::BrEnv => {
@@ -1908,7 +1951,7 @@ impl<F: fmt::Write> FmtPrinter<'_, 'tcx, F> {
                                                 break name;
                                             }
                                         };
-                                        do_continue(&mut self, &mut binders_string, name);
+                                        do_continue(&mut self, name);
                                         ty::BrNamed(DefId::local(CRATE_DEF_INDEX), name)
                                     }
                                 };
@@ -1917,19 +1960,14 @@ impl<F: fmt::Write> FmtPrinter<'_, 'tcx, F> {
                                     ty::BoundRegion { var: br.var, kind },
                                 ))
                             });
-                            ty::fold::shift_vars(self.tcx, region, current_index.as_u32())
+                            shift_region(self.tcx, region, current_index.as_u32())
                         }
                         ty::RePlaceholder(ty::PlaceholderRegion { name: kind, .. }) => {
                             let region = region_map.entry(kind).or_insert_with(|| {
                                 let kind = match kind {
                                     ty::BrNamed(_, name) => {
-                                        start_or_continue(
-                                            &mut self,
-                                            &mut binders_string,
-                                            "for<",
-                                            ", ",
-                                        );
-                                        do_continue(&mut self, &mut binders_string, name);
+                                        start_or_continue(&mut self, "for<", ", ");
+                                        do_continue(&mut self, name);
                                         kind
                                     }
                                     ty::BrAnon(_) | ty::BrEnv => {
@@ -1942,19 +1980,19 @@ impl<F: fmt::Write> FmtPrinter<'_, 'tcx, F> {
                                     ty::BoundRegion { var: ty::BoundVar::from_u32(0), kind },
                                 ))
                             });
-                            ty::fold::shift_vars(self.tcx, region, current_index.as_u32())
+                            shift_region(self.tcx, region, current_index.as_u32())
                         }
                         _ => r,
                     }
                 },
-            );
-            start_or_continue(&mut self, &mut binders_string, "", "> ");
-            new_value
+            });
+            start_or_continue(&mut self, "", "> ");
+            (new_value, region_map)
         };
 
         self.binder_depth += 1;
         self.region_index = region_index;
-        Ok((self, new_value, binders_string))
+        Ok((self, new_value.0, new_value.1))
     }
 
     pub fn pretty_in_binder<T>(self, value: &ty::Binder<'tcx, T>) -> Result<Self, fmt::Error>

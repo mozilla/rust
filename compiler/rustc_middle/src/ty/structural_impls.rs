@@ -946,6 +946,10 @@ impl<'tcx> TypeFoldable<'tcx> for Ty<'tcx> {
     fn visit_with<V: TypeVisitor<'tcx>>(&self, visitor: &mut V) -> ControlFlow<V::BreakTy> {
         visitor.visit_ty(self)
     }
+
+    fn has_type_flags(&self, flags: ty::TypeFlags) -> bool {
+        self.flags().intersects(flags)
+    }
 }
 
 impl<'tcx> TypeFoldable<'tcx> for ty::Region<'tcx> {
