@@ -59,6 +59,17 @@ fn escaping_locals(body: &Body<'_>) -> FxHashSet<Local> {
                 self.super_place(place, context, location);
             }
         }
+
+        fn visit_rvalue(&mut self, rvalue: &Rvalue<'tcx>, location: Location) {
+            if let Rvalue::AddressOf(..) | Rvalue::Ref(..) = rvalue {
+                // Raw pointers may be used to access anything inside the enclosing place.
+                self.escaping = true;
+                self.super_rvalue(rvalue, location);
+                self.escaping = false;
+            } else {
+                self.super_rvalue(rvalue, location)
+            }
+        }
     }
 }
 
