@@ -25,6 +25,7 @@ impl<'tcx> MirPass<'tcx> for FlattenLocals {
 
         let mut visitor = FlattenVisitor { tcx, map: &replacements, all_dead_locals };
         visitor.visit_body(body);
+        super::simplify::simplify_locals(body, tcx);
     }
 }
 
