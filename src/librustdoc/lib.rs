@@ -603,7 +603,7 @@ fn opts() -> Vec<RustcOptGroup> {
             o.optflag("", "show-type-layout", "Include the memory layout of types in the docs")
         }),
         unstable("scrape-examples", |o| o.optmulti("", "scrape-examples", "", "")),
-        unstable("repository-url", |o| o.optopt("", "repository-url", "", "TODO")),
+        unstable("repository-url", |o| o.optopt("", "repository-url", "", "")),
     ]
 }
 

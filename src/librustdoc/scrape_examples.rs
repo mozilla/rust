@@ -107,16 +107,16 @@ impl rustc_driver::Callbacks for Callbacks {
 /// * `krate` is the name of the crate being documented.
 pub fn scrape(examples: &[String], krate: &str) -> interface::Result<AllCallLocations> {
     // Scrape each crate in parallel
-    // TODO(wcrichto): do we need optional support for no rayon?
+    // FIXME(wcrichto): do we need optional support for no rayon?
     let maps = examples
         .par_iter()
         .map(|example| {
-            // TODO(wcrichto): is there a more robust way to get arguments than split(" ")?
+            // FIXME(wcrichto): is there a more robust way to get arguments than split(" ")?
             let mut args = example.split(" ").map(|s| s.to_owned()).collect::<Vec<_>>();
             let file_name = args[0].clone();
             args.insert(0, "_".to_string());
 
-            // TODO(wcrichto): is there any setup / cleanup that needs to be performed
+            // FIXME(wcrichto): is there any setup / cleanup that needs to be performed
             // here upon the invocation of rustc_driver?
             debug!("Scraping examples from krate {} with args:\n{:?}", krate, args);
             let mut callbacks =
