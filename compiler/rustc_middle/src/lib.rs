@@ -50,6 +50,7 @@
 #![feature(associated_type_defaults)]
 #![feature(iter_zip)]
 #![feature(thread_local_const_init)]
+#![feature(unwrap_infallible)]
 #![recursion_limit = "512"]
 
 #[macro_use]
