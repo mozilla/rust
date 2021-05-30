@@ -269,6 +269,23 @@ macro_rules! hash_result {
     };
 }
 
+macro_rules! get_provider {
+    ([][$tcx:expr, $name:ident, $key:expr]) => {{
+        $tcx.queries.local_providers.$name
+    }};
+    ([(separate_provide_extern) $($rest:tt)*][$tcx:expr, $name:ident, $key:expr]) => {{
+        let is_local = $key.query_crate() == LOCAL_CRATE;
+        if is_local {
+            $tcx.queries.local_providers.$name
+        } else {
+            $tcx.queries.extern_providers.$name
+        }
+    }};
+    ([$other:tt $($modifiers:tt)*][$($args:tt)*]) => {
+        get_provider!([$($modifiers)*][$($args)*])
+    };
+}
+
 macro_rules! define_queries {
     (<$tcx:tt>
      $($(#[$attr:meta])*
@@ -356,11 +373,7 @@ macro_rules! define_queries {
             fn compute_fn(tcx: QueryCtxt<'tcx>, key: &Self::Key) ->
                 fn(TyCtxt<'tcx>, Self::Key) -> Self::Value
             {
-                if key.query_crate_is_local() {
-                    tcx.queries.local_providers.$name
-                } else {
-                    tcx.queries.extern_providers.$name
-                }
+                get_provider!([$($modifiers)*][tcx, $name, key])
             }
 
             fn hash_result(
@@ -460,7 +473,7 @@ macro_rules! define_queries_struct {
      input: ($(([$($modifiers:tt)*] [$($attr:tt)*] [$name:ident]))*)) => {
         pub struct Queries<$tcx> {
             local_providers: Box<Providers>,
-            extern_providers: Box<Providers>,
+            extern_providers: Box<ExternProviders>,
 
             $($(#[$attr])*  $name: QueryState<
                 crate::dep_graph::DepKind,
@@ -471,7 +484,7 @@ macro_rules! define_queries_struct {
         impl<$tcx> Queries<$tcx> {
             pub fn new(
                 local_providers: Providers,
-                extern_providers: Providers,
+                extern_providers: ExternProviders,
             ) -> Self {
                 Queries {
                     local_providers: Box::new(local_providers),

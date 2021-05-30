@@ -26,7 +26,7 @@ use rustc_hir::LangItem;
 use rustc_middle::dep_graph::WorkProduct;
 use rustc_middle::middle::cstore::{self, CrateSource, LibSource};
 use rustc_middle::middle::dependency_format::Dependencies;
-use rustc_middle::ty::query::Providers;
+use rustc_middle::ty::query::{ExternProviders, Providers};
 use rustc_session::config::{OutputFilenames, OutputType, RUST_CGU_EXT};
 use rustc_session::utils::NativeLibKind;
 use rustc_span::symbol::Symbol;
@@ -168,7 +168,7 @@ pub fn provide(providers: &mut Providers) {
     crate::target_features::provide(providers);
 }
 
-pub fn provide_extern(providers: &mut Providers) {
+pub fn provide_extern(providers: &mut ExternProviders) {
     crate::back::symbol_export::provide_extern(providers);
 }
 
