@@ -235,19 +235,30 @@ impl<K: DepKind> DepGraph<K> {
         cx: Ctxt,
         arg: A,
         token: QueryJobId<K>,
-        diagnostics: Option<&Lock<ThinVec<Diagnostic>>>,
         task: fn(Ctxt::DepContext, A) -> R,
         hash_result: fn(&mut Ctxt::StableHashingContext, &R) -> Option<Fingerprint>,
     ) -> (R, DepNodeIndex) {
-        self.with_task_impl(
+        let prof_timer = cx.dep_context().profiler().query_provider();
+        let diagnostics = Lock::new(ThinVec::new());
+        let (result, dep_node_index) = self.with_task_impl(
             key,
             cx,
             arg,
             |arg, task_deps| {
-                cx.start_query(token, diagnostics, task_deps, || task(*cx.dep_context(), arg))
+                cx.start_query(token, Some(&diagnostics), task_deps, || {
+                    task(*cx.dep_context(), arg)
+                })
             },
             hash_result,
-        )
+        );
+        let diagnostics = diagnostics.into_inner();
+
+        prof_timer.finish_with_query_invocation_id(dep_node_index.into());
+
+        if unlikely!(!diagnostics.is_empty()) {
+            cx.store_diagnostics(dep_node_index, diagnostics)
+        }
+        (result, dep_node_index)
     }
 
     fn with_task_impl<Ctxt: HasDepContext<DepKind = K>, A: Debug, R>(
@@ -347,7 +358,6 @@ impl<K: DepKind> DepGraph<K> {
         cx: Ctxt,
         dep_kind: K,
         token: QueryJobId<K>,
-        diagnostics: Option<&Lock<ThinVec<Diagnostic>>>,
         op: OP,
     ) -> (R, DepNodeIndex)
     where
@@ -355,9 +365,21 @@ impl<K: DepKind> DepGraph<K> {
     {
         debug_assert!(!dep_kind.is_eval_always());
 
-        self.with_anon_task_impl(*cx.dep_context(), dep_kind, |task_deps| {
-            cx.start_query(token, diagnostics, task_deps, op)
-        })
+        let prof_timer = cx.dep_context().profiler().query_provider();
+        let diagnostics = Lock::new(ThinVec::new());
+
+        let (result, dep_node_index) =
+            self.with_anon_task_impl(*cx.dep_context(), dep_kind, |task_deps| {
+                cx.start_query(token, Some(&diagnostics), task_deps, op)
+            });
+        let diagnostics = diagnostics.into_inner();
+
+        prof_timer.finish_with_query_invocation_id(dep_node_index.into());
+
+        if unlikely!(!diagnostics.is_empty()) {
+            cx.store_diagnostics_for_anon_node(dep_node_index, diagnostics)
+        }
+        (result, dep_node_index)
     }
 
     fn with_anon_task_impl<Ctxt: DepContext<DepKind = K>, R>(

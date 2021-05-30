@@ -15,8 +15,7 @@ use rustc_data_structures::fx::{FxHashMap, FxHasher};
 #[cfg(parallel_compiler)]
 use rustc_data_structures::profiling::TimingGuard;
 use rustc_data_structures::sharded::{get_shard_index_by_hash, Sharded};
-use rustc_data_structures::sync::{Lock, LockGuard};
-use rustc_data_structures::thin_vec::ThinVec;
+use rustc_data_structures::sync::LockGuard;
 use rustc_errors::{DiagnosticBuilder, FatalError};
 use rustc_span::{Span, DUMMY_SP};
 use std::collections::hash_map::Entry;
@@ -477,42 +476,15 @@ where
         }
     }
 
-    let prof_timer = tcx.dep_context().profiler().query_provider();
-    let diagnostics = Lock::new(ThinVec::new());
-
-    let (result, dep_node_index) = if query.anon {
-        dep_graph.with_anon_query(tcx, query.dep_kind, job_id, Some(&diagnostics), || {
-            compute(*tcx.dep_context(), key)
-        })
+    if query.anon {
+        dep_graph.with_anon_query(tcx, query.dep_kind, job_id, || compute(*tcx.dep_context(), key))
     } else {
         // `to_dep_node` is expensive for some `DepKind`s.
         let dep_node =
             *dep_node_opt.get_or_insert_with(&|| query.to_dep_node(*tcx.dep_context(), &key));
 
-        dep_graph.with_query(
-            dep_node,
-            tcx,
-            key,
-            job_id,
-            Some(&diagnostics),
-            compute,
-            query.hash_result,
-        )
-    };
-
-    let diagnostics = diagnostics.into_inner();
-
-    prof_timer.finish_with_query_invocation_id(dep_node_index.into());
-
-    if unlikely!(!diagnostics.is_empty()) {
-        if query.anon {
-            tcx.store_diagnostics_for_anon_node(dep_node_index, diagnostics)
-        } else {
-            tcx.store_diagnostics(dep_node_index, diagnostics)
-        }
+        dep_graph.with_query(dep_node, tcx, key, job_id, compute, query.hash_result)
     }
-
-    (result, dep_node_index)
 }
 
 fn try_load_from_disk_and_cache_in_memory<CTX, K, V>(
