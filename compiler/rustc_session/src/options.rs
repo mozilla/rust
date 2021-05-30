@@ -1214,8 +1214,6 @@ options! {
         (default based on relative source path)"),
     profiler_runtime: Option<String> = (Some(String::from("profiler_builtins")), parse_opt_string, [TRACKED],
         "name of the profiler runtime crate to automatically inject, or None to disable"),
-    project_under_binders: bool = (true, parse_bool, [TRACKED],
-        "normalize projections under binders"),
     query_dep_graph: bool = (false, parse_bool, [UNTRACKED],
         "enable queries of the dependency graph for regression testing (default: no)"),
     query_stats: bool = (false, parse_bool, [UNTRACKED],

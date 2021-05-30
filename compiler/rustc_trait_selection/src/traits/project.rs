@@ -330,9 +330,7 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
     where
         T: TypeFoldable<'tcx>,
     {
-        if !self.tcx().sess.opts.debugging_opts.project_under_binders
-            || !t.as_ref().skip_binder().has_escaping_bound_vars()
-        {
+        if !t.as_ref().skip_binder().has_escaping_bound_vars() {
             return t.super_fold_with(self);
         }
         let infcx = self.selcx.infcx();
