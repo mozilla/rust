@@ -9,7 +9,7 @@ use rustc_hir::{
 };
 use rustc_interface::interface;
 use rustc_middle::hir::map::Map;
-use rustc_middle::ty::{TyCtxt, TyKind};
+use rustc_middle::ty::{self, TyCtxt};
 use rustc_span::symbol::Symbol;
 
 crate type FnCallLocations = FxHashMap<String, Vec<(usize, usize)>>;
@@ -60,7 +60,7 @@ where
         };
 
         // Save call site if the function resovles to a concrete definition
-        if let TyKind::FnDef(def_id, _) = ty.kind() {
+        if let ty::FnDef(def_id, _) = ty.kind() {
             if self.tcx.crate_name(def_id.krate) == self.krate {
                 let key = self.tcx.def_path(*def_id).to_string_no_crate_verbose();
                 let entries = self.calls.entry(key).or_insert_with(FxHashMap::default);
