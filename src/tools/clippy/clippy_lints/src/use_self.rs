@@ -281,7 +281,7 @@ impl<'tcx> LateLintPass<'tcx> for UseSelf {
 
     fn check_expr(&mut self, cx: &LateContext<'_>, expr: &Expr<'_>) {
         fn expr_ty_matches(cx: &LateContext<'_>, expr: &Expr<'_>, self_ty: Ty<'_>) -> bool {
-            let def_id = expr.hir_id.owner;
+            let def_id = expr.hir_id.owner.def_id;
             if cx.tcx.has_typeck_results(def_id) {
                 cx.tcx.typeck(def_id).expr_ty_opt(expr) == Some(self_ty)
             } else {

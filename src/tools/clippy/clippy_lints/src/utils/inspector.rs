@@ -386,7 +386,7 @@ fn print_item(cx: &LateContext<'_>, item: &hir::Item<'_>) {
     }
     match item.kind {
         hir::ItemKind::ExternCrate(ref _renamed_from) => {
-            if let Some(crate_id) = cx.tcx.extern_mod_stmt_cnum(did) {
+            if let Some(crate_id) = cx.tcx.extern_mod_stmt_cnum(did.def_id) {
                 let source = cx.tcx.used_crate_source(crate_id);
                 if let Some(ref src) = source.dylib {
                     println!("extern crate dylib source: {:?}", src.0);

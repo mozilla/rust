@@ -121,13 +121,13 @@ impl<'tcx> LateLintPass<'tcx> for NeedlessBorrow {
         let attrs = cx.tcx.hir().attrs(item.hir_id());
         if is_automatically_derived(attrs) {
             debug_assert!(self.derived_item.is_none());
-            self.derived_item = Some(item.def_id);
+            self.derived_item = Some(item.def_id.def_id);
         }
     }
 
     fn check_item_post(&mut self, _: &LateContext<'tcx>, item: &'tcx Item<'_>) {
         if let Some(id) = self.derived_item {
-            if item.def_id == id {
+            if item.def_id.def_id == id {
                 self.derived_item = None;
             }
         }

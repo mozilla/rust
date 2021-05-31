@@ -62,7 +62,7 @@ use crate::ty::TyCtxt;
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_hir::def_id::{CrateNum, DefId, LocalDefId, CRATE_DEF_INDEX};
 use rustc_hir::definitions::DefPathHash;
-use rustc_hir::HirId;
+use rustc_hir::{HirId, HirOwner};
 use rustc_span::symbol::Symbol;
 use std::hash::Hash;
 
@@ -426,6 +426,25 @@ impl<'tcx> DepNodeParams<TyCtxt<'tcx>> for LocalDefId {
     }
 }
 
+impl<'tcx> DepNodeParams<TyCtxt<'tcx>> for HirOwner {
+    #[inline(always)]
+    fn can_reconstruct_query_key() -> bool {
+        LocalDefId::can_reconstruct_query_key()
+    }
+
+    fn to_fingerprint(&self, tcx: TyCtxt<'tcx>) -> Fingerprint {
+        self.def_id.to_fingerprint(tcx)
+    }
+
+    fn to_debug_str(&self, tcx: TyCtxt<'tcx>) -> String {
+        self.def_id.to_debug_str(tcx)
+    }
+
+    fn recover(tcx: TyCtxt<'tcx>, dep_node: &DepNode) -> Option<Self> {
+        LocalDefId::recover(tcx, dep_node).map(|def_id| HirOwner { def_id })
+    }
+}
+
 impl<'tcx> DepNodeParams<TyCtxt<'tcx>> for CrateNum {
     #[inline(always)]
     fn can_reconstruct_query_key() -> bool {
@@ -483,7 +502,7 @@ impl<'tcx> DepNodeParams<TyCtxt<'tcx>> for HirId {
     fn to_fingerprint(&self, tcx: TyCtxt<'tcx>) -> Fingerprint {
         let HirId { owner, local_id } = *self;
 
-        let def_path_hash = tcx.def_path_hash(owner.to_def_id());
+        let def_path_hash = tcx.def_path_hash(owner.def_id.to_def_id());
         let local_id = Fingerprint::from_smaller_hash(local_id.as_u32().into());
 
         def_path_hash.0.combine(local_id)

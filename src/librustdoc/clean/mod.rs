@@ -1292,7 +1292,7 @@ fn clean_qpath(hir_ty: &hir::Ty<'_>, cx: &mut DocContext<'_>) -> Type {
             };
             Type::QPath {
                 name: p.segments.last().expect("segments were empty").ident.name,
-                self_def_id: Some(DefId::local(qself.hir_id.owner.local_def_index)),
+                self_def_id: Some(DefId::local(qself.hir_id.owner.def_id.local_def_index)),
                 self_type: box qself.clean(cx),
                 trait_: box resolve_type(cx, trait_path, hir_id),
             }
@@ -1975,7 +1975,7 @@ fn clean_extern_crate(
     cx: &mut DocContext<'_>,
 ) -> Vec<Item> {
     // this is the ID of the `extern crate` statement
-    let cnum = cx.tcx.extern_mod_stmt_cnum(krate.def_id).unwrap_or(LOCAL_CRATE);
+    let cnum = cx.tcx.extern_mod_stmt_cnum(krate.def_id.def_id).unwrap_or(LOCAL_CRATE);
     // this is the ID of the crate itself
     let crate_def_id = DefId { krate: cnum, index: CRATE_DEF_INDEX };
     let attrs = cx.tcx.hir().attrs(krate.hir_id());

@@ -221,7 +221,7 @@ impl<'tcx> LateLintPass<'tcx> for DocMarkdown {
                     let body = cx.tcx.hir().body(body_id);
                     let mut fpu = FindPanicUnwrap {
                         cx,
-                        typeck_results: cx.tcx.typeck(item.def_id),
+                        typeck_results: cx.tcx.typeck(item.def_id.def_id),
                         panic_span: None,
                     };
                     fpu.visit_expr(&body.value);
@@ -269,7 +269,7 @@ impl<'tcx> LateLintPass<'tcx> for DocMarkdown {
             let body = cx.tcx.hir().body(body_id);
             let mut fpu = FindPanicUnwrap {
                 cx,
-                typeck_results: cx.tcx.typeck(item.def_id),
+                typeck_results: cx.tcx.typeck(item.def_id.def_id),
                 panic_span: None,
             };
             fpu.visit_expr(&body.value);

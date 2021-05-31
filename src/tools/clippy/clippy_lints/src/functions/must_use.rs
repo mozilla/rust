@@ -178,7 +178,7 @@ fn is_mutable_pat(cx: &LateContext<'_>, pat: &hir::Pat<'_>, tys: &mut DefIdSet) 
         return false; // ignore `_` patterns
     }
     if cx.tcx.has_typeck_results(pat.hir_id.owner.to_def_id()) {
-        is_mutable_ty(cx, cx.tcx.typeck(pat.hir_id.owner).pat_ty(pat), pat.span, tys)
+        is_mutable_ty(cx, cx.tcx.typeck(pat.hir_id.owner.def_id).pat_ty(pat), pat.span, tys)
     } else {
         false
     }
@@ -227,7 +227,7 @@ impl<'a, 'tcx> intravisit::Visitor<'tcx> for StaticMutVisitor<'a, 'tcx> {
                     if self.cx.tcx.has_typeck_results(arg.hir_id.owner.to_def_id())
                         && is_mutable_ty(
                             self.cx,
-                            self.cx.tcx.typeck(arg.hir_id.owner).expr_ty(arg),
+                            self.cx.tcx.typeck(arg.hir_id.owner.def_id).expr_ty(arg),
                             arg.span,
                             &mut tys,
                         )
