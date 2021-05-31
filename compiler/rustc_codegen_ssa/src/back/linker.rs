@@ -994,8 +994,8 @@ impl<'a> Linker for EmLinker<'a> {
         self.link_rlib(lib);
     }
 
-    fn link_rust_dylib(&mut self, lib: Symbol, _path: &Path) {
-        self.link_dylib(lib, false, true);
+    fn link_rust_dylib(&mut self, _lib: Symbol, _path: &Path) {
+        panic!("rust dylibs not supported")
     }
 
     fn link_rlib(&mut self, lib: &Path) {
