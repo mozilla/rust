@@ -103,6 +103,9 @@ impl<'cx, 'tcx> TypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
     where
         T: TypeFoldable<'tcx>,
     {
+        if !t.has_projections() {
+            return t;
+        }
         if !t.as_ref().skip_binder().has_escaping_bound_vars() {
             return t.super_fold_with(self);
         }
@@ -177,18 +180,6 @@ impl<'cx, 'tcx> TypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
             }
 
             ty::Projection(data) if !data.has_escaping_bound_vars() => {
-                // This is kind of hacky -- we need to be able to
-                // handle normalization within binders because
-                // otherwise we wind up a need to normalize when doing
-                // trait matching (since you can have a trait
-                // obligation like `for<'a> T::B: Fn(&'a i32)`), but
-                // we can't normalize with bound regions in scope. So
-                // far now we just ignore binders but only normalize
-                // if all bound regions are gone (and then we still
-                // have to renormalize whenever we instantiate a
-                // binder). It would be better to normalize in a
-                // binding-aware fashion.
-
                 let tcx = self.infcx.tcx;
 
                 let mut orig_values = OriginalQueryValues::default();

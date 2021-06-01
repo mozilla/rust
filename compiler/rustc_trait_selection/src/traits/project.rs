@@ -330,6 +330,9 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
     where
         T: TypeFoldable<'tcx>,
     {
+        if !t.has_projections() {
+            return t;
+        }
         if !t.as_ref().skip_binder().has_escaping_bound_vars() {
             return t.super_fold_with(self);
         }
@@ -358,20 +361,14 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
         if !ty.has_projections() {
             return ty;
         }
-        // We don't want to normalize associated types that occur inside of region
-        // binders, because they may contain bound regions, and we can't cope with that.
-        //
-        // Example:
-        //
-        //     for<'a> fn(<T as Foo<&'a>>::A)
-        //
-        // Instead of normalizing `<T as Foo<&'a>>::A` here, we'll
-        // normalize it when we instantiate those bound regions (which
-        // should occur eventually).
+
+        // Because we replace bound vars with placeholders in `fold_binder`,
+        // we should never have escaping bound vars here.
+        assert!(!ty.has_escaping_bound_vars());
 
         let ty = ty.super_fold_with(self);
         match *ty.kind() {
-            ty::Opaque(def_id, substs) if !substs.has_escaping_bound_vars() => {
+            ty::Opaque(def_id, substs) => {
                 // Only normalize `impl Trait` after type-checking, usually in codegen.
                 match self.param_env.reveal() {
                     Reveal::UserFacing => ty,
@@ -398,19 +395,7 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
                 }
             }
 
-            ty::Projection(data) if !data.has_escaping_bound_vars() => {
-                // This is kind of hacky -- we need to be able to
-                // handle normalization within binders because
-                // otherwise we wind up a need to normalize when doing
-                // trait matching (since you can have a trait
-                // obligation like `for<'a> T::B: Fn(&'a i32)`), but
-                // we can't normalize with bound regions in scope. So
-                // far now we just ignore binders but only normalize
-                // if all bound regions are gone (and then we still
-                // have to renormalize whenever we instantiate a
-                // binder). It would be better to normalize in a
-                // binding-aware fashion.
-
+            ty::Projection(data) => {
                 let normalized_ty = normalize_projection_type(
                     self.selcx,
                     self.param_env,

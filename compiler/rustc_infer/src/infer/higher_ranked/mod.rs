@@ -78,8 +78,8 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         self.replace_bound_vars_with_placeholders_mapped(binder).0
     }
 
-    /// Like `replace_bound_vars_with_placeholders`, but also returns the
-    /// `UniverseIndex` the new placeholder reside in.
+    /// Like `replace_bound_vars_with_placeholders`, but also returns map from
+    /// the placeholders to the bound vars that were replaced.
     pub fn replace_bound_vars_with_placeholders_mapped<T>(
         &self,
         binder: ty::Binder<'tcx, T>,

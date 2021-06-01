@@ -1,5 +1,6 @@
 // build-fail
  //~^ overflow evaluating
+
 fn main() {
     let mut iter = 0u8..1;
     func(&mut iter)
