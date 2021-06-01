@@ -412,12 +412,20 @@ impl<'a> StripUnconfigured<'a> {
                 let tokens = Some(LazyTokenStream::new(AttrAnnotatedTokenStream::new(trees)));
                 let attr = attr::mk_attr_from_item(item, tokens, attr.style, span);
                 if attr.has_name(sym::crate_type) {
-                    self.sess
-                        .span_err(attr.span, "`crate_type` is not allowed within a `#![cfg_attr]`");
+                    self.sess.parse_sess.buffer_lint(
+                        rustc_lint_defs::builtin::DEPRECATED_CFG_ATTR_CRATE_TYPE_NAME,
+                        attr.span,
+                        ast::CRATE_NODE_ID,
+                        "`crate_type` within an `#![cfg_attr] attribute is deprecated`",
+                    );
                 }
                 if attr.has_name(sym::crate_name) {
-                    self.sess
-                        .span_err(attr.span, "`crate_name` is not allowed within a `#![cfg_attr]`");
+                    self.sess.parse_sess.buffer_lint(
+                        rustc_lint_defs::builtin::DEPRECATED_CFG_ATTR_CRATE_TYPE_NAME,
+                        attr.span,
+                        ast::CRATE_NODE_ID,
+                        "`crate_name` within an `#![cfg_attr] attribute is deprecated`",
+                    );
                 }
                 self.process_cfg_attr(attr)
             })
