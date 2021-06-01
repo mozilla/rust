@@ -602,8 +602,9 @@ fn opts() -> Vec<RustcOptGroup> {
         unstable("show-type-layout", |o| {
             o.optflag("", "show-type-layout", "Include the memory layout of types in the docs")
         }),
-        unstable("scrape-examples", |o| o.optmulti("", "scrape-examples", "", "")),
+        unstable("scrape-examples", |o| o.optopt("", "scrape-examples", "", "")),
         unstable("repository-url", |o| o.optopt("", "repository-url", "", "")),
+        unstable("with-examples", |o| o.optmulti("", "with-examples", "", "")),
     ]
 }
 
@@ -680,28 +681,20 @@ fn run_renderer<'tcx, T: formats::FormatRenderer<'tcx>>(
     }
 }
 
-fn main_options(mut options: config::Options) -> MainResult {
+fn main_options(options: config::Options) -> MainResult {
     let diag = core::new_handler(options.error_format, None, &options.debugging_opts);
 
-    match (options.should_test, options.markdown_input()) {
-        (true, true) => return wrap_return(&diag, markdown::test(options)),
-        (true, false) => return doctest::run(options),
-        (false, true) => {
+    match (options.should_test, options.markdown_input(), options.scrape_examples.is_some()) {
+        (_, _, true) => return scrape_examples::run(options),
+        (true, true, false) => return wrap_return(&diag, markdown::test(options)),
+        (true, false, false) => return doctest::run(options),
+        (false, true, false) => {
             return wrap_return(
                 &diag,
                 markdown::render(&options.input, options.render_options, options.edition),
             );
         }
-        (false, false) => {}
-    }
-
-    if options.scrape_examples.len() > 0 {
-        if let Some(crate_name) = &options.crate_name {
-            options.render_options.call_locations =
-                Some(scrape_examples::scrape(&options.scrape_examples, crate_name)?);
-        } else {
-            // raise an error?
-        }
+        (false, false, false) => {}
     }
 
     // need to move these items separately because we lose them by the time the closure is called,
