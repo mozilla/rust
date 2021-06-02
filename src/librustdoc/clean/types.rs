@@ -1372,7 +1372,7 @@ crate struct Function {
 impl Function {
     crate fn load_call_locations(&mut self, def_id: hir::def_id::DefId, cx: &DocContext<'_>) {
         if let Some(call_locations) = cx.render_options.call_locations.as_ref() {
-            let key = scrape_examples::def_id_example_key(cx.tcx, def_id);
+            let key = scrape_examples::def_id_call_key(cx.tcx, def_id);
             self.call_locations = call_locations.get(&key).cloned();
             debug!("call_locations: {:?} -- {:?}", key, self.call_locations);
         }
