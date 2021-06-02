@@ -12,10 +12,32 @@ use crate::panicking;
 use crate::pin::Pin;
 use crate::ptr::{NonNull, Unique};
 use crate::rc::Rc;
+use crate::stream::Stream;
 use crate::sync::atomic;
 use crate::sync::{Arc, Mutex, RwLock};
 use crate::task::{Context, Poll};
 use crate::thread::Result;
+
+#[doc(hidden)]
+#[unstable(feature = "edition_panic", issue = "none", reason = "use panic!() instead")]
+#[allow_internal_unstable(libstd_sys_internals)]
+#[cfg_attr(not(test), rustc_diagnostic_item = "std_panic_2015_macro")]
+#[rustc_macro_transparency = "semitransparent"]
+pub macro panic_2015 {
+    () => ({
+        $crate::rt::begin_panic("explicit panic")
+    }),
+    ($msg:expr $(,)?) => ({
+        $crate::rt::begin_panic($msg)
+    }),
+    ($fmt:expr, $($arg:tt)+) => ({
+        $crate::rt::begin_panic_fmt(&$crate::format_args!($fmt, $($arg)+))
+    }),
+}
+
+#[doc(hidden)]
+#[unstable(feature = "edition_panic", issue = "none", reason = "use panic!() instead")]
+pub use core::panic::panic_2021;
 
 #[stable(feature = "panic_hooks", since = "1.10.0")]
 pub use crate::panicking::{set_hook, take_hook};
@@ -31,9 +53,10 @@ pub use core::panic::{Location, PanicInfo};
 /// accessed later using [`PanicInfo::payload`].
 ///
 /// See the [`panic!`] macro for more information about panicking.
-#[unstable(feature = "panic_any", issue = "78500")]
+#[stable(feature = "panic_any", since = "1.51.0")]
 #[inline]
-pub fn panic_any<M: Any + Send>(msg: M) -> ! {
+#[track_caller]
+pub fn panic_any<M: 'static + Any + Send>(msg: M) -> ! {
     crate::panicking::begin_panic(msg);
 }
 
@@ -110,6 +133,7 @@ pub fn panic_any<M: Any + Send>(msg: M) -> ! {
 /// [`AssertUnwindSafe`] wrapper struct can be used to force this trait to be
 /// implemented for any closed over variables passed to `catch_unwind`.
 #[stable(feature = "catch_unwind", since = "1.9.0")]
+#[cfg_attr(all(not(bootstrap), not(test)), lang = "unwind_safe")]
 #[rustc_on_unimplemented(
     message = "the type `{Self}` may not be safely transferred across an unwind boundary",
     label = "`{Self}` may not be safely transferred across an unwind boundary"
@@ -125,6 +149,7 @@ pub auto trait UnwindSafe {}
 /// This is a "helper marker trait" used to provide impl blocks for the
 /// [`UnwindSafe`] trait, for more information see that documentation.
 #[stable(feature = "catch_unwind", since = "1.9.0")]
+#[cfg_attr(all(not(bootstrap), not(test)), lang = "ref_unwind_safe")]
 #[rustc_on_unimplemented(
     message = "the type `{Self}` may contain interior mutability and a reference may not be safely \
                transferrable across a catch_unwind boundary",
@@ -340,6 +365,19 @@ impl<F: Future> Future for AssertUnwindSafe<F> {
     }
 }
 
+#[unstable(feature = "async_stream", issue = "79024")]
+impl<S: Stream> Stream for AssertUnwindSafe<S> {
+    type Item = S::Item;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<S::Item>> {
+        unsafe { self.map_unchecked_mut(|x| &mut x.0) }.poll_next(cx)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
 /// Invokes a closure, capturing the cause of an unwinding panic if one occurs.
 ///
 /// This function will return `Ok` with the closure's result if the closure
@@ -373,7 +411,7 @@ impl<F: Future> Future for AssertUnwindSafe<F> {
 /// aborting the process as well. This function *only* catches unwinding panics,
 /// not those that abort the process.
 ///
-/// Also note that unwinding into Rust code with a foreign exception (e.g. a
+/// Also note that unwinding into Rust code with a foreign exception (e.g.
 /// an exception thrown from C++ code) is undefined behavior.
 ///
 /// # Examples
@@ -424,6 +462,42 @@ pub fn catch_unwind<F: FnOnce() -> R + UnwindSafe, R>(f: F) -> Result<R> {
 #[stable(feature = "resume_unwind", since = "1.9.0")]
 pub fn resume_unwind(payload: Box<dyn Any + Send>) -> ! {
     panicking::rust_panic_without_hook(payload)
+}
+
+/// Make all future panics abort directly without running the panic hook or unwinding.
+///
+/// There is no way to undo this; the effect lasts until the process exits or
+/// execs (or the equivalent).
+///
+/// # Use after fork
+///
+/// This function is particularly useful for calling after `libc::fork`.  After `fork`, in a
+/// multithreaded program it is (on many platforms) not safe to call the allocator.  It is also
+/// generally highly undesirable for an unwind to unwind past the `fork`, because that results in
+/// the unwind propagating to code that was only ever expecting to run in the parent.
+///
+/// `panic::always_abort()` helps avoid both of these.  It directly avoids any further unwinding,
+/// and if there is a panic, the abort will occur without allocating provided that the arguments to
+/// panic can be formatted without allocating.
+///
+/// Examples
+///
+/// ```no_run
+/// #![feature(panic_always_abort)]
+/// use std::panic;
+///
+/// panic::always_abort();
+///
+/// let _ = panic::catch_unwind(|| {
+///     panic!("inside the catch");
+/// });
+///
+/// // We will have aborted already, due to the panic.
+/// unreachable!();
+/// ```
+#[unstable(feature = "panic_always_abort", issue = "84438")]
+pub fn always_abort() {
+    crate::panicking::panic_count::set_always_abort();
 }
 
 #[cfg(test)]

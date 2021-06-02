@@ -6,6 +6,7 @@ use crate::ffi::{OsStr, OsString};
 use crate::fmt;
 use crate::mem;
 use crate::rc::Rc;
+use crate::sealed::Sealed;
 use crate::str;
 use crate::sync::Arc;
 use crate::sys_common::bytestring::debug_fmt_bytestring;
@@ -13,7 +14,7 @@ use crate::sys_common::{AsInner, FromInner, IntoInner};
 
 use core::str::lossy::Utf8Lossy;
 
-#[derive(Clone, Hash)]
+#[derive(Hash)]
 pub(crate) struct Buf {
     pub inner: Vec<u8>,
 }
@@ -49,6 +50,18 @@ impl fmt::Debug for Buf {
 impl fmt::Display for Buf {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self.as_slice(), formatter)
+    }
+}
+
+impl Clone for Buf {
+    #[inline]
+    fn clone(&self) -> Self {
+        Buf { inner: self.inner.clone() }
+    }
+
+    #[inline]
+    fn clone_from(&mut self, source: &Self) {
+        self.inner.clone_from(&source.inner)
     }
 }
 
@@ -232,8 +245,11 @@ impl Slice {
 }
 
 /// Platform-specific extensions to [`OsString`].
+///
+/// This trait is sealed: it cannot be implemented outside the standard library.
+/// This is so that future additional methods are not breaking changes.
 #[stable(feature = "rust1", since = "1.0.0")]
-pub trait OsStringExt {
+pub trait OsStringExt: Sealed {
     /// Creates an [`OsString`] from a byte vector.
     ///
     /// See the module documentation for an example.
@@ -258,8 +274,11 @@ impl OsStringExt for OsString {
 }
 
 /// Platform-specific extensions to [`OsStr`].
+///
+/// This trait is sealed: it cannot be implemented outside the standard library.
+/// This is so that future additional methods are not breaking changes.
 #[stable(feature = "rust1", since = "1.0.0")]
-pub trait OsStrExt {
+pub trait OsStrExt: Sealed {
     #[stable(feature = "rust1", since = "1.0.0")]
     /// Creates an [`OsStr`] from a byte slice.
     ///

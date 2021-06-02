@@ -5,7 +5,9 @@
 
 extern crate test;
 
-use crate::common::{expected_output_path, output_base_dir, output_relative_path, UI_EXTENSIONS};
+use crate::common::{
+    expected_output_path, output_base_dir, output_relative_path, PanicStrategy, UI_EXTENSIONS,
+};
 use crate::common::{CompareMode, Config, Debugger, Mode, PassMode, Pretty, TestPaths};
 use crate::util::logv;
 use getopts::Options;
@@ -44,7 +46,7 @@ fn main() {
     }
 
     if !config.has_tidy && config.mode == Mode::Rustdoc {
-        eprintln!("warning: `tidy` is not installed; generated diffs will be harder to read");
+        eprintln!("warning: `tidy` is not installed; diffs will not be generated");
     }
 
     log_config(&config);
@@ -60,6 +62,7 @@ pub fn parse_config(args: Vec<String>) -> Config {
         .optopt("", "rust-demangler-path", "path to rust-demangler to use in tests", "PATH")
         .reqopt("", "lldb-python", "path to python to use for doc tests", "PATH")
         .reqopt("", "docck-python", "path to python to use for doc tests", "PATH")
+        .optopt("", "jsondocck-path", "path to jsondocck to use for doc tests", "PATH")
         .optopt("", "valgrind-path", "path to Valgrind executable for Valgrind tests", "PROGRAM")
         .optflag("", "force-valgrind", "fail if Valgrind tests cannot be run under Valgrind")
         .optopt("", "run-clang-based-tests-with", "path to Clang executable", "PATH")
@@ -71,7 +74,7 @@ pub fn parse_config(args: Vec<String>) -> Config {
             "",
             "mode",
             "which sort of compile tests to run",
-            "compile-fail | run-fail | run-pass-valgrind | pretty | debug-info | codegen | rustdoc \
+            "run-pass-valgrind | pretty | debug-info | codegen | rustdoc \
             | rustdoc-json | codegen-units | incremental | run-make | ui | js-doc-test | mir-opt | assembly",
         )
         .reqopt(
@@ -86,6 +89,7 @@ pub fn parse_config(args: Vec<String>) -> Config {
             "force {check,build,run}-pass tests to this mode.",
             "check | build | run",
         )
+        .optopt("", "run", "whether to execute run-* tests", "auto | always | never")
         .optflag("", "ignored", "run tests marked as ignored")
         .optflag("", "exact", "filters match exactly")
         .optopt(
@@ -95,8 +99,9 @@ pub fn parse_config(args: Vec<String>) -> Config {
              (eg. emulator, valgrind)",
             "PROGRAM",
         )
-        .optopt("", "host-rustcflags", "flags to pass to rustc for host", "FLAGS")
-        .optopt("", "target-rustcflags", "flags to pass to rustc for target", "FLAGS")
+        .optmulti("", "host-rustcflags", "flags to pass to rustc for host", "FLAGS")
+        .optmulti("", "target-rustcflags", "flags to pass to rustc for target", "FLAGS")
+        .optopt("", "target-panic", "what panic strategy the target supports", "unwind | abort")
         .optflag("", "verbose", "run tests verbosely, showing all output")
         .optflag(
             "",
@@ -125,6 +130,7 @@ pub fn parse_config(args: Vec<String>) -> Config {
         .reqopt("", "llvm-components", "list of LLVM components built in", "LIST")
         .optopt("", "llvm-bin-dir", "Path to LLVM's `bin` directory", "PATH")
         .optopt("", "nodejs", "the name of nodejs", "PATH")
+        .optopt("", "npm", "the name of npm", "PATH")
         .optopt("", "remote-test-client", "path to the remote test client", "PATH")
         .optopt(
             "",
@@ -193,11 +199,17 @@ pub fn parse_config(args: Vec<String>) -> Config {
 
     let src_base = opt_path(matches, "src-base");
     let run_ignored = matches.opt_present("ignored");
-    let has_tidy = Command::new("tidy")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .status()
-        .map_or(false, |status| status.success());
+    let mode = matches.opt_str("mode").unwrap().parse().expect("invalid mode");
+    let has_tidy = if mode == Mode::Rustdoc {
+        Command::new("tidy")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .status()
+            .map_or(false, |status| status.success())
+    } else {
+        // Avoid spawning an external command when we know tidy won't be used.
+        false
+    };
     Config {
         bless: matches.opt_present("bless"),
         compile_lib_path: make_absolute(opt_path(matches, "compile-lib-path")),
@@ -207,6 +219,7 @@ pub fn parse_config(args: Vec<String>) -> Config {
         rust_demangler_path: matches.opt_str("rust-demangler-path").map(PathBuf::from),
         lldb_python: matches.opt_str("lldb-python").unwrap(),
         docck_python: matches.opt_str("docck-python").unwrap(),
+        jsondocck_path: matches.opt_str("jsondocck-path"),
         valgrind_path: matches.opt_str("valgrind-path"),
         force_valgrind: matches.opt_present("force-valgrind"),
         run_clang_based_tests_with: matches.opt_str("run-clang-based-tests-with"),
@@ -215,20 +228,31 @@ pub fn parse_config(args: Vec<String>) -> Config {
         src_base,
         build_base: opt_path(matches, "build-base"),
         stage_id: matches.opt_str("stage-id").unwrap(),
-        mode: matches.opt_str("mode").unwrap().parse().expect("invalid mode"),
+        mode,
         suite: matches.opt_str("suite").unwrap(),
         debugger: None,
         run_ignored,
-        filter: matches.free.first().cloned(),
+        filters: matches.free.clone(),
         filter_exact: matches.opt_present("exact"),
         force_pass_mode: matches.opt_str("pass").map(|mode| {
             mode.parse::<PassMode>()
                 .unwrap_or_else(|_| panic!("unknown `--pass` option `{}` given", mode))
         }),
+        run: matches.opt_str("run").and_then(|mode| match mode.as_str() {
+            "auto" => None,
+            "always" => Some(true),
+            "never" => Some(false),
+            _ => panic!("unknown `--run` option `{}` given", mode),
+        }),
         logfile: matches.opt_str("logfile").map(|s| PathBuf::from(&s)),
         runtool: matches.opt_str("runtool"),
-        host_rustcflags: matches.opt_str("host-rustcflags"),
-        target_rustcflags: matches.opt_str("target-rustcflags"),
+        host_rustcflags: Some(matches.opt_strs("host-rustcflags").join(" ")),
+        target_rustcflags: Some(matches.opt_strs("target-rustcflags").join(" ")),
+        target_panic: match matches.opt_str("target-panic").as_deref() {
+            Some("unwind") | None => PanicStrategy::Unwind,
+            Some("abort") => PanicStrategy::Abort,
+            _ => panic!("unknown `--target-panic` option `{}` given", mode),
+        },
         target,
         host: opt_str2(matches.opt_str("host")),
         cdb,
@@ -262,6 +286,7 @@ pub fn parse_config(args: Vec<String>) -> Config {
         linker: matches.opt_str("linker"),
         llvm_components: matches.opt_str("llvm-components").unwrap(),
         nodejs: matches.opt_str("nodejs"),
+        npm: matches.opt_str("npm"),
     }
 }
 
@@ -278,7 +303,7 @@ pub fn log_config(config: &Config) {
     logv(c, format!("stage_id: {}", config.stage_id));
     logv(c, format!("mode: {}", config.mode));
     logv(c, format!("run_ignored: {}", config.run_ignored));
-    logv(c, format!("filter: {}", opt_str(&config.filter)));
+    logv(c, format!("filters: {:?}", config.filters));
     logv(c, format!("filter_exact: {}", config.filter_exact));
     logv(
         c,
@@ -463,7 +488,7 @@ fn configure_lldb(config: &Config) -> Option<Config> {
 pub fn test_opts(config: &Config) -> test::TestOpts {
     test::TestOpts {
         exclude_should_panic: false,
-        filter: config.filter.clone(),
+        filters: config.filters.clone(),
         filter_exact: config.filter_exact,
         run_ignored: if config.run_ignored { test::RunIgnored::Yes } else { test::RunIgnored::No },
         format: if config.quiet { test::OutputFormat::Terse } else { test::OutputFormat::Pretty },
@@ -899,7 +924,8 @@ fn extract_gdb_version(full_version_line: &str) -> Option<u32> {
     // This particular form is documented in the GNU coding standards:
     // https://www.gnu.org/prep/standards/html_node/_002d_002dversion.html#g_t_002d_002dversion
 
-    let mut splits = full_version_line.rsplit(' ');
+    let unbracketed_part = full_version_line.split('[').next().unwrap();
+    let mut splits = unbracketed_part.trim_end().rsplit(' ');
     let version_string = splits.next().unwrap();
 
     let mut splits = version_string.split('.');
@@ -964,7 +990,7 @@ fn extract_lldb_version(full_version_line: &str) -> Option<(u32, bool)> {
         }
     } else if let Some(lldb_ver) = full_version_line.strip_prefix("lldb version ") {
         if let Some(idx) = lldb_ver.find(not_a_digit) {
-            let version: u32 = lldb_ver[..idx].parse().unwrap();
+            let version: u32 = lldb_ver[..idx].parse().ok()?;
             return Some((version * 100, full_version_line.contains("rust-enabled")));
         }
     }

@@ -5,7 +5,7 @@
 
 use super::{OutlivesConstraint, RegionInferenceContext};
 use crate::borrow_check::type_check::Locations;
-use rustc_infer::infer::NLLRegionVariableOrigin;
+use rustc_infer::infer::NllRegionVariableOrigin;
 use rustc_middle::ty::TyCtxt;
 use std::io::{self, Write};
 
@@ -20,7 +20,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         writeln!(out, "| Free Region Mapping")?;
 
         for region in self.regions() {
-            if let NLLRegionVariableOrigin::FreeRegion = self.definitions[region].origin {
+            if let NllRegionVariableOrigin::FreeRegion = self.definitions[region].origin {
                 let classification = self.universal_regions.region_classification(region).unwrap();
                 let outlived_by = self.universal_region_relations.regions_outlived_by(region);
                 writeln!(
@@ -76,7 +76,9 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         for constraint in &constraints {
             let OutlivesConstraint { sup, sub, locations, category } = constraint;
             let (name, arg) = match locations {
-                Locations::All(span) => ("All", tcx.sess.source_map().span_to_string(*span)),
+                Locations::All(span) => {
+                    ("All", tcx.sess.source_map().span_to_embeddable_string(*span))
+                }
                 Locations::Single(loc) => ("Single", format!("{:?}", loc)),
             };
             with_msg(&format!("{:?}: {:?} due to {:?} at {}({})", sup, sub, category, name, arg))?;

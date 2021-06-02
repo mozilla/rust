@@ -1,7 +1,7 @@
 // issue-49296: Unsafe shenigans in constants can result in missing errors
 
-#![feature(const_fn)]
 #![feature(const_fn_union)]
+#![feature(const_fn_trait_bound)]
 
 const unsafe fn transmute<T: Copy, U: Copy>(t: T) -> U {
     #[repr(C)]
@@ -18,6 +18,7 @@ const fn wat(x: u64) -> &'static u64 {
 }
 const X: u64 = *wat(42);
 //~^ ERROR any use of this value will cause an error
+//~| WARN this was previously accepted by the compiler but is being phased out
 
 fn main() {
     println!("{}", X);

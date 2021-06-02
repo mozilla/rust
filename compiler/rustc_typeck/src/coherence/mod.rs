@@ -6,7 +6,7 @@
 // mappings. That mapping code resides here.
 
 use rustc_errors::struct_span_err;
-use rustc_hir::def_id::{DefId, LocalDefId, LOCAL_CRATE};
+use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::ty::query::Providers;
 use rustc_middle::ty::{self, TyCtxt, TypeFoldable};
 use rustc_span::Span;
@@ -48,7 +48,20 @@ fn enforce_trait_manually_implementable(
     let did = Some(trait_def_id);
     let li = tcx.lang_items();
 
-    // Disallow *all* explicit impls of `DiscriminantKind`, `Sized` and `Unsize` for now.
+    // Disallow *all* explicit impls of `Pointee`, `DiscriminantKind`, `Sized` and `Unsize` for now.
+    if did == li.pointee_trait() {
+        let span = impl_header_span(tcx, impl_def_id);
+        struct_span_err!(
+            tcx.sess,
+            span,
+            E0322,
+            "explicit impls for the `Pointee` trait are not permitted"
+        )
+        .span_label(span, "impl of 'Pointee' not allowed")
+        .emit();
+        return;
+    }
+
     if did == li.discriminant_kind_trait() {
         let span = impl_header_span(tcx, impl_def_id);
         struct_span_err!(
@@ -172,8 +185,7 @@ fn coherent_trait(tcx: TyCtxt<'_>, def_id: DefId) {
     tcx.ensure().specialization_graph_of(def_id);
 
     let impls = tcx.hir().trait_impls(def_id);
-    for &hir_id in impls {
-        let impl_def_id = tcx.hir().local_def_id(hir_id);
+    for &impl_def_id in impls {
         let trait_ref = tcx.impl_trait_ref(impl_def_id).unwrap();
 
         check_impl(tcx, impl_def_id, trait_ref);
@@ -191,8 +203,8 @@ pub fn check_coherence(tcx: TyCtxt<'_>) {
     tcx.sess.time("orphan_checking", || orphan::check(tcx));
 
     // these queries are executed for side-effects (error reporting):
-    tcx.ensure().crate_inherent_impls(LOCAL_CRATE);
-    tcx.ensure().crate_inherent_impls_overlap_check(LOCAL_CRATE);
+    tcx.ensure().crate_inherent_impls(());
+    tcx.ensure().crate_inherent_impls_overlap_check(());
 }
 
 /// Checks whether an impl overlaps with the automatic `impl Trait for dyn Trait`.

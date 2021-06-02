@@ -9,7 +9,7 @@ pub mod specialization_graph;
 mod structural_impls;
 
 use crate::infer::canonical::Canonical;
-use crate::mir::interpret::ErrorHandled;
+use crate::mir::abstract_const::NotConstEvaluatable;
 use crate::ty::subst::SubstsRef;
 use crate::ty::{self, AdtKind, Ty, TyCtxt};
 
@@ -228,7 +228,9 @@ pub enum ObligationCauseCode<'tcx> {
     /// Inline asm operand type must be `Sized`.
     InlineAsmSized,
     /// `[T, ..n]` implies that `T` must be `Copy`.
-    /// If `true`, suggest `const_in_array_repeat_expressions` feature flag.
+    /// If the function in the array repeat expression is a `const fn`,
+    /// display a help message suggesting to move the function call to a
+    /// new `const` item while saying that `T` doesn't implement `Copy`.
     RepeatVec(bool),
 
     /// Types of fields (other than the last, except for packed structs) in a struct must be sized.
@@ -321,6 +323,9 @@ pub enum ObligationCauseCode<'tcx> {
 
     /// #[feature(trivial_bounds)] is not enabled
     TrivialBound,
+
+    /// If `X` is the concrete type of an opaque type `impl Y`, then `X` must implement `Y`
+    OpaqueType,
 }
 
 impl ObligationCauseCode<'_> {
@@ -338,8 +343,8 @@ impl ObligationCauseCode<'_> {
 }
 
 // `ObligationCauseCode` is used a lot. Make sure it doesn't unintentionally get bigger.
-#[cfg(target_arch = "x86_64")]
-static_assert_size!(ObligationCauseCode<'_>, 32);
+#[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
+static_assert_size!(ObligationCauseCode<'_>, 40);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum StatementAsExpression {
@@ -396,7 +401,7 @@ pub enum SelectionError<'tcx> {
         ty::error::TypeError<'tcx>,
     ),
     TraitNotObjectSafe(DefId),
-    ConstEvalFailure(ErrorHandled),
+    NotConstEvaluatable(NotConstEvaluatable),
     Overflow,
 }
 
@@ -477,6 +482,9 @@ pub enum ImplSource<'tcx, N> {
     /// ImplSource for a builtin `DeterminantKind` trait implementation.
     DiscriminantKind(ImplSourceDiscriminantKindData),
 
+    /// ImplSource for a builtin `Pointee` trait implementation.
+    Pointee(ImplSourcePointeeData),
+
     /// ImplSource automatically generated for a generator.
     Generator(ImplSourceGeneratorData<'tcx, N>),
 
@@ -495,7 +503,8 @@ impl<'tcx, N> ImplSource<'tcx, N> {
             ImplSource::Generator(c) => c.nested,
             ImplSource::Object(d) => d.nested,
             ImplSource::FnPointer(d) => d.nested,
-            ImplSource::DiscriminantKind(ImplSourceDiscriminantKindData) => Vec::new(),
+            ImplSource::DiscriminantKind(ImplSourceDiscriminantKindData)
+            | ImplSource::Pointee(ImplSourcePointeeData) => Vec::new(),
             ImplSource::TraitAlias(d) => d.nested,
         }
     }
@@ -510,7 +519,8 @@ impl<'tcx, N> ImplSource<'tcx, N> {
             ImplSource::Generator(c) => &c.nested[..],
             ImplSource::Object(d) => &d.nested[..],
             ImplSource::FnPointer(d) => &d.nested[..],
-            ImplSource::DiscriminantKind(ImplSourceDiscriminantKindData) => &[],
+            ImplSource::DiscriminantKind(ImplSourceDiscriminantKindData)
+            | ImplSource::Pointee(ImplSourcePointeeData) => &[],
             ImplSource::TraitAlias(d) => &d.nested[..],
         }
     }
@@ -554,6 +564,9 @@ impl<'tcx, N> ImplSource<'tcx, N> {
             }),
             ImplSource::DiscriminantKind(ImplSourceDiscriminantKindData) => {
                 ImplSource::DiscriminantKind(ImplSourceDiscriminantKindData)
+            }
+            ImplSource::Pointee(ImplSourcePointeeData) => {
+                ImplSource::Pointee(ImplSourcePointeeData)
             }
             ImplSource::TraitAlias(d) => ImplSource::TraitAlias(ImplSourceTraitAliasData {
                 alias_def_id: d.alias_def_id,
@@ -633,6 +646,9 @@ pub struct ImplSourceFnPointerData<'tcx, N> {
 #[derive(Clone, Debug, PartialEq, Eq, TyEncodable, TyDecodable, HashStable)]
 pub struct ImplSourceDiscriminantKindData;
 
+#[derive(Clone, Debug, PartialEq, Eq, TyEncodable, TyDecodable, HashStable)]
+pub struct ImplSourcePointeeData;
+
 #[derive(Clone, PartialEq, Eq, TyEncodable, TyDecodable, HashStable, TypeFoldable, Lift)]
 pub struct ImplSourceTraitAliasData<'tcx, N> {
     pub alias_def_id: DefId,
@@ -654,6 +670,9 @@ pub enum ObjectSafetyViolation {
 
     /// Associated const.
     AssocConst(Symbol, Span),
+
+    /// GAT
+    GAT(Symbol, Span),
 }
 
 impl ObjectSafetyViolation {
@@ -699,6 +718,9 @@ impl ObjectSafetyViolation {
                 format!("it contains associated `const` `{}`", name).into()
             }
             ObjectSafetyViolation::AssocConst(..) => "it contains this associated `const`".into(),
+            ObjectSafetyViolation::GAT(name, _) => {
+                format!("it contains the generic associated type `{}`", name).into()
+            }
         }
     }
 
@@ -757,6 +779,7 @@ impl ObjectSafetyViolation {
                 );
             }
             ObjectSafetyViolation::AssocConst(name, _)
+            | ObjectSafetyViolation::GAT(name, _)
             | ObjectSafetyViolation::Method(name, ..) => {
                 err.help(&format!("consider moving `{}` to another trait", name));
             }
@@ -770,6 +793,7 @@ impl ObjectSafetyViolation {
             ObjectSafetyViolation::SupertraitSelf(spans)
             | ObjectSafetyViolation::SizedSelf(spans) => spans.clone(),
             ObjectSafetyViolation::AssocConst(_, span)
+            | ObjectSafetyViolation::GAT(_, span)
             | ObjectSafetyViolation::Method(_, _, span)
                 if *span != DUMMY_SP =>
             {

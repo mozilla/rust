@@ -134,14 +134,25 @@ pub struct FrameInfo<'tcx> {
     pub lint_root: Option<hir::HirId>,
 }
 
-#[derive(Clone, Eq, PartialEq, Debug, HashStable)] // Miri debug-prints these
+/// Unwind information.
+#[derive(Clone, Copy, Eq, PartialEq, Debug, HashStable)]
+pub enum StackPopUnwind {
+    /// The cleanup block.
+    Cleanup(mir::BasicBlock),
+    /// No cleanup needs to be done.
+    Skip,
+    /// Unwinding is not allowed (UB).
+    NotAllowed,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq, Debug, HashStable)] // Miri debug-prints these
 pub enum StackPopCleanup {
     /// Jump to the next block in the caller, or cause UB if None (that's a function
     /// that may never return). Also store layout of return place so
     /// we can validate it at that layout.
     /// `ret` stores the block we jump to on a normal return, while `unwind`
     /// stores the block used for cleanup during unwinding.
-    Goto { ret: Option<mir::BasicBlock>, unwind: Option<mir::BasicBlock> },
+    Goto { ret: Option<mir::BasicBlock>, unwind: StackPopUnwind },
     /// Just do nothing: Used by Main and for the `box_alloc` hook in miri.
     /// `cleanup` says whether locals are deallocated. Static computation
     /// wants them leaked to intern what they need (and just throw away
@@ -226,6 +237,18 @@ impl<'mir, 'tcx, Tag> Frame<'mir, 'tcx, Tag> {
 }
 
 impl<'mir, 'tcx, Tag, Extra> Frame<'mir, 'tcx, Tag, Extra> {
+    /// Get the current location within the Frame.
+    ///
+    /// If this is `Err`, we are not currently executing any particular statement in
+    /// this frame (can happen e.g. during frame initialization, and during unwinding on
+    /// frames without cleanup code).
+    /// We basically abuse `Result` as `Either`.
+    ///
+    /// Used by priroda.
+    pub fn current_loc(&self) -> Result<mir::Location, Span> {
+        self.loc
+    }
+
     /// Return the `SourceInfo` of the current instruction.
     pub fn current_source_info(&self) -> Option<&mir::SourceInfo> {
         self.loc.ok().map(|loc| self.body.source_info(loc))
@@ -251,7 +274,13 @@ impl<'tcx> fmt::Display for FrameInfo<'tcx> {
             }
             if !self.span.is_dummy() {
                 let lo = tcx.sess.source_map().lookup_char_pos(self.span.lo());
-                write!(f, " at {}:{}:{}", lo.file.name, lo.line, lo.col.to_usize() + 1)?;
+                write!(
+                    f,
+                    " at {}:{}:{}",
+                    lo.file.name.prefer_local(),
+                    lo.line,
+                    lo.col.to_usize() + 1
+                )?;
             }
             Ok(())
         })
@@ -370,7 +399,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
 
     #[inline(always)]
     pub fn cur_span(&self) -> Span {
-        self.stack().last().map(|f| f.current_span()).unwrap_or(self.tcx.span)
+        self.stack().last().map_or(self.tcx.span, |f| f.current_span())
     }
 
     #[inline(always)]
@@ -450,11 +479,6 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     }
 
     #[inline]
-    pub fn type_is_sized(&self, ty: Ty<'tcx>) -> bool {
-        ty.is_sized(self.tcx, self.param_env)
-    }
-
-    #[inline]
     pub fn type_is_freeze(&self, ty: Ty<'tcx>) -> bool {
         ty.is_freeze(self.tcx, self.param_env)
     }
@@ -477,16 +501,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         if let Some(promoted) = promoted {
             return Ok(&self.tcx.promoted_mir_opt_const_arg(def)[promoted]);
         }
-        match instance {
-            ty::InstanceDef::Item(def) => {
-                if self.tcx.is_mir_available(def.did) {
-                    Ok(self.tcx.optimized_mir_opt_const_arg(def))
-                } else {
-                    throw_unsup!(NoMirFor(def.did))
-                }
-            }
-            _ => Ok(self.tcx.instance_mir(instance)),
-        }
+        M::load_mir(self, instance)
     }
 
     /// Call this on things you got out of the MIR (so it is as generic as the current
@@ -526,6 +541,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         }
     }
 
+    #[inline(always)]
     pub fn layout_of_local(
         &self,
         frame: &Frame<'mir, 'tcx, M::PointerTag, M::FrameExtra>,
@@ -557,8 +573,8 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     /// This can fail to provide an answer for extern types.
     pub(super) fn size_and_align_of(
         &self,
-        metadata: MemPlaceMeta<M::PointerTag>,
-        layout: TyAndLayout<'tcx>,
+        metadata: &MemPlaceMeta<M::PointerTag>,
+        layout: &TyAndLayout<'tcx>,
     ) -> InterpResult<'tcx, Option<(Size, Align)>> {
         if !layout.is_unsized() {
             return Ok(Some((layout.size, layout.align.abi)));
@@ -586,24 +602,25 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                 // the last field).  Can't have foreign types here, how would we
                 // adjust alignment and size for them?
                 let field = layout.field(self, layout.fields.count() - 1)?;
-                let (unsized_size, unsized_align) = match self.size_and_align_of(metadata, field)? {
-                    Some(size_and_align) => size_and_align,
-                    None => {
-                        // A field with extern type.  If this field is at offset 0, we behave
-                        // like the underlying extern type.
-                        // FIXME: Once we have made decisions for how to handle size and alignment
-                        // of `extern type`, this should be adapted.  It is just a temporary hack
-                        // to get some code to work that probably ought to work.
-                        if sized_size == Size::ZERO {
-                            return Ok(None);
-                        } else {
-                            span_bug!(
-                                self.cur_span(),
-                                "Fields cannot be extern types, unless they are at offset 0"
-                            )
+                let (unsized_size, unsized_align) =
+                    match self.size_and_align_of(metadata, &field)? {
+                        Some(size_and_align) => size_and_align,
+                        None => {
+                            // A field with extern type.  If this field is at offset 0, we behave
+                            // like the underlying extern type.
+                            // FIXME: Once we have made decisions for how to handle size and alignment
+                            // of `extern type`, this should be adapted.  It is just a temporary hack
+                            // to get some code to work that probably ought to work.
+                            if sized_size == Size::ZERO {
+                                return Ok(None);
+                            } else {
+                                span_bug!(
+                                    self.cur_span(),
+                                    "Fields cannot be extern types, unless they are at offset 0"
+                                )
+                            }
                         }
-                    }
-                };
+                    };
 
                 // FIXME (#26403, #27023): We should be adding padding
                 // to `sized_size` (to accommodate the `unsized_align`
@@ -654,16 +671,16 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     #[inline]
     pub fn size_and_align_of_mplace(
         &self,
-        mplace: MPlaceTy<'tcx, M::PointerTag>,
+        mplace: &MPlaceTy<'tcx, M::PointerTag>,
     ) -> InterpResult<'tcx, Option<(Size, Align)>> {
-        self.size_and_align_of(mplace.meta, mplace.layout)
+        self.size_and_align_of(&mplace.meta, &mplace.layout)
     }
 
     pub fn push_stack_frame(
         &mut self,
         instance: ty::Instance<'tcx>,
         body: &'mir mir::Body<'tcx>,
-        return_place: Option<PlaceTy<'tcx, M::PointerTag>>,
+        return_place: Option<&PlaceTy<'tcx, M::PointerTag>>,
         return_to_block: StackPopCleanup,
     ) -> InterpResult<'tcx> {
         // first push a stack frame so we have access to the local substs
@@ -671,7 +688,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             body,
             loc: Err(body.span), // Span used for errors caused during preamble.
             return_to_block,
-            return_place,
+            return_place: return_place.copied(),
             // empty local array, we fill it in below, after we are inside the stack frame and
             // all methods actually know about the frame
             locals: IndexVec::new(),
@@ -687,7 +704,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             let span = const_.span;
             let const_ =
                 self.subst_from_current_frame_and_normalize_erasing_regions(const_.literal);
-            self.const_to_op(const_, None).map_err(|err| {
+            self.mir_const_to_op(&const_, None).map_err(|err| {
                 // If there was an error, set the span of the current frame to this constant.
                 // Avoiding doing this when evaluation succeeds.
                 self.frame_mut().loc = Err(span);
@@ -740,13 +757,20 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     /// *Unwind* to the given `target` basic block.
     /// Do *not* use for returning! Use `return_to_block` instead.
     ///
-    /// If `target` is `None`, that indicates the function does not need cleanup during
-    /// unwinding, and we will just keep propagating that upwards.
-    pub fn unwind_to_block(&mut self, target: Option<mir::BasicBlock>) {
+    /// If `target` is `StackPopUnwind::Skip`, that indicates the function does not need cleanup
+    /// during unwinding, and we will just keep propagating that upwards.
+    ///
+    /// If `target` is `StackPopUnwind::NotAllowed`, that indicates the function does not allow
+    /// unwinding, and doing so is UB.
+    pub fn unwind_to_block(&mut self, target: StackPopUnwind) -> InterpResult<'tcx> {
         self.frame_mut().loc = match target {
-            Some(block) => Ok(mir::Location { block, statement_index: 0 }),
-            None => Err(self.frame_mut().body.span),
+            StackPopUnwind::Cleanup(block) => Ok(mir::Location { block, statement_index: 0 }),
+            StackPopUnwind::Skip => Err(self.frame_mut().body.span),
+            StackPopUnwind::NotAllowed => {
+                throw_ub_format!("unwinding past a stack frame that does not allow unwinding")
+            }
         };
+        Ok(())
     }
 
     /// Pops the current frame from the stack, deallocating the
@@ -786,30 +810,29 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
 
         if !unwinding {
             // Copy the return value to the caller's stack frame.
-            if let Some(return_place) = frame.return_place {
+            if let Some(ref return_place) = frame.return_place {
                 let op = self.access_local(&frame, mir::RETURN_PLACE, None)?;
-                self.copy_op_transmute(op, return_place)?;
-                trace!("{:?}", self.dump_place(*return_place));
+                self.copy_op_transmute(&op, return_place)?;
+                trace!("{:?}", self.dump_place(**return_place));
             } else {
                 throw_ub!(Unreachable);
             }
         }
+
+        let return_to_block = frame.return_to_block;
 
         // Now where do we jump next?
 
         // Usually we want to clean up (deallocate locals), but in a few rare cases we don't.
         // In that case, we return early. We also avoid validation in that case,
         // because this is CTFE and the final value will be thoroughly validated anyway.
-        let (cleanup, next_block) = match frame.return_to_block {
-            StackPopCleanup::Goto { ret, unwind } => {
-                (true, Some(if unwinding { unwind } else { ret }))
-            }
-            StackPopCleanup::None { cleanup, .. } => (cleanup, None),
+        let cleanup = match return_to_block {
+            StackPopCleanup::Goto { .. } => true,
+            StackPopCleanup::None { cleanup, .. } => cleanup,
         };
 
         if !cleanup {
             assert!(self.stack().is_empty(), "only the topmost frame should ever be leaked");
-            assert!(next_block.is_none(), "tried to skip cleanup when we have a next block!");
             assert!(!unwinding, "tried to skip cleanup during unwinding");
             // Leak the locals, skip validation, skip machine hook.
             return Ok(());
@@ -828,16 +851,20 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         // Normal return, figure out where to jump.
         if unwinding {
             // Follow the unwind edge.
-            let unwind = next_block.expect("Encountered StackPopCleanup::None when unwinding!");
-            self.unwind_to_block(unwind);
+            let unwind = match return_to_block {
+                StackPopCleanup::Goto { unwind, .. } => unwind,
+                StackPopCleanup::None { .. } => {
+                    panic!("Encountered StackPopCleanup::None when unwinding!")
+                }
+            };
+            self.unwind_to_block(unwind)
         } else {
             // Follow the normal return edge.
-            if let Some(ret) = next_block {
-                self.return_to_block(ret)?;
+            match return_to_block {
+                StackPopCleanup::Goto { ret, .. } => self.return_to_block(ret),
+                StackPopCleanup::None { .. } => Ok(()),
             }
         }
-
-        Ok(())
     }
 
     /// Mark a storage as live, killing the previous content.

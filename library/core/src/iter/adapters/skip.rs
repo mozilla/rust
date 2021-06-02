@@ -1,3 +1,4 @@
+use crate::intrinsics::unlikely;
 use crate::iter::{adapters::SourceIter, FusedIterator, InPlaceIterable};
 use crate::ops::{ControlFlow, Try};
 
@@ -31,13 +32,10 @@ where
 
     #[inline]
     fn next(&mut self) -> Option<I::Item> {
-        if self.n == 0 {
-            self.iter.next()
-        } else {
-            let old_n = self.n;
-            self.n = 0;
-            self.iter.nth(old_n)
+        if unlikely(self.n > 0) {
+            self.iter.nth(crate::mem::take(&mut self.n) - 1);
         }
+        self.iter.next()
     }
 
     #[inline]
@@ -90,7 +88,7 @@ where
     where
         Self: Sized,
         Fold: FnMut(Acc, Self::Item) -> R,
-        R: Try<Ok = Acc>,
+        R: Try<Output = Acc>,
     {
         let n = self.n;
         self.n = 0;
@@ -148,9 +146,9 @@ where
     where
         Self: Sized,
         Fold: FnMut(Acc, Self::Item) -> R,
-        R: Try<Ok = Acc>,
+        R: Try<Output = Acc>,
     {
-        fn check<T, Acc, R: Try<Ok = Acc>>(
+        fn check<T, Acc, R: Try<Output = Acc>>(
             mut n: usize,
             mut fold: impl FnMut(Acc, T) -> R,
         ) -> impl FnMut(Acc, T) -> ControlFlow<R, Acc> {

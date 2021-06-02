@@ -29,14 +29,8 @@ pub enum StabilityLevel {
     Stable,
 }
 
-impl StabilityLevel {
-    pub fn from_attr_level(level: &attr::StabilityLevel) -> Self {
-        if level.is_stable() { Stable } else { Unstable }
-    }
-}
-
 /// An entry in the `depr_map`.
-#[derive(Clone, HashStable)]
+#[derive(Clone, HashStable, Debug)]
 pub struct DeprecationEntry {
     /// The metadata of the attribute associated with this entry.
     pub attr: Deprecation,
@@ -63,7 +57,7 @@ impl DeprecationEntry {
 }
 
 /// A stability index, giving the stability level for items and methods.
-#[derive(HashStable)]
+#[derive(HashStable, Debug)]
 pub struct Index<'tcx> {
     /// This is mostly a cache, except the stabilities of local items
     /// are filled by the annotator.
@@ -132,37 +126,37 @@ pub fn report_unstable(
 /// Checks whether an item marked with `deprecated(since="X")` is currently
 /// deprecated (i.e., whether X is not greater than the current rustc version).
 pub fn deprecation_in_effect(is_since_rustc_version: bool, since: Option<&str>) -> bool {
-    let since = if let Some(since) = since {
-        if is_since_rustc_version {
-            since
-        } else {
-            // We assume that the deprecation is in effect if it's not a
-            // rustc version.
-            return true;
-        }
-    } else {
-        // If since attribute is not set, then we're definitely in effect.
-        return true;
-    };
     fn parse_version(ver: &str) -> Vec<u32> {
         // We ignore non-integer components of the version (e.g., "nightly").
         ver.split(|c| c == '.' || c == '-').flat_map(|s| s.parse()).collect()
     }
 
-    if let Some(rustc) = option_env!("CFG_RELEASE") {
-        let since: Vec<u32> = parse_version(&since);
-        let rustc: Vec<u32> = parse_version(rustc);
-        // We simply treat invalid `since` attributes as relating to a previous
-        // Rust version, thus always displaying the warning.
-        if since.len() != 3 {
-            return true;
-        }
-        since <= rustc
-    } else {
-        // By default, a deprecation warning applies to
-        // the current version of the compiler.
-        true
+    if !is_since_rustc_version {
+        // The `since` field doesn't have semantic purpose in the stable `deprecated`
+        // attribute, only in `rustc_deprecated`.
+        return true;
     }
+
+    if let Some(since) = since {
+        if since == "TBD" {
+            return false;
+        }
+
+        if let Some(rustc) = option_env!("CFG_RELEASE") {
+            let since: Vec<u32> = parse_version(&since);
+            let rustc: Vec<u32> = parse_version(rustc);
+            // We simply treat invalid `since` attributes as relating to a previous
+            // Rust version, thus always displaying the warning.
+            if since.len() != 3 {
+                return true;
+            }
+            return since <= rustc;
+        }
+    };
+
+    // Assume deprecation is in effect if "since" field is missing
+    // or if we can't determine the current Rust version.
+    true
 }
 
 pub fn deprecation_suggestion(
@@ -182,19 +176,24 @@ pub fn deprecation_suggestion(
 }
 
 pub fn deprecation_message(depr: &Deprecation, kind: &str, path: &str) -> (String, &'static Lint) {
-    let (message, lint) = if deprecation_in_effect(
-        depr.is_since_rustc_version,
-        depr.since.map(Symbol::as_str).as_deref(),
-    ) {
+    let since = depr.since.map(Symbol::as_str);
+    let (message, lint) = if deprecation_in_effect(depr.is_since_rustc_version, since.as_deref()) {
         (format!("use of deprecated {} `{}`", kind, path), DEPRECATED)
     } else {
         (
-            format!(
-                "use of {} `{}` that will be deprecated in future version {}",
-                kind,
-                path,
-                depr.since.unwrap()
-            ),
+            if since.as_deref() == Some("TBD") {
+                format!(
+                    "use of {} `{}` that will be deprecated in a future Rust version",
+                    kind, path
+                )
+            } else {
+                format!(
+                    "use of {} `{}` that will be deprecated in future version {}",
+                    kind,
+                    path,
+                    since.unwrap()
+                )
+            },
             DEPRECATED_IN_FUTURE,
         )
     };
@@ -282,7 +281,13 @@ impl<'tcx> TyCtxt<'tcx> {
     /// If `id` is `Some(_)`, this function will also check if the item at `def_id` has been
     /// deprecated. If the item is indeed deprecated, we will emit a deprecation lint attached to
     /// `id`.
-    pub fn eval_stability(self, def_id: DefId, id: Option<HirId>, span: Span) -> EvalResult {
+    pub fn eval_stability(
+        self,
+        def_id: DefId,
+        id: Option<HirId>,
+        span: Span,
+        method_span: Option<Span>,
+    ) -> EvalResult {
         // Deprecated attributes apply in-crate and cross-crate.
         if let Some(id) = id {
             if let Some(depr_entry) = self.lookup_deprecation_entry(def_id) {
@@ -301,6 +306,7 @@ impl<'tcx> TyCtxt<'tcx> {
                     let path = &with_no_trimmed_paths(|| self.def_path_str(def_id));
                     let kind = self.def_kind(def_id).descr(def_id);
                     let (message, lint) = deprecation_message(&depr_entry.attr, kind, path);
+                    let span = method_span.unwrap_or(span);
                     late_report_deprecation(
                         self,
                         &message,
@@ -383,8 +389,14 @@ impl<'tcx> TyCtxt<'tcx> {
     ///
     /// This function will also check if the item is deprecated.
     /// If so, and `id` is not `None`, a deprecated lint attached to `id` will be emitted.
-    pub fn check_stability(self, def_id: DefId, id: Option<HirId>, span: Span) {
-        self.check_optional_stability(def_id, id, span, |span, def_id| {
+    pub fn check_stability(
+        self,
+        def_id: DefId,
+        id: Option<HirId>,
+        span: Span,
+        method_span: Option<Span>,
+    ) {
+        self.check_optional_stability(def_id, id, span, method_span, |span, def_id| {
             // The API could be uncallable for other reasons, for example when a private module
             // was referenced.
             self.sess.delay_span_bug(span, &format!("encountered unmarked API: {:?}", def_id));
@@ -400,6 +412,7 @@ impl<'tcx> TyCtxt<'tcx> {
         def_id: DefId,
         id: Option<HirId>,
         span: Span,
+        method_span: Option<Span>,
         unmarked: impl FnOnce(Span, DefId),
     ) {
         let soft_handler = |lint, span, msg: &_| {
@@ -407,7 +420,7 @@ impl<'tcx> TyCtxt<'tcx> {
                 lint.build(msg).emit()
             })
         };
-        match self.eval_stability(def_id, id, span) {
+        match self.eval_stability(def_id, id, span, method_span) {
             EvalResult::Allow => {}
             EvalResult::Deny { feature, reason, issue, is_soft } => {
                 report_unstable(self.sess, feature, reason, issue, is_soft, span, soft_handler)

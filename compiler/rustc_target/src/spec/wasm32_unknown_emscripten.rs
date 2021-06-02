@@ -1,7 +1,18 @@
-use super::wasm32_base;
+use super::wasm_base;
 use super::{LinkArgs, LinkerFlavor, PanicStrategy, Target, TargetOptions};
 
 pub fn target() -> Target {
+    let mut options = wasm_base::options();
+
+    let clang_args = options.pre_link_args.entry(LinkerFlavor::Gcc).or_default();
+
+    // Rust really needs a way for users to specify exports and imports in
+    // the source code. --export-dynamic isn't the right tool for this job,
+    // however it does have the side effect of automatically exporting a lot
+    // of symbols, which approximates what people want when compiling for
+    // wasm32-unknown-unknown expect, so use it for now.
+    clang_args.push("--export-dynamic".to_string());
+
     let mut post_link_args = LinkArgs::new();
     post_link_args.insert(
         LinkerFlavor::Em,
@@ -23,12 +34,11 @@ pub fn target() -> Target {
         // functionality, and a .wasm file.
         exe_suffix: ".js".to_string(),
         linker: None,
-        linker_is_gnu: true,
         is_like_emscripten: true,
         panic_strategy: PanicStrategy::Unwind,
         post_link_args,
-        os_family: Some("unix".to_string()),
-        ..wasm32_base::options()
+        families: vec!["unix".to_string()],
+        ..options
     };
     Target {
         llvm_target: "wasm32-unknown-emscripten".to_string(),

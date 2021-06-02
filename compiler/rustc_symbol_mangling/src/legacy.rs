@@ -56,7 +56,15 @@ pub(super) fn mangle(
     let hash = get_symbol_hash(tcx, instance, instance_ty, instantiating_crate);
 
     let mut printer = SymbolPrinter { tcx, path: SymbolPath::new(), keep_within_component: false }
-        .print_def_path(def_id, &[])
+        .print_def_path(
+            def_id,
+            if let ty::InstanceDef::DropGlue(_, _) = instance.def {
+                // Add the name of the dropped type to the symbol name
+                &*instance.substs
+            } else {
+                &[]
+            },
+        )
         .unwrap();
 
     if let ty::InstanceDef::VtableShim(..) = instance.def {
@@ -118,10 +126,9 @@ fn get_symbol_hash<'tcx>(
         substs.hash_stable(&mut hcx, &mut hasher);
 
         if let Some(instantiating_crate) = instantiating_crate {
-            tcx.original_crate_name(instantiating_crate)
-                .as_str()
+            tcx.def_path_hash(instantiating_crate.as_def_id())
+                .stable_crate_id()
                 .hash_stable(&mut hcx, &mut hasher);
-            tcx.crate_disambiguator(instantiating_crate).hash_stable(&mut hcx, &mut hasher);
         }
 
         // We want to avoid accidental collision between different types of instances.
@@ -222,7 +229,7 @@ impl Printer<'tcx> for SymbolPrinter<'tcx> {
 
     fn print_dyn_existential(
         mut self,
-        predicates: &'tcx ty::List<ty::ExistentialPredicate<'tcx>>,
+        predicates: &'tcx ty::List<ty::Binder<'tcx, ty::ExistentialPredicate<'tcx>>>,
     ) -> Result<Self::DynExistential, Self::Error> {
         let mut first = true;
         for p in predicates {

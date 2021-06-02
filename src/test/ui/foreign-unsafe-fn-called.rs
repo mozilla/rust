@@ -1,5 +1,8 @@
+// revisions: mir thir
+// [thir]compile-flags: -Z thir-unsafeck
+
 mod test {
-    extern {
+    extern "C" {
         pub fn free();
     }
 }

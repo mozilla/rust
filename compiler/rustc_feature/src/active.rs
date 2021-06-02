@@ -36,7 +36,7 @@ macro_rules! declare_features {
             ),+];
 
         /// A set of features to be used by later passes.
-        #[derive(Clone, Default)]
+        #[derive(Clone, Default, Debug)]
         pub struct Features {
             /// `#![feature]` attrs for language features, for error reporting.
             pub declared_lang_features: Vec<(Symbol, Span, Option<Symbol>)>,
@@ -62,6 +62,10 @@ macro_rules! declare_features {
 
                     _ => panic!("`{}` was not listed in `declare_features`", feature),
                 }
+            }
+
+            pub fn unordered_const_ty_params(&self) -> bool {
+                self.const_generics || self.const_generics_defaults
             }
         }
     };
@@ -133,9 +137,6 @@ declare_features! (
 
     /// Allows using the `box $expr` syntax.
     (active, box_syntax, "1.0.0", Some(49733), None),
-
-    /// Allows using `#[main]` to replace the entrypoint `#[lang = "start"]` calls.
-    (active, main, "1.0.0", Some(29634), None),
 
     /// Allows using `#[start]` on a function indicating that it is the program entrypoint.
     (active, start, "1.0.0", Some(29633), None),
@@ -216,6 +217,10 @@ declare_features! (
     /// Renamed from `optin_builtin_traits`.
     (active, auto_traits, "1.50.0", Some(13231), None),
 
+    /// Allows `#[doc(notable_trait)]`.
+    /// Renamed from `doc_spotlight`.
+    (active, doc_notable_trait, "1.52.0", Some(45040), None),
+
     // no-tracking-issue-end
 
     // -------------------------------------------------------------------------
@@ -254,12 +259,6 @@ declare_features! (
     // feature-group-start: actual feature gates
     // -------------------------------------------------------------------------
 
-    /// Allows using the `#[link_args]` attribute.
-    (active, link_args, "1.0.0", Some(29596), None),
-
-    /// Allows defining identifiers beyond ASCII.
-    (active, non_ascii_idents, "1.0.0", Some(55467), None),
-
     /// Allows using `#[plugin_registrar]` on functions.
     (active, plugin_registrar, "1.0.0", Some(29597), None),
 
@@ -274,9 +273,6 @@ declare_features! (
 
     /// Allows using non lexical lifetimes (RFC 2094).
     (active, nll, "1.0.0", Some(43234), None),
-
-    /// Allows the definition of `const` functions with some advanced features.
-    (active, const_fn, "1.2.0", Some(57563), None),
 
     /// Allows associated type defaults.
     (active, associated_type_defaults, "1.2.0", Some(29661), None),
@@ -373,9 +369,6 @@ declare_features! (
 
     /// Allows `#[doc(masked)]`.
     (active, doc_masked, "1.21.0", Some(44027), None),
-
-    /// Allows `#[doc(spotlight)]`.
-    (active, doc_spotlight, "1.22.0", Some(45040), None),
 
     /// Allows `#[doc(include = "some-file")]`.
     (active, external_doc, "1.22.0", Some(44732), None),
@@ -479,20 +472,11 @@ declare_features! (
     /// Allows explicit discriminants on non-unit enum variants.
     (active, arbitrary_enum_discriminant, "1.37.0", Some(60553), None),
 
-    /// Allows `impl Trait` with multiple unrelated lifetimes.
-    (active, member_constraints, "1.37.0", Some(61997), None),
-
     /// Allows `async || body` closures.
     (active, async_closure, "1.37.0", Some(62290), None),
 
-    /// Allows `[x; N]` where `x` is a constant (RFC 2203).
-    (active, const_in_array_repeat_expressions, "1.37.0", Some(49147), None),
-
     /// Allows `impl Trait` to be used inside type aliases (RFC 2515).
     (active, type_alias_impl_trait, "1.38.0", Some(63063), None),
-
-    /// Allows the use of or-patterns (e.g., `0 | 1`).
-    (active, or_patterns, "1.38.0", Some(54883), None),
 
     /// Allows the definition of `const extern fn` and `const unsafe extern fn`.
     (active, const_extern_fn, "1.40.0", Some(64926), None),
@@ -560,9 +544,6 @@ declare_features! (
     /// Allows the use of `#[ffi_const]` on foreign functions.
     (active, ffi_const, "1.45.0", Some(58328), None),
 
-    /// No longer treat an unsafe function as an unsafe block.
-    (active, unsafe_block_in_unsafe_fn, "1.45.0", Some(71668), None),
-
     /// Allows `extern "avr-interrupt" fn()` and `extern "avr-non-blocking-interrupt" fn()`.
     (active, abi_avr_interrupt, "1.45.0", Some(69664), None),
 
@@ -578,13 +559,10 @@ declare_features! (
     /// Allows calling `transmute` in const fn
     (active, const_fn_transmute, "1.46.0", Some(53605), None),
 
-    /// The smallest useful subset of `const_generics`.
-    (active, min_const_generics, "1.47.0", Some(74878), None),
-
     /// Allows `if let` guard in match arms.
     (active, if_let_guard, "1.47.0", Some(51114), None),
 
-    /// Allows non-trivial generic constants which have to be manually propageted upwards.
+    /// Allows non-trivial generic constants which have to be manually propagated upwards.
     (active, const_evaluatable_checked, "1.48.0", Some(76560), None),
 
     /// Allows basic arithmetic on floating point types in a `const fn`.
@@ -620,8 +598,72 @@ declare_features! (
     /// Allows capturing disjoint fields in a closure/generator (RFC 2229).
     (active, capture_disjoint_fields, "1.49.0", Some(53488), None),
 
-    /// Allows arbitrary expressions in key-value attributes at parse time.
-    (active, extended_key_value_attributes, "1.50.0", Some(78835), None),
+    /// Allows const generics to have default values (e.g. `struct Foo<const N: usize = 3>(...);`).
+    (active, const_generics_defaults, "1.51.0", Some(44580), None),
+
+    /// Allows references to types with interior mutability within constants
+    (active, const_refs_to_cell, "1.51.0", Some(80384), None),
+
+    /// Allows using `pointer` and `reference` in intra-doc links
+    (active, intra_doc_pointers, "1.51.0", Some(80896), None),
+
+    /// Allows `extern "C-cmse-nonsecure-call" fn()`.
+    (active, abi_c_cmse_nonsecure_call, "1.51.0", Some(81391), None),
+
+    /// Lessens the requirements for structs to implement `Unsize`.
+    (active, relaxed_struct_unsize, "1.51.0", Some(81793), None),
+
+    /// Allows macro attributes to observe output of `#[derive]`.
+    (active, macro_attributes_in_derive_output, "1.51.0", Some(81119), None),
+
+    /// Allows the use of type alias impl trait in function return positions
+    (active, min_type_alias_impl_trait, "1.52.0", Some(63063), None),
+
+    /// Allows associated types in inherent impls.
+    (active, inherent_associated_types, "1.52.0", Some(8995), None),
+
+    // Allows setting the threshold for the `large_assignments` lint.
+    (active, large_assignments, "1.52.0", Some(83518), None),
+
+    /// Allows `extern "C-unwind" fn` to enable unwinding across ABI boundaries.
+    (active, c_unwind, "1.52.0", Some(74990), None),
+
+    /// Allows using `#[repr(align(...))]` on function items
+    (active, fn_align, "1.53.0", Some(82232), None),
+
+    /// Allows `extern "wasm" fn`
+    (active, wasm_abi, "1.53.0", Some(83788), None),
+
+    /// Allows function attribute `#[no_coverage]`, to bypass coverage
+    /// instrumentation of that function.
+    (active, no_coverage, "1.53.0", Some(84605), None),
+
+    /// Allows trait bounds in `const fn`.
+    (active, const_fn_trait_bound, "1.53.0", Some(57563), None),
+
+    /// Allows `async {}` expressions in const contexts.
+    (active, const_async_blocks, "1.53.0", Some(85368), None),
+
+    /// Allows using imported `main` function
+    (active, imported_main, "1.53.0", Some(28937), None),
+
+    /// Allows specifying modifiers in the link attribute: `#[link(modifiers = "...")]`
+    (active, native_link_modifiers, "1.53.0", Some(81490), None),
+
+    /// Allows specifying the bundle link modifier
+    (active, native_link_modifiers_bundle, "1.53.0", Some(81490), None),
+
+    /// Allows specifying the verbatim link modifier
+    (active, native_link_modifiers_verbatim, "1.53.0", Some(81490), None),
+
+    /// Allows specifying the whole-archive link modifier
+    (active, native_link_modifiers_whole_archive, "1.53.0", Some(81490), None),
+
+    /// Allows specifying the as-needed link modifier
+    (active, native_link_modifiers_as_needed, "1.53.0", Some(81490), None),
+
+    /// Allows unnamed fields of struct and union type
+    (active, unnamed_fields, "1.53.0", Some(49804), None),
 
     // -------------------------------------------------------------------------
     // feature-group-end: actual feature gates
@@ -647,9 +689,15 @@ pub const INCOMPLETE_FEATURES: &[Symbol] = &[
     sym::repr128,
     sym::unsized_locals,
     sym::capture_disjoint_fields,
+    sym::inherent_associated_types,
+    sym::type_alias_impl_trait,
+    sym::rustc_insignificant_dtor,
+    sym::unnamed_fields,
 ];
 
 /// Some features are not allowed to be used together at the same time, if
 /// the two are present, produce an error.
-pub const INCOMPATIBLE_FEATURES: &[(Symbol, Symbol)] =
-    &[(sym::const_generics, sym::min_const_generics)];
+///
+/// Currently empty, but we will probably need this again in the future,
+/// so let's keep it in for now.
+pub const INCOMPATIBLE_FEATURES: &[(Symbol, Symbol)] = &[];

@@ -9,7 +9,7 @@ struct PrintName;
 
 impl PrintName {
     const VOID: ! = panic!();
-    //~^ WARN any use of this value will cause an error
+    //~^ ERROR any use of this value will cause an error
 }
 
 fn main() {

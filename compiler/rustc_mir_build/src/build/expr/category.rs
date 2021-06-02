@@ -1,4 +1,4 @@
-use crate::thir::*;
+use rustc_middle::thir::*;
 
 #[derive(Debug, PartialEq)]
 crate enum Category {
@@ -45,6 +45,7 @@ impl Category {
 
             ExprKind::LogicalOp { .. }
             | ExprKind::Match { .. }
+            | ExprKind::If { .. }
             | ExprKind::NeverToAny { .. }
             | ExprKind::Use { .. }
             | ExprKind::Adt { .. }

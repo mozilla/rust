@@ -8,8 +8,7 @@
 use rustc_data_structures::fx::FxHashSet;
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
-use rustc_hir::def_id::LOCAL_CRATE;
-use rustc_hir::def_id::{CrateNum, DefId, LocalDefId};
+use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_hir::itemlikevisit::ItemLikeVisitor;
 use rustc_hir::Node;
@@ -31,7 +30,7 @@ fn item_might_be_inlined(tcx: TyCtxt<'tcx>, item: &hir::Item<'_>, attrs: &Codege
     match item.kind {
         hir::ItemKind::Fn(ref sig, ..) if sig.header.is_const() => true,
         hir::ItemKind::Impl { .. } | hir::ItemKind::Fn(..) => {
-            let generics = tcx.generics_of(tcx.hir().local_def_id(item.hir_id));
+            let generics = tcx.generics_of(item.def_id);
             generics.requires_monomorphization(tcx)
         }
         _ => false,
@@ -43,8 +42,8 @@ fn method_might_be_inlined(
     impl_item: &hir::ImplItem<'_>,
     impl_src: LocalDefId,
 ) -> bool {
-    let codegen_fn_attrs = tcx.codegen_fn_attrs(impl_item.hir_id.owner.to_def_id());
-    let generics = tcx.generics_of(tcx.hir().local_def_id(impl_item.hir_id));
+    let codegen_fn_attrs = tcx.codegen_fn_attrs(impl_item.hir_id().owner.to_def_id());
+    let generics = tcx.generics_of(impl_item.def_id);
     if codegen_fn_attrs.requests_inline() || generics.requires_monomorphization(tcx) {
         return true;
     }
@@ -218,8 +217,7 @@ impl<'tcx> ReachableContext<'tcx> {
                 } else {
                     false
                 };
-                let def_id = self.tcx.hir().local_def_id(item.hir_id);
-                let codegen_attrs = self.tcx.codegen_fn_attrs(def_id);
+                let codegen_attrs = self.tcx.codegen_fn_attrs(item.def_id);
                 let is_extern = codegen_attrs.contains_extern_indicator();
                 let std_internal =
                     codegen_attrs.flags.contains(CodegenFnAttrFlags::RUSTC_STD_INTERNAL_SYMBOL);
@@ -239,9 +237,11 @@ impl<'tcx> ReachableContext<'tcx> {
             Node::Item(item) => {
                 match item.kind {
                     hir::ItemKind::Fn(.., body) => {
-                        let def_id = self.tcx.hir().local_def_id(item.hir_id);
-                        if item_might_be_inlined(self.tcx, &item, self.tcx.codegen_fn_attrs(def_id))
-                        {
+                        if item_might_be_inlined(
+                            self.tcx,
+                            &item,
+                            self.tcx.codegen_fn_attrs(item.def_id),
+                        ) {
                             self.visit_nested_body(body);
                         }
                     }
@@ -249,7 +249,7 @@ impl<'tcx> ReachableContext<'tcx> {
                     // Reachable constants will be inlined into other crates
                     // unconditionally, so we need to make sure that their
                     // contents are also reachable.
-                    hir::ItemKind::Const(_, init) => {
+                    hir::ItemKind::Const(_, init) | hir::ItemKind::Static(_, _, init) => {
                         self.visit_nested_body(init);
                     }
 
@@ -260,7 +260,6 @@ impl<'tcx> ReachableContext<'tcx> {
                     | hir::ItemKind::Use(..)
                     | hir::ItemKind::OpaqueTy(..)
                     | hir::ItemKind::TyAlias(..)
-                    | hir::ItemKind::Static(..)
                     | hir::ItemKind::Mod(..)
                     | hir::ItemKind::ForeignMod { .. }
                     | hir::ItemKind::Impl { .. }
@@ -307,6 +306,7 @@ impl<'tcx> ReachableContext<'tcx> {
             | Node::Ctor(..)
             | Node::Field(_)
             | Node::Ty(_)
+            | Node::Crate(_)
             | Node::MacroDef(_) => {}
             _ => {
                 bug!(
@@ -340,21 +340,21 @@ impl<'a, 'tcx> ItemLikeVisitor<'tcx> for CollectPrivateImplItemsVisitor<'a, 'tcx
         // Anything which has custom linkage gets thrown on the worklist no
         // matter where it is in the crate, along with "special std symbols"
         // which are currently akin to allocator symbols.
-        let def_id = self.tcx.hir().local_def_id(item.hir_id);
-        let codegen_attrs = self.tcx.codegen_fn_attrs(def_id);
+        let codegen_attrs = self.tcx.codegen_fn_attrs(item.def_id);
         if codegen_attrs.contains_extern_indicator()
             || codegen_attrs.flags.contains(CodegenFnAttrFlags::RUSTC_STD_INTERNAL_SYMBOL)
         {
-            self.worklist.push(def_id);
+            self.worklist.push(item.def_id);
         }
 
         // We need only trait impls here, not inherent impls, and only non-exported ones
-        if let hir::ItemKind::Impl { of_trait: Some(ref trait_ref), ref items, .. } = item.kind {
-            if !self.access_levels.is_reachable(item.hir_id) {
+        if let hir::ItemKind::Impl(hir::Impl { of_trait: Some(ref trait_ref), ref items, .. }) =
+            item.kind
+        {
+            if !self.access_levels.is_reachable(item.hir_id()) {
                 // FIXME(#53488) remove `let`
                 let tcx = self.tcx;
-                self.worklist
-                    .extend(items.iter().map(|ii_ref| tcx.hir().local_def_id(ii_ref.id.hir_id)));
+                self.worklist.extend(items.iter().map(|ii_ref| ii_ref.id.def_id));
 
                 let trait_def_id = match trait_ref.path.res {
                     Res::Def(DefKind::Trait, def_id) => def_id,
@@ -384,10 +384,8 @@ impl<'a, 'tcx> ItemLikeVisitor<'tcx> for CollectPrivateImplItemsVisitor<'a, 'tcx
     }
 }
 
-fn reachable_set<'tcx>(tcx: TyCtxt<'tcx>, crate_num: CrateNum) -> FxHashSet<LocalDefId> {
-    debug_assert!(crate_num == LOCAL_CRATE);
-
-    let access_levels = &tcx.privacy_access_levels(LOCAL_CRATE);
+fn reachable_set<'tcx>(tcx: TyCtxt<'tcx>, (): ()) -> FxHashSet<LocalDefId> {
+    let access_levels = &tcx.privacy_access_levels(());
 
     let any_library =
         tcx.sess.crate_types().iter().any(|ty| {

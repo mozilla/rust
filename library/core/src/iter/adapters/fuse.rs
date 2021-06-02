@@ -1,6 +1,8 @@
 use crate::intrinsics;
 use crate::iter::adapters::{zip::try_get_unchecked, InPlaceIterable, SourceIter};
-use crate::iter::{DoubleEndedIterator, ExactSizeIterator, FusedIterator, TrustedRandomAccess};
+use crate::iter::{
+    DoubleEndedIterator, ExactSizeIterator, FusedIterator, TrustedLen, TrustedRandomAccess,
+};
 use crate::ops::Try;
 
 /// An iterator that yields `None` forever after the underlying iterator
@@ -90,7 +92,7 @@ where
     where
         Self: Sized,
         Fold: FnMut(Acc, Self::Item) -> R,
-        R: Try<Ok = Acc>,
+        R: Try<Output = Acc>,
     {
         FuseImpl::try_fold(self, acc, fold)
     }
@@ -146,7 +148,7 @@ where
     where
         Self: Sized,
         Fold: FnMut(Acc, Self::Item) -> R,
-        R: Try<Ok = Acc>,
+        R: Try<Output = Acc>,
     {
         FuseImpl::try_rfold(self, acc, fold)
     }
@@ -182,15 +184,24 @@ where
     }
 }
 
+#[unstable(feature = "trusted_len", issue = "37572")]
+// SAFETY: `TrustedLen` requires that an accurate length is reported via `size_hint()`. As `Fuse`
+// is just forwarding this to the wrapped iterator `I` this property is preserved and it is safe to
+// implement `TrustedLen` here.
+unsafe impl<I> TrustedLen for Fuse<I> where I: TrustedLen {}
+
 #[doc(hidden)]
 #[unstable(feature = "trusted_random_access", issue = "none")]
+// SAFETY: `TrustedRandomAccess` requires that `size_hint()` must be exact and cheap to call, and
+// `Iterator::__iterator_get_unchecked()` must be implemented accordingly.
+//
+// This is safe to implement as `Fuse` is just forwarding these to the wrapped iterator `I`, which
+// preserves these properties.
 unsafe impl<I> TrustedRandomAccess for Fuse<I>
 where
     I: TrustedRandomAccess,
 {
-    fn may_have_side_effect() -> bool {
-        I::may_have_side_effect()
-    }
+    const MAY_HAVE_SIDE_EFFECT: bool = I::MAY_HAVE_SIDE_EFFECT;
 }
 
 // Fuse specialization trait
@@ -208,7 +219,7 @@ trait FuseImpl<I> {
     where
         Self: Sized,
         Fold: FnMut(Acc, Self::Item) -> R,
-        R: Try<Ok = Acc>;
+        R: Try<Output = Acc>;
     fn fold<Acc, Fold>(self, acc: Acc, fold: Fold) -> Acc
     where
         Fold: FnMut(Acc, Self::Item) -> Acc;
@@ -227,7 +238,7 @@ trait FuseImpl<I> {
     where
         Self: Sized,
         Fold: FnMut(Acc, Self::Item) -> R,
-        R: Try<Ok = Acc>,
+        R: Try<Output = Acc>,
         I: DoubleEndedIterator;
     fn rfold<Acc, Fold>(self, acc: Acc, fold: Fold) -> Acc
     where
@@ -294,7 +305,7 @@ where
     where
         Self: Sized,
         Fold: FnMut(Acc, Self::Item) -> R,
-        R: Try<Ok = Acc>,
+        R: Try<Output = Acc>,
     {
         if let Some(ref mut iter) = self.iter {
             acc = iter.try_fold(acc, fold)?;
@@ -343,7 +354,7 @@ where
     where
         Self: Sized,
         Fold: FnMut(Acc, Self::Item) -> R,
-        R: Try<Ok = Acc>,
+        R: Try<Output = Acc>,
         I: DoubleEndedIterator,
     {
         if let Some(ref mut iter) = self.iter {
@@ -432,7 +443,7 @@ where
     where
         Self: Sized,
         Fold: FnMut(Acc, Self::Item) -> R,
-        R: Try<Ok = Acc>,
+        R: Try<Output = Acc>,
     {
         unchecked!(self).try_fold(init, fold)
     }
@@ -474,7 +485,7 @@ where
     where
         Self: Sized,
         Fold: FnMut(Acc, Self::Item) -> R,
-        R: Try<Ok = Acc>,
+        R: Try<Output = Acc>,
         I: DoubleEndedIterator,
     {
         unchecked!(self).try_rfold(init, fold)

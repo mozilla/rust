@@ -2,12 +2,13 @@ crate mod cache;
 crate mod item_type;
 crate mod renderer;
 
-crate use renderer::{run_format, FormatRenderer};
+use rustc_hir::def_id::DefId;
 
-use rustc_span::def_id::DefId;
+crate use renderer::{run_format, FormatRenderer};
 
 use crate::clean;
 use crate::clean::types::GetDefId;
+use crate::formats::cache::Cache;
 
 /// Specifies whether rendering directly implemented trait items or ones from a certain Deref
 /// impl.
@@ -32,7 +33,7 @@ crate struct Impl {
 
 impl Impl {
     crate fn inner_impl(&self) -> &clean::Impl {
-        match self.impl_item.kind {
+        match *self.impl_item.kind {
             clean::ImplItem(ref impl_) => impl_,
             _ => panic!("non-impl item found in impl"),
         }
@@ -40,5 +41,9 @@ impl Impl {
 
     crate fn trait_did(&self) -> Option<DefId> {
         self.inner_impl().trait_.def_id()
+    }
+
+    crate fn trait_did_full(&self, cache: &Cache) -> Option<DefId> {
+        self.inner_impl().trait_.def_id_full(cache)
     }
 }

@@ -146,7 +146,7 @@ mod defaults {
         // rustdoc tool.
         assert_eq!(
             first(builder.cache.all::<doc::ErrorIndex>()),
-            &[doc::ErrorIndex { compiler: Compiler { host: a, stage: 0 }, target: a },]
+            &[doc::ErrorIndex { target: a },]
         );
         assert_eq!(
             first(builder.cache.all::<tool::ErrorIndex>()),
@@ -489,6 +489,7 @@ mod dist {
             compare_mode: None,
             rustfix_coverage: false,
             pass: None,
+            run: None,
         };
 
         let build = Build::new(config);
@@ -529,6 +530,7 @@ mod dist {
             compare_mode: None,
             rustfix_coverage: false,
             pass: None,
+            run: None,
         };
 
         let build = Build::new(config);
@@ -556,7 +558,7 @@ mod dist {
         // rustdoc tool.
         assert_eq!(
             first(builder.cache.all::<doc::ErrorIndex>()),
-            &[doc::ErrorIndex { compiler: Compiler { host: a, stage: 1 }, target: a },]
+            &[doc::ErrorIndex { target: a },]
         );
         assert_eq!(
             first(builder.cache.all::<tool::ErrorIndex>()),
@@ -584,9 +586,13 @@ mod dist {
             compare_mode: None,
             rustfix_coverage: false,
             pass: None,
+            run: None,
         };
+        // Make sure rustfmt binary not being found isn't an error.
+        config.channel = "beta".to_string();
         let build = Build::new(config);
         let mut builder = Builder::new(&build);
+
         builder.run_step_descriptions(&Builder::get_step_descriptions(Kind::Test), &[]);
         let a = TargetSelection::from_user("A");
 
@@ -594,7 +600,7 @@ mod dist {
         // rustdoc tool.
         assert_eq!(
             first(builder.cache.all::<doc::ErrorIndex>()),
-            &[doc::ErrorIndex { compiler: Compiler { host: a, stage: 1 }, target: a },]
+            &[doc::ErrorIndex { target: a },]
         );
         assert_eq!(
             first(builder.cache.all::<tool::ErrorIndex>()),

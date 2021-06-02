@@ -204,6 +204,13 @@ pub use self::local::os::Key as __OsLocalKeyInner;
 #[doc(hidden)]
 pub use self::local::statik::Key as __StaticLocalKeyInner;
 
+// This is only used to make thread locals with `const { .. }` initialization
+// expressions unstable. If and/or when that syntax is stabilized with thread
+// locals this will simply be removed.
+#[doc(hidden)]
+#[unstable(feature = "thread_local_const_init", issue = "84223")]
+pub const fn require_unstable_const_init_thread_local() {}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Builder
 ////////////////////////////////////////////////////////////////////////////////
@@ -775,6 +782,15 @@ pub fn sleep_ms(ms: u32) {
 /// Platforms which do not support nanosecond precision for sleeping will
 /// have `dur` rounded up to the nearest granularity of time they can sleep for.
 ///
+/// Currently, specifying a zero duration on Unix platforms returns immediately
+/// without invoking the underlying [`nanosleep`] syscall, whereas on Windows
+/// platforms the underlying [`Sleep`] syscall is always invoked.
+/// If the intention is to yield the current time-slice you may want to use
+/// [`yield_now`] instead.
+///
+/// [`nanosleep`]: https://linux.die.net/man/2/nanosleep
+/// [`Sleep`]: https://docs.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-sleep
+///
 /// # Examples
 ///
 /// ```no_run
@@ -1167,7 +1183,10 @@ impl Thread {
 #[stable(feature = "rust1", since = "1.0.0")]
 impl fmt::Debug for Thread {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Thread").field("id", &self.id()).field("name", &self.name()).finish()
+        f.debug_struct("Thread")
+            .field("id", &self.id())
+            .field("name", &self.name())
+            .finish_non_exhaustive()
     }
 }
 
@@ -1186,32 +1205,37 @@ impl fmt::Debug for Thread {
 /// the [`Error`](crate::error::Error) trait.
 ///
 /// Thus, a sensible way to handle a thread panic is to either:
-/// 1. `unwrap` the `Result<T>`, propagating the panic
+///
+/// 1. propagate the panic with [`std::panic::resume_unwind`]
 /// 2. or in case the thread is intended to be a subsystem boundary
 /// that is supposed to isolate system-level failures,
-/// match on the `Err` variant and handle the panic in an appropriate way.
+/// match on the `Err` variant and handle the panic in an appropriate way
 ///
 /// A thread that completes without panicking is considered to exit successfully.
 ///
 /// # Examples
 ///
+/// Matching on the result of a joined thread:
+///
 /// ```no_run
-/// use std::thread;
-/// use std::fs;
+/// use std::{fs, thread, panic};
 ///
 /// fn copy_in_thread() -> thread::Result<()> {
-///     thread::spawn(move || { fs::copy("foo.txt", "bar.txt").unwrap(); }).join()
+///     thread::spawn(|| {
+///         fs::copy("foo.txt", "bar.txt").unwrap();
+///     }).join()
 /// }
 ///
 /// fn main() {
 ///     match copy_in_thread() {
-///         Ok(_) => println!("this is fine"),
-///         Err(_) => println!("thread panicked"),
+///         Ok(_) => println!("copy succeeded"),
+///         Err(e) => panic::resume_unwind(e),
 ///     }
 /// }
 /// ```
 ///
 /// [`Result`]: crate::result::Result
+/// [`std::panic::resume_unwind`]: crate::panic::resume_unwind
 #[stable(feature = "rust1", since = "1.0.0")]
 pub type Result<T> = crate::result::Result<T, Box<dyn Any + Send + 'static>>;
 
@@ -1389,7 +1413,7 @@ impl<T> IntoInner<imp::Thread> for JoinHandle<T> {
 #[stable(feature = "std_debug", since = "1.16.0")]
 impl<T> fmt::Debug for JoinHandle<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad("JoinHandle { .. }")
+        f.debug_struct("JoinHandle").finish_non_exhaustive()
     }
 }
 

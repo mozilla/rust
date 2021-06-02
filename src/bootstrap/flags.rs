@@ -68,6 +68,9 @@ pub struct Flags {
     pub deny_warnings: Option<bool>,
 
     pub llvm_skip_rebuild: Option<bool>,
+
+    pub rust_profile_use: Option<String>,
+    pub rust_profile_generate: Option<String>,
 }
 
 pub enum Subcommand {
@@ -88,6 +91,7 @@ pub enum Subcommand {
         paths: Vec<PathBuf>,
     },
     Format {
+        paths: Vec<PathBuf>,
         check: bool,
     },
     Doc {
@@ -100,6 +104,7 @@ pub enum Subcommand {
         bless: bool,
         compare_mode: Option<String>,
         pass: Option<String>,
+        run: Option<String>,
         test_args: Vec<String>,
         rustc_args: Vec<String>,
         fail_fast: bool,
@@ -219,6 +224,8 @@ To learn more about a subcommand, run `./x.py <subcommand> -h`",
              VALUE overrides the skip-rebuild option in config.toml.",
             "VALUE",
         );
+        opts.optopt("", "rust-profile-generate", "generate PGO profile with rustc build", "FORMAT");
+        opts.optopt("", "rust-profile-use", "use PGO profile for rustc build", "FORMAT");
 
         // We can't use getopt to parse the options until we have completed specifying which
         // options are valid, but under the current implementation, some options are conditional on
@@ -288,6 +295,7 @@ To learn more about a subcommand, run `./x.py <subcommand> -h`",
                     "force {check,build,run}-pass tests to this mode.",
                     "check | build | run",
                 );
+                opts.optopt("", "run", "whether to execute run-* tests", "auto | always | never");
                 opts.optflag(
                     "",
                     "rustfix-coverage",
@@ -342,7 +350,7 @@ To learn more about a subcommand, run `./x.py <subcommand> -h`",
         };
 
         // Done specifying what options are possible, so do the getopts parsing
-        let matches = opts.parse(&args[..]).unwrap_or_else(|e| {
+        let matches = opts.parse(args).unwrap_or_else(|e| {
             // Invalid argument/option format
             println!("\n{}\n", e);
             usage(1, &opts, false, &subcommand_help);
@@ -551,6 +559,7 @@ Arguments:
                 bless: matches.opt_present("bless"),
                 compare_mode: matches.opt_str("compare-mode"),
                 pass: matches.opt_str("pass"),
+                run: matches.opt_str("run"),
                 test_args: matches.opt_strs("test-args"),
                 rustc_args: matches.opt_strs("rustc-args"),
                 fail_fast: !matches.opt_present("no-fail-fast"),
@@ -573,7 +582,7 @@ Arguments:
 
                 Subcommand::Clean { all: matches.opt_present("all") }
             }
-            "fmt" => Subcommand::Format { check: matches.opt_present("check") },
+            "fmt" => Subcommand::Format { check: matches.opt_present("check"), paths },
             "dist" => Subcommand::Dist { paths },
             "install" => Subcommand::Install { paths },
             "run" | "r" => {
@@ -609,14 +618,10 @@ Arguments:
         };
 
         if let Subcommand::Check { .. } = &cmd {
-            if matches.opt_str("stage").is_some() {
-                println!("--stage not supported for x.py check, always treated as stage 0");
-                process::exit(1);
-            }
             if matches.opt_str("keep-stage").is_some()
                 || matches.opt_str("keep-stage-std").is_some()
             {
-                println!("--keep-stage not supported for x.py check, only one stage available");
+                println!("--keep-stage not yet supported for x.py check");
                 process::exit(1);
             }
         }
@@ -674,6 +679,8 @@ Arguments:
             color: matches
                 .opt_get_default("color", Color::Auto)
                 .expect("`color` should be `always`, `never`, or `auto`"),
+            rust_profile_use: matches.opt_str("rust-profile-use"),
+            rust_profile_generate: matches.opt_str("rust-profile-generate"),
         }
     }
 }
@@ -735,6 +742,13 @@ impl Subcommand {
     pub fn pass(&self) -> Option<&str> {
         match *self {
             Subcommand::Test { ref pass, .. } => pass.as_ref().map(|s| &s[..]),
+            _ => None,
+        }
+    }
+
+    pub fn run(&self) -> Option<&str> {
+        match *self {
+            Subcommand::Test { ref run, .. } => run.as_ref().map(|s| &s[..]),
             _ => None,
         }
     }

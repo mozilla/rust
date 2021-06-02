@@ -6,7 +6,7 @@ use crate::fmt;
 use crate::mem;
 use crate::ops::{Deref, DerefMut};
 use crate::ptr;
-use crate::sys_common::poison::{self, LockResult, TryLockError, TryLockResult};
+use crate::sync::{poison, LockResult, TryLockError, TryLockResult};
 use crate::sys_common::rwlock as sys;
 
 /// A reader-writer lock
@@ -23,7 +23,9 @@ use crate::sys_common::rwlock as sys;
 ///
 /// The priority policy of the lock is dependent on the underlying operating
 /// system's implementation, and this type does not guarantee that any
-/// particular policy will be used.
+/// particular policy will be used. In particular, a writer which is waiting to
+/// acquire the lock in `write` might or might not block concurrent calls to
+/// `read`.
 ///
 /// The type parameter `T` represents the data that this lock protects. It is
 /// required that `T` satisfies [`Send`] to be shared across threads and
@@ -197,10 +199,16 @@ impl<T: ?Sized> RwLock<T> {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the RwLock is poisoned. An RwLock
-    /// is poisoned whenever a writer panics while holding an exclusive lock. An
-    /// error will only be returned if the lock would have otherwise been
+    /// This function will return the [`Poisoned`] error if the RwLock is poisoned.
+    /// An RwLock is poisoned whenever a writer panics while holding an exclusive
+    /// lock. `Poisoned` will only be returned if the lock would have otherwise been
     /// acquired.
+    ///
+    /// This function will return the [`WouldBlock`] error if the RwLock could not
+    /// be acquired because it was already locked exclusively.
+    ///
+    /// [`Poisoned`]: TryLockError::Poisoned
+    /// [`WouldBlock`]: TryLockError::WouldBlock
     ///
     /// # Examples
     ///
@@ -279,10 +287,17 @@ impl<T: ?Sized> RwLock<T> {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the RwLock is poisoned. An RwLock
-    /// is poisoned whenever a writer panics while holding an exclusive lock. An
-    /// error will only be returned if the lock would have otherwise been
-    /// acquired.
+    /// This function will return the [`Poisoned`] error if the RwLock is
+    /// poisoned. An RwLock is poisoned whenever a writer panics while holding
+    /// an exclusive lock. `Poisoned` will only be returned if the lock would have
+    /// otherwise been acquired.
+    ///
+    /// This function will return the [`WouldBlock`] error if the RwLock could not
+    /// be acquired because it was already locked exclusively.
+    ///
+    /// [`Poisoned`]: TryLockError::Poisoned
+    /// [`WouldBlock`]: TryLockError::WouldBlock
+    ///
     ///
     /// # Examples
     ///
@@ -420,10 +435,13 @@ unsafe impl<#[may_dangle] T: ?Sized> Drop for RwLock<T> {
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<T: ?Sized + fmt::Debug> fmt::Debug for RwLock<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut d = f.debug_struct("RwLock");
         match self.try_read() {
-            Ok(guard) => f.debug_struct("RwLock").field("data", &&*guard).finish(),
+            Ok(guard) => {
+                d.field("data", &&*guard);
+            }
             Err(TryLockError::Poisoned(err)) => {
-                f.debug_struct("RwLock").field("data", &&**err.get_ref()).finish()
+                d.field("data", &&**err.get_ref());
             }
             Err(TryLockError::WouldBlock) => {
                 struct LockedPlaceholder;
@@ -432,10 +450,11 @@ impl<T: ?Sized + fmt::Debug> fmt::Debug for RwLock<T> {
                         f.write_str("<locked>")
                     }
                 }
-
-                f.debug_struct("RwLock").field("data", &LockedPlaceholder).finish()
+                d.field("data", &LockedPlaceholder);
             }
         }
+        d.field("poisoned", &self.poison.get());
+        d.finish_non_exhaustive()
     }
 }
 
@@ -471,7 +490,7 @@ impl<'rwlock, T: ?Sized> RwLockWriteGuard<'rwlock, T> {
 #[stable(feature = "std_debug", since = "1.16.0")]
 impl<T: fmt::Debug> fmt::Debug for RwLockReadGuard<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RwLockReadGuard").field("lock", &self.lock).finish()
+        (**self).fmt(f)
     }
 }
 
@@ -485,7 +504,7 @@ impl<T: ?Sized + fmt::Display> fmt::Display for RwLockReadGuard<'_, T> {
 #[stable(feature = "std_debug", since = "1.16.0")]
 impl<T: fmt::Debug> fmt::Debug for RwLockWriteGuard<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RwLockWriteGuard").field("lock", &self.lock).finish()
+        (**self).fmt(f)
     }
 }
 

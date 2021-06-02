@@ -1,3 +1,5 @@
+use crate::iter::Step;
+
 /// An iterator that always continues to yield `None` when exhausted.
 ///
 /// Calling next on a fused iterator that has returned `None` once is guaranteed
@@ -33,8 +35,6 @@ impl<I: FusedIterator + ?Sized> FusedIterator for &mut I {}
 ///
 /// This trait must only be implemented when the contract is upheld. Consumers
 /// of this trait must inspect [`Iterator::size_hint()`]’s upper bound.
-///
-/// [`usize::MAX`]: crate::usize::MAX
 #[unstable(feature = "trusted_len", issue = "37572")]
 #[rustc_unsafe_specialization_marker]
 pub unsafe trait TrustedLen: Iterator {}
@@ -45,12 +45,30 @@ unsafe impl<I: TrustedLen + ?Sized> TrustedLen for &mut I {}
 /// An iterator that when yielding an item will have taken at least one element
 /// from its underlying [`SourceIter`].
 ///
-/// Calling [`next()`] guarantees that at least one value of the iterator's underlying source
-/// has been moved out and the result of the iterator chain could be inserted in its place,
-/// assuming structural constraints of the source allow such an insertion.
+/// Calling any method that advances the iterator, e.g.  [`next()`] or [`try_fold()`],
+/// guarantees that for each step at least one value of the iterator's underlying source
+/// has been moved out and the result of the iterator chain could be inserted
+/// in its place, assuming structural constraints of the source allow such an insertion.
 /// In other words this trait indicates that an iterator pipeline can be collected in place.
 ///
 /// [`SourceIter`]: crate::iter::SourceIter
 /// [`next()`]: Iterator::next
+/// [`try_fold()`]: Iterator::try_fold
 #[unstable(issue = "none", feature = "inplace_iteration")]
+#[doc(hidden)]
 pub unsafe trait InPlaceIterable: Iterator {}
+
+/// A type that upholds all invariants of [`Step`].
+///
+/// The invariants of [`Step::steps_between()`] are a superset of the invariants
+/// of [`TrustedLen`]. As such, [`TrustedLen`] is implemented for all range
+/// types with the same generic type argument.
+///
+/// # Safety
+///
+/// The implementation of [`Step`] for the given type must guarantee all
+/// invariants of all methods are upheld. See the [`Step`] trait's documentation
+/// for details. Consumers are free to rely on the invariants in unsafe code.
+#[unstable(feature = "trusted_step", issue = "85731")]
+#[rustc_specialization_trait]
+pub unsafe trait TrustedStep: Step {}

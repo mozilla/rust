@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use rustc_data_structures::snapshot_vec as sv;
 use rustc_data_structures::undo_log::{Rollback, UndoLogs};
 use rustc_data_structures::unify as ut;
+use rustc_middle::infer::unify_key::RegionVidKey;
 use rustc_middle::ty;
 
 use crate::{
@@ -15,14 +16,14 @@ pub struct Snapshot<'tcx> {
     _marker: PhantomData<&'tcx ()>,
 }
 
-/// Records the 'undo' data fora single operation that affects some form of inference variable.
+/// Records the "undo" data for a single operation that affects some form of inference variable.
 pub(crate) enum UndoLog<'tcx> {
     TypeVariables(type_variable::UndoLog<'tcx>),
     ConstUnificationTable(sv::UndoLog<ut::Delegate<ty::ConstVid<'tcx>>>),
     IntUnificationTable(sv::UndoLog<ut::Delegate<ty::IntVid>>),
     FloatUnificationTable(sv::UndoLog<ut::Delegate<ty::FloatVid>>),
     RegionConstraintCollector(region_constraints::UndoLog<'tcx>),
-    RegionUnificationTable(sv::UndoLog<ut::Delegate<ty::RegionVid>>),
+    RegionUnificationTable(sv::UndoLog<ut::Delegate<RegionVidKey<'tcx>>>),
     ProjectionCache(traits::UndoLog<'tcx>),
     PushRegionObligation,
 }
@@ -55,7 +56,7 @@ impl_from! {
 
     ConstUnificationTable(sv::UndoLog<ut::Delegate<ty::ConstVid<'tcx>>>),
 
-    RegionUnificationTable(sv::UndoLog<ut::Delegate<ty::RegionVid>>),
+    RegionUnificationTable(sv::UndoLog<ut::Delegate<RegionVidKey<'tcx>>>),
     ProjectionCache(traits::UndoLog<'tcx>),
 }
 
@@ -165,10 +166,6 @@ impl<'tcx> InferCtxtInner<'tcx> {
 }
 
 impl<'tcx> InferCtxtUndoLogs<'tcx> {
-    pub fn actions_since_snapshot(&self, snapshot: &Snapshot<'tcx>) -> &[UndoLog<'tcx>] {
-        &self.logs[snapshot.undo_len..]
-    }
-
     pub fn start_snapshot(&mut self) -> Snapshot<'tcx> {
         self.num_open_snapshots += 1;
         Snapshot { undo_len: self.logs.len(), _marker: PhantomData }

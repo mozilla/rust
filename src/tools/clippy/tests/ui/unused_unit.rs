@@ -11,6 +11,7 @@
 
 #![deny(clippy::unused_unit)]
 #![allow(dead_code)]
+#![allow(clippy::from_over_into)]
 
 struct Unitter;
 impl Unitter {
@@ -79,3 +80,10 @@ fn test2() ->(){}
 
 #[rustfmt::skip]
 fn test3()-> (){}
+
+fn macro_expr() {
+    macro_rules! e {
+        () => (());
+    }
+    e!()
+}

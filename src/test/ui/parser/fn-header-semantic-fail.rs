@@ -3,7 +3,6 @@
 // edition:2018
 
 #![feature(const_extern_fn)]
-#![feature(const_fn)]
 
 fn main() {
     async fn ff1() {} // OK.
@@ -47,7 +46,7 @@ fn main() {
         //~^ ERROR functions cannot be both `const` and `async`
     }
 
-    extern {
+    extern "C" {
         async fn fe1(); //~ ERROR functions in `extern` blocks cannot have qualifiers
         unsafe fn fe2(); //~ ERROR functions in `extern` blocks cannot have qualifiers
         const fn fe3(); //~ ERROR functions in `extern` blocks cannot have qualifiers

@@ -1,6 +1,5 @@
-#![feature(min_const_generics)]
+#![crate_type = "lib"]
+#![feature(const_generics_defaults)]
 
-fn foo<const SIZE: usize = 5>() {}
-                      //~^ ERROR expected one of `!`, `(`, `+`, `,`, `::`, `<`, or `>`, found `=`
-
-fn main() {}
+fn foo<const SIZE: usize = 5usize>() {}
+//~^ ERROR defaults for const parameters are

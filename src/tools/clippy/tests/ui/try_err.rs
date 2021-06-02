@@ -2,7 +2,7 @@
 // aux-build:macro_rules.rs
 
 #![deny(clippy::try_err)]
-#![allow(clippy::unnecessary_wraps)]
+#![allow(clippy::unnecessary_wraps, clippy::needless_question_mark)]
 
 #[macro_use]
 extern crate macro_rules;
@@ -159,4 +159,12 @@ pub fn poll_next(ready: bool) -> Poll<Option<io::Result<()>>> {
     }
 
     Poll::Ready(None)
+}
+
+// Tests that `return` is not duplicated
+pub fn try_return(x: bool) -> Result<i32, i32> {
+    if x {
+        return Err(42)?;
+    }
+    Ok(0)
 }

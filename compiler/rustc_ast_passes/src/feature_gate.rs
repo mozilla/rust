@@ -1,19 +1,30 @@
 use rustc_ast as ast;
 use rustc_ast::visit::{self, AssocCtxt, FnCtxt, FnKind, Visitor};
 use rustc_ast::{AssocTyConstraint, AssocTyConstraintKind, NodeId};
-use rustc_ast::{GenericParam, GenericParamKind, PatKind, RangeEnd, VariantData};
+use rustc_ast::{PatKind, RangeEnd, VariantData};
 use rustc_errors::struct_span_err;
 use rustc_feature::{AttributeGate, BUILTIN_ATTRIBUTE_MAP};
 use rustc_feature::{Features, GateIssue};
 use rustc_session::parse::{feature_err, feature_err_issue};
 use rustc_session::Session;
 use rustc_span::source_map::Spanned;
-use rustc_span::symbol::{sym, Symbol};
+use rustc_span::symbol::sym;
 use rustc_span::Span;
 
 use tracing::debug;
 
 macro_rules! gate_feature_fn {
+    ($visitor: expr, $has_feature: expr, $span: expr, $name: expr, $explain: expr, $help: expr) => {{
+        let (visitor, has_feature, span, name, explain, help) =
+            (&*$visitor, $has_feature, $span, $name, $explain, $help);
+        let has_feature: bool = has_feature(visitor.features);
+        debug!("gate_feature(feature = {:?}, span = {:?}); has? {}", name, span, has_feature);
+        if !has_feature && !span.allows_unstable($name) {
+            feature_err_issue(&visitor.sess.parse_sess, name, span, GateIssue::Language, explain)
+                .help(help)
+                .emit();
+        }
+    }};
     ($visitor: expr, $has_feature: expr, $span: expr, $name: expr, $explain: expr) => {{
         let (visitor, has_feature, span, name, explain) =
             (&*$visitor, $has_feature, $span, $name, $explain);
@@ -27,6 +38,9 @@ macro_rules! gate_feature_fn {
 }
 
 macro_rules! gate_feature_post {
+    ($visitor: expr, $feature: ident, $span: expr, $explain: expr, $help: expr) => {
+        gate_feature_fn!($visitor, |x: &Features| x.$feature, $span, sym::$feature, $explain, $help)
+    };
     ($visitor: expr, $feature: ident, $span: expr, $explain: expr) => {
         gate_feature_fn!($visitor, |x: &Features| x.$feature, $span, sym::$feature, $explain)
     };
@@ -142,6 +156,54 @@ impl<'a> PostExpansionVisitor<'a> {
                     "efiapi ABI is experimental and subject to change"
                 );
             }
+            "C-cmse-nonsecure-call" => {
+                gate_feature_post!(
+                    &self,
+                    abi_c_cmse_nonsecure_call,
+                    span,
+                    "C-cmse-nonsecure-call ABI is experimental and subject to change"
+                );
+            }
+            "C-unwind" => {
+                gate_feature_post!(
+                    &self,
+                    c_unwind,
+                    span,
+                    "C-unwind ABI is experimental and subject to change"
+                );
+            }
+            "stdcall-unwind" => {
+                gate_feature_post!(
+                    &self,
+                    c_unwind,
+                    span,
+                    "stdcall-unwind ABI is experimental and subject to change"
+                );
+            }
+            "system-unwind" => {
+                gate_feature_post!(
+                    &self,
+                    c_unwind,
+                    span,
+                    "system-unwind ABI is experimental and subject to change"
+                );
+            }
+            "thiscall-unwind" => {
+                gate_feature_post!(
+                    &self,
+                    c_unwind,
+                    span,
+                    "thiscall-unwind ABI is experimental and subject to change"
+                );
+            }
+            "wasm" => {
+                gate_feature_post!(
+                    &self,
+                    wasm_abi,
+                    span,
+                    "wasm ABI is experimental and subject to change"
+                );
+            }
             abi => self
                 .sess
                 .parse_sess
@@ -225,7 +287,7 @@ impl<'a> PostExpansionVisitor<'a> {
                 if let ast::TyKind::ImplTrait(..) = ty.kind {
                     gate_feature_post!(
                         &self.vis,
-                        type_alias_impl_trait,
+                        min_type_alias_impl_trait,
                         ty.span,
                         "`impl Trait` in type aliases is unstable"
                     );
@@ -259,21 +321,49 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
                     include => external_doc
                     cfg => doc_cfg
                     masked => doc_masked
-                    spotlight => doc_spotlight
+                    notable_trait => doc_notable_trait
                     keyword => doc_keyword
                 );
             }
         }
-    }
 
-    fn visit_name(&mut self, sp: Span, name: Symbol) {
-        if !name.as_str().is_ascii() {
-            gate_feature_post!(
-                &self,
-                non_ascii_idents,
-                self.sess.parse_sess.source_map().guess_head_span(sp),
-                "non-ascii idents are not fully supported"
-            );
+        // Check for unstable modifiers on `#[link(..)]` attribute
+        if self.sess.check_name(attr, sym::link) {
+            for nested_meta in attr.meta_item_list().unwrap_or_default() {
+                if nested_meta.has_name(sym::modifiers) {
+                    gate_feature_post!(
+                        self,
+                        native_link_modifiers,
+                        nested_meta.span(),
+                        "native link modifiers are experimental"
+                    );
+
+                    if let Some(modifiers) = nested_meta.value_str() {
+                        for modifier in modifiers.as_str().split(',') {
+                            if let Some(modifier) = modifier.strip_prefix(&['+', '-'][..]) {
+                                macro_rules! gate_modifier { ($($name:literal => $feature:ident)*) => {
+                                    $(if modifier == $name {
+                                        let msg = concat!("`#[link(modifiers=\"", $name, "\")]` is unstable");
+                                        gate_feature_post!(
+                                            self,
+                                            $feature,
+                                            nested_meta.name_value_literal_span().unwrap(),
+                                            msg
+                                        );
+                                    })*
+                                }}
+
+                                gate_modifier!(
+                                    "bundle" => native_link_modifiers_bundle
+                                    "verbatim" => native_link_modifiers_verbatim
+                                    "whole-archive" => native_link_modifiers_whole_archive
+                                    "as-needed" => native_link_modifiers_as_needed
+                                );
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -302,16 +392,6 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
                         "`#[start]` functions are experimental \
                          and their signature may change \
                          over time"
-                    );
-                }
-                if self.sess.contains_name(&i.attrs[..], sym::main) {
-                    gate_feature_post!(
-                        &self,
-                        main,
-                        i.span,
-                        "declaration of a non-standard `#[main]` \
-                         function may change over time, for now \
-                         a top-level `fn main()` is required"
                     );
                 }
             }
@@ -351,12 +431,14 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
                 }
             }
 
-            ast::ItemKind::Impl { polarity, defaultness, ref of_trait, .. } => {
+            ast::ItemKind::Impl(box ast::ImplKind {
+                polarity, defaultness, ref of_trait, ..
+            }) => {
                 if let ast::ImplPolarity::Negative(span) = polarity {
                     gate_feature_post!(
                         &self,
                         negative_impls,
-                        span.to(of_trait.as_ref().map(|t| t.path.span).unwrap_or(span)),
+                        span.to(of_trait.as_ref().map_or(span, |t| t.path.span)),
                         "negative trait bounds are not yet fully implemented; \
                          use marker types for now"
                     );
@@ -367,7 +449,7 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
                 }
             }
 
-            ast::ItemKind::Trait(ast::IsAuto::Yes, ..) => {
+            ast::ItemKind::Trait(box ast::TraitKind(ast::IsAuto::Yes, ..)) => {
                 gate_feature_post!(
                     &self,
                     auto_traits,
@@ -385,7 +467,9 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
                 gate_feature_post!(&self, decl_macro, i.span, msg);
             }
 
-            ast::ItemKind::TyAlias(_, _, _, Some(ref ty)) => self.check_impl_trait(&ty),
+            ast::ItemKind::TyAlias(box ast::TyAliasKind(_, _, _, Some(ref ty))) => {
+                self.check_impl_trait(&ty)
+            }
 
             _ => {}
         }
@@ -397,10 +481,8 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
         match i.kind {
             ast::ForeignItemKind::Fn(..) | ast::ForeignItemKind::Static(..) => {
                 let link_name = self.sess.first_attr_value_str_by_name(&i.attrs, sym::link_name);
-                let links_to_llvm = match link_name {
-                    Some(val) => val.as_str().starts_with("llvm."),
-                    _ => false,
-                };
+                let links_to_llvm =
+                    link_name.map_or(false, |val| val.as_str().starts_with("llvm."));
                 if links_to_llvm {
                     gate_feature_post!(
                         &self,
@@ -529,19 +611,6 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
         visit::walk_fn(self, fn_kind, span)
     }
 
-    fn visit_generic_param(&mut self, param: &'a GenericParam) {
-        if let GenericParamKind::Const { .. } = param.kind {
-            gate_feature_fn!(
-                &self,
-                |x: &Features| x.const_generics || x.min_const_generics,
-                param.ident.span,
-                sym::min_const_generics,
-                "const generics are unstable"
-            );
-        }
-        visit::walk_generic_param(self, param)
-    }
-
     fn visit_assoc_ty_constraint(&mut self, constraint: &'a AssocTyConstraint) {
         if let AssocTyConstraintKind::Bound { .. } = constraint.kind {
             gate_feature_post!(
@@ -556,13 +625,8 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
 
     fn visit_assoc_item(&mut self, i: &'a ast::AssocItem, ctxt: AssocCtxt) {
         let is_fn = match i.kind {
-            ast::AssocItemKind::Fn(_, ref sig, _, _) => {
-                if let (ast::Const::Yes(_), AssocCtxt::Trait) = (sig.header.constness, ctxt) {
-                    gate_feature_post!(&self, const_fn, i.span, "const fn is unstable");
-                }
-                true
-            }
-            ast::AssocItemKind::TyAlias(_, ref generics, _, ref ty) => {
+            ast::AssocItemKind::Fn(_) => true,
+            ast::AssocItemKind::TyAlias(box ast::TyAliasKind(_, ref generics, _, ref ty)) => {
                 if let (Some(_), AssocCtxt::Trait) = (ty, ctxt) {
                     gate_feature_post!(
                         &self,
@@ -612,6 +676,13 @@ pub fn check_crate(krate: &ast::Crate, sess: &Session) {
 
     let spans = sess.parse_sess.gated_spans.spans.borrow();
     macro_rules! gate_all {
+        ($gate:ident, $msg:literal, $help:literal) => {
+            if let Some(spans) = spans.get(&sym::$gate) {
+                for span in spans {
+                    gate_feature_post!(&visitor, $gate, *span, $msg, $help);
+                }
+            }
+        };
         ($gate:ident, $msg:literal) => {
             if let Some(spans) = spans.get(&sym::$gate) {
                 for span in spans {
@@ -620,25 +691,37 @@ pub fn check_crate(krate: &ast::Crate, sess: &Session) {
             }
         };
     }
-    gate_all!(if_let_guard, "`if let` guard is not implemented");
-    gate_all!(let_chains, "`let` expressions in this position are experimental");
-    gate_all!(async_closure, "async closures are unstable");
+    gate_all!(
+        if_let_guard,
+        "`if let` guards are experimental",
+        "you can write `if matches!(<expr>, <pattern>)` instead of `if let <pattern> = <expr>`"
+    );
+    gate_all!(
+        let_chains,
+        "`let` expressions in this position are experimental",
+        "you can write `matches!(<expr>, <pattern>)` instead of `let <pattern> = <expr>`"
+    );
+    gate_all!(
+        async_closure,
+        "async closures are unstable",
+        "to use an async block, remove the `||`: `async {`"
+    );
     gate_all!(generators, "yield syntax is experimental");
-    gate_all!(or_patterns, "or-patterns syntax is experimental");
     gate_all!(raw_ref_op, "raw address of syntax is experimental");
     gate_all!(const_trait_bound_opt_out, "`?const` on trait bounds is experimental");
     gate_all!(const_trait_impl, "const trait impls are experimental");
     gate_all!(half_open_range_patterns, "half-open range patterns are unstable");
     gate_all!(inline_const, "inline-const is experimental");
     gate_all!(
-        extended_key_value_attributes,
-        "arbitrary expressions in key-value attributes are unstable"
+        const_generics_defaults,
+        "default values for const generic parameters are experimental"
     );
     if sess.parse_sess.span_diagnostic.err_count() == 0 {
         // Errors for `destructuring_assignment` can get quite noisy, especially where `_` is
         // involved, so we only emit errors where there are no other parsing errors.
         gate_all!(destructuring_assignment, "destructuring assignments are unstable");
     }
+    gate_all!(unnamed_fields, "unnamed fields are not yet fully implemented");
 
     // All uses of `gate_all!` below this point were added in #65742,
     // and subsequently disabled (with the non-early gating readded).
@@ -674,16 +757,46 @@ pub fn check_crate(krate: &ast::Crate, sess: &Session) {
 }
 
 fn maybe_stage_features(sess: &Session, krate: &ast::Crate) {
+    use rustc_errors::Applicability;
+
     if !sess.opts.unstable_features.is_nightly_build() {
+        let lang_features = &sess.features_untracked().declared_lang_features;
         for attr in krate.attrs.iter().filter(|attr| sess.check_name(attr, sym::feature)) {
-            struct_span_err!(
+            let mut err = struct_span_err!(
                 sess.parse_sess.span_diagnostic,
                 attr.span,
                 E0554,
                 "`#![feature]` may not be used on the {} release channel",
                 option_env!("CFG_RELEASE_CHANNEL").unwrap_or("(unknown)")
-            )
-            .emit();
+            );
+            let mut all_stable = true;
+            for ident in
+                attr.meta_item_list().into_iter().flatten().map(|nested| nested.ident()).flatten()
+            {
+                let name = ident.name;
+                let stable_since = lang_features
+                    .iter()
+                    .flat_map(|&(feature, _, since)| if feature == name { since } else { None })
+                    .next();
+                if let Some(since) = stable_since {
+                    err.help(&format!(
+                        "the feature `{}` has been stable since {} and no longer requires \
+                                  an attribute to enable",
+                        name, since
+                    ));
+                } else {
+                    all_stable = false;
+                }
+            }
+            if all_stable {
+                err.span_suggestion(
+                    attr.span,
+                    "remove the attribute",
+                    String::new(),
+                    Applicability::MachineApplicable,
+                );
+            }
+            err.emit();
         }
     }
 }

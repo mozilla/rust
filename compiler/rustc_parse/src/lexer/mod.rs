@@ -14,7 +14,7 @@ mod tokentrees;
 mod unescape_error_reporting;
 mod unicode_chars;
 
-use unescape_error_reporting::{emit_unescape_error, push_escaped_char};
+use unescape_error_reporting::{emit_unescape_error, escaped_char};
 
 #[derive(Clone, Debug)]
 pub struct UnmatchedBrace {
@@ -122,15 +122,13 @@ impl<'a> StringReader<'a> {
         m: &str,
         c: char,
     ) -> DiagnosticBuilder<'a> {
-        let mut m = m.to_string();
-        m.push_str(": ");
-        push_escaped_char(&mut m, c);
-
-        self.sess.span_diagnostic.struct_span_fatal(self.mk_sp(from_pos, to_pos), &m[..])
+        self.sess
+            .span_diagnostic
+            .struct_span_fatal(self.mk_sp(from_pos, to_pos), &format!("{}: {}", m, escaped_char(c)))
     }
 
     /// Turns simple `rustc_lexer::TokenKind` enum into a rich
-    /// `librustc_ast::TokenKind`. This turns strings into interned
+    /// `rustc_ast::TokenKind`. This turns strings into interned
     /// symbols and runs additional validation.
     fn cook_lexer_token(&self, token: rustc_lexer::TokenKind, start: BytePos) -> Option<TokenKind> {
         Some(match token {
@@ -150,15 +148,11 @@ impl<'a> StringReader<'a> {
                         None => "unterminated block comment",
                     };
                     let last_bpos = self.pos;
-                    self.sess
-                        .span_diagnostic
-                        .struct_span_fatal_with_code(
-                            self.mk_sp(start, last_bpos),
-                            msg,
-                            error_code!(E0758),
-                        )
-                        .emit();
-                    FatalError.raise();
+                    self.sess.span_diagnostic.span_fatal_with_code(
+                        self.mk_sp(start, last_bpos),
+                        msg,
+                        error_code!(E0758),
+                    );
                 }
 
                 // Skip non-doc comments
@@ -270,6 +264,9 @@ impl<'a> StringReader<'a> {
                 // tokens like `<<` from `rustc_lexer`, and then add fancier error recovery to it,
                 // as there will be less overall work to do this way.
                 let token = unicode_chars::check_for_substitution(self, start, c, &mut err);
+                if c == '\x00' {
+                    err.help("source files must contain UTF-8 encoded text, unexpected null bytes might occur when a different encoding is used");
+                }
                 err.emit();
                 token?
             }
@@ -314,57 +311,41 @@ impl<'a> StringReader<'a> {
         let (lit_kind, mode, prefix_len, postfix_len) = match kind {
             rustc_lexer::LiteralKind::Char { terminated } => {
                 if !terminated {
-                    self.sess
-                        .span_diagnostic
-                        .struct_span_fatal_with_code(
-                            self.mk_sp(start, suffix_start),
-                            "unterminated character literal",
-                            error_code!(E0762),
-                        )
-                        .emit();
-                    FatalError.raise();
+                    self.sess.span_diagnostic.span_fatal_with_code(
+                        self.mk_sp(start, suffix_start),
+                        "unterminated character literal",
+                        error_code!(E0762),
+                    )
                 }
                 (token::Char, Mode::Char, 1, 1) // ' '
             }
             rustc_lexer::LiteralKind::Byte { terminated } => {
                 if !terminated {
-                    self.sess
-                        .span_diagnostic
-                        .struct_span_fatal_with_code(
-                            self.mk_sp(start + BytePos(1), suffix_start),
-                            "unterminated byte constant",
-                            error_code!(E0763),
-                        )
-                        .emit();
-                    FatalError.raise();
+                    self.sess.span_diagnostic.span_fatal_with_code(
+                        self.mk_sp(start + BytePos(1), suffix_start),
+                        "unterminated byte constant",
+                        error_code!(E0763),
+                    )
                 }
                 (token::Byte, Mode::Byte, 2, 1) // b' '
             }
             rustc_lexer::LiteralKind::Str { terminated } => {
                 if !terminated {
-                    self.sess
-                        .span_diagnostic
-                        .struct_span_fatal_with_code(
-                            self.mk_sp(start, suffix_start),
-                            "unterminated double quote string",
-                            error_code!(E0765),
-                        )
-                        .emit();
-                    FatalError.raise();
+                    self.sess.span_diagnostic.span_fatal_with_code(
+                        self.mk_sp(start, suffix_start),
+                        "unterminated double quote string",
+                        error_code!(E0765),
+                    )
                 }
                 (token::Str, Mode::Str, 1, 1) // " "
             }
             rustc_lexer::LiteralKind::ByteStr { terminated } => {
                 if !terminated {
-                    self.sess
-                        .span_diagnostic
-                        .struct_span_fatal_with_code(
-                            self.mk_sp(start + BytePos(1), suffix_start),
-                            "unterminated double quote byte string",
-                            error_code!(E0766),
-                        )
-                        .emit();
-                    FatalError.raise();
+                    self.sess.span_diagnostic.span_fatal_with_code(
+                        self.mk_sp(start + BytePos(1), suffix_start),
+                        "unterminated double quote byte string",
+                        error_code!(E0766),
+                    )
                 }
                 (token::ByteStr, Mode::ByteStr, 2, 1) // b" "
             }
@@ -421,7 +402,7 @@ impl<'a> StringReader<'a> {
         let content_start = start + BytePos(prefix_len);
         let content_end = suffix_start - BytePos(postfix_len);
         let id = self.symbol_from_to(content_start, content_end);
-        self.validate_literal_escape(mode, content_start, content_end);
+        self.validate_literal_escape(mode, content_start, content_end, prefix_len, postfix_len);
         (lit_kind, id)
     }
 
@@ -525,17 +506,29 @@ impl<'a> StringReader<'a> {
         .raise();
     }
 
-    fn validate_literal_escape(&self, mode: Mode, content_start: BytePos, content_end: BytePos) {
+    fn validate_literal_escape(
+        &self,
+        mode: Mode,
+        content_start: BytePos,
+        content_end: BytePos,
+        prefix_len: u32,
+        postfix_len: u32,
+    ) {
         let lit_content = self.str_from_to(content_start, content_end);
         unescape::unescape_literal(lit_content, mode, &mut |range, result| {
             // Here we only check for errors. The actual unescaping is done later.
             if let Err(err) = result {
-                let span_with_quotes =
-                    self.mk_sp(content_start - BytePos(1), content_end + BytePos(1));
+                let span_with_quotes = self
+                    .mk_sp(content_start - BytePos(prefix_len), content_end + BytePos(postfix_len));
+                let (start, end) = (range.start as u32, range.end as u32);
+                let lo = content_start + BytePos(start);
+                let hi = lo + BytePos(end - start);
+                let span = self.mk_sp(lo, hi);
                 emit_unescape_error(
                     &self.sess.span_diagnostic,
                     lit_content,
                     span_with_quotes,
+                    span,
                     mode,
                     range,
                     err,

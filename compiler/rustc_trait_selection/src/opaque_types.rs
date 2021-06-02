@@ -46,6 +46,7 @@ pub struct OpaqueTypeDecl<'tcx> {
     /// type Foo = impl Baz;
     /// fn bar() -> Foo {
     /// //          ^^^ This is the span we are looking for!
+    /// }
     /// ```
     ///
     /// In cases where the fn returns `(impl Trait, impl Trait)` or
@@ -138,15 +139,6 @@ pub trait InferCtxtExt<'tcx> {
         opaque_type_def_id: DefId,
         first_own_region_index: usize,
     );
-
-    /*private*/
-    fn member_constraint_feature_gate(
-        &self,
-        opaque_defn: &OpaqueTypeDecl<'tcx>,
-        opaque_type_def_id: DefId,
-        conflict1: ty::Region<'tcx>,
-        conflict2: ty::Region<'tcx>,
-    ) -> bool;
 
     fn infer_opaque_definition_from_instantiation(
         &self,
@@ -422,7 +414,9 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             }
             // These opaque type inherit all lifetime parameters from their
             // parent, so we have to check them all.
-            hir::OpaqueTyOrigin::Binding | hir::OpaqueTyOrigin::Misc => 0,
+            hir::OpaqueTyOrigin::Binding
+            | hir::OpaqueTyOrigin::TyAlias
+            | hir::OpaqueTyOrigin::Misc => 0,
         };
 
         let span = tcx.def_span(def_id);
@@ -486,9 +480,6 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                         // we will create a "in bound" like `'r in
                         // ['a, 'b, 'c]`, where `'a..'c` are the
                         // regions that appear in the impl trait.
-
-                        // For now, enforce a feature gate outside of async functions.
-                        self.member_constraint_feature_gate(opaque_defn, def_id, lr, subst_region);
 
                         return self.generate_member_constraint(
                             concrete_ty,
@@ -554,59 +545,6 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                 )
             },
         });
-    }
-
-    /// Member constraints are presently feature-gated except for
-    /// async-await. We expect to lift this once we've had a bit more
-    /// time.
-    fn member_constraint_feature_gate(
-        &self,
-        opaque_defn: &OpaqueTypeDecl<'tcx>,
-        opaque_type_def_id: DefId,
-        conflict1: ty::Region<'tcx>,
-        conflict2: ty::Region<'tcx>,
-    ) -> bool {
-        // If we have `#![feature(member_constraints)]`, no problems.
-        if self.tcx.features().member_constraints {
-            return false;
-        }
-
-        let span = self.tcx.def_span(opaque_type_def_id);
-
-        // Without a feature-gate, we only generate member-constraints for async-await.
-        let context_name = match opaque_defn.origin {
-            // No feature-gate required for `async fn`.
-            hir::OpaqueTyOrigin::AsyncFn => return false,
-
-            // Otherwise, generate the label we'll use in the error message.
-            hir::OpaqueTyOrigin::Binding
-            | hir::OpaqueTyOrigin::FnReturn
-            | hir::OpaqueTyOrigin::Misc => "impl Trait",
-        };
-        let msg = format!("ambiguous lifetime bound in `{}`", context_name);
-        let mut err = self.tcx.sess.struct_span_err(span, &msg);
-
-        let conflict1_name = conflict1.to_string();
-        let conflict2_name = conflict2.to_string();
-        let label_owned;
-        let label = match (&*conflict1_name, &*conflict2_name) {
-            ("'_", "'_") => "the elided lifetimes here do not outlive one another",
-            _ => {
-                label_owned = format!(
-                    "neither `{}` nor `{}` outlives the other",
-                    conflict1_name, conflict2_name,
-                );
-                &label_owned
-            }
-        };
-        err.span_label(span, label);
-
-        if self.tcx.sess.is_nightly_build() {
-            err.help("add #![feature(member_constraints)] to the crate attributes to enable");
-        }
-
-        err.emit();
-        true
     }
 
     /// Given the fully resolved, instantiated type for an opaque
@@ -694,7 +632,7 @@ where
 {
     fn visit_binder<T: TypeFoldable<'tcx>>(
         &mut self,
-        t: &ty::Binder<T>,
+        t: &ty::Binder<'tcx, T>,
     ) -> ControlFlow<Self::BreakTy> {
         t.as_ref().skip_binder().visit_with(self);
         ControlFlow::CONTINUE
@@ -1153,7 +1091,7 @@ impl<'a, 'tcx> Instantiator<'a, 'tcx> {
         debug!("instantiate_opaque_types: ty_var={:?}", ty_var);
 
         for predicate in &bounds {
-            if let ty::PredicateAtom::Projection(projection) = predicate.skip_binders() {
+            if let ty::PredicateKind::Projection(projection) = predicate.kind().skip_binder() {
                 if projection.ty.references_error() {
                     // No point on adding these obligations since there's a type error involved.
                     return ty_var;
@@ -1168,7 +1106,7 @@ impl<'a, 'tcx> Instantiator<'a, 'tcx> {
             // This also instantiates nested instances of `impl Trait`.
             let predicate = self.instantiate_opaque_types_in_map(predicate);
 
-            let cause = traits::ObligationCause::new(span, self.body_id, traits::MiscObligation);
+            let cause = traits::ObligationCause::new(span, self.body_id, traits::OpaqueType);
 
             // Require that the predicate holds for the concrete type.
             debug!("instantiate_opaque_types: predicate={:?}", predicate);
@@ -1251,18 +1189,18 @@ crate fn required_region_bounds(
     traits::elaborate_predicates(tcx, predicates)
         .filter_map(|obligation| {
             debug!("required_region_bounds(obligation={:?})", obligation);
-            match obligation.predicate.skip_binders() {
-                ty::PredicateAtom::Projection(..)
-                | ty::PredicateAtom::Trait(..)
-                | ty::PredicateAtom::Subtype(..)
-                | ty::PredicateAtom::WellFormed(..)
-                | ty::PredicateAtom::ObjectSafe(..)
-                | ty::PredicateAtom::ClosureKind(..)
-                | ty::PredicateAtom::RegionOutlives(..)
-                | ty::PredicateAtom::ConstEvaluatable(..)
-                | ty::PredicateAtom::ConstEquate(..)
-                | ty::PredicateAtom::TypeWellFormedFromEnv(..) => None,
-                ty::PredicateAtom::TypeOutlives(ty::OutlivesPredicate(ref t, ref r)) => {
+            match obligation.predicate.kind().skip_binder() {
+                ty::PredicateKind::Projection(..)
+                | ty::PredicateKind::Trait(..)
+                | ty::PredicateKind::Subtype(..)
+                | ty::PredicateKind::WellFormed(..)
+                | ty::PredicateKind::ObjectSafe(..)
+                | ty::PredicateKind::ClosureKind(..)
+                | ty::PredicateKind::RegionOutlives(..)
+                | ty::PredicateKind::ConstEvaluatable(..)
+                | ty::PredicateKind::ConstEquate(..)
+                | ty::PredicateKind::TypeWellFormedFromEnv(..) => None,
+                ty::PredicateKind::TypeOutlives(ty::OutlivesPredicate(ref t, ref r)) => {
                     // Search for a bound of the form `erased_self_ty
                     // : 'a`, but be wary of something like `for<'a>
                     // erased_self_ty : 'a` (we interpret a

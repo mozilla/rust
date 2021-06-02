@@ -1,8 +1,8 @@
-use super::usefulness::Usefulness::*;
 use super::usefulness::{
-    compute_match_usefulness, expand_pattern, MatchArm, MatchCheckCtxt, UsefulnessReport,
+    compute_match_usefulness, expand_pattern, is_wildcard, MatchArm, MatchCheckCtxt, Reachability,
+    UsefulnessReport,
 };
-use super::{PatCtxt, PatKind, PatternError};
+use super::{PatCtxt, PatternError};
 
 use rustc_arena::TypedArena;
 use rustc_ast::Mutability;
@@ -12,6 +12,7 @@ use rustc_hir::def::*;
 use rustc_hir::def_id::DefId;
 use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_hir::{HirId, Pat};
+use rustc_middle::thir::PatKind;
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_session::lint::builtin::BINDINGS_WITH_VARIANT_NAME;
 use rustc_session::lint::builtin::{IRREFUTABLE_LET_PATTERNS, UNREACHABLE_PATTERNS};
@@ -164,9 +165,19 @@ impl<'tcx> MatchVisitor<'_, 'tcx> {
         for arm in arms {
             // Check the arm for some things unrelated to exhaustiveness.
             self.check_patterns(&arm.pat);
+            if let Some(hir::Guard::IfLet(ref pat, _)) = arm.guard {
+                self.check_patterns(pat);
+            }
         }
 
         let mut cx = self.new_cx(scrut.hir_id);
+
+        for arm in arms {
+            if let Some(hir::Guard::IfLet(ref pat, _)) = arm.guard {
+                let tpat = self.lower_pattern(&mut cx, pat, &mut false).0;
+                check_if_let_guard(&mut cx, &tpat, pat.hir_id);
+            }
+        }
 
         let mut have_errors = false;
 
@@ -334,7 +345,7 @@ fn check_for_bindings_named_same_as_variants(cx: &MatchVisitor<'_, '_>, pat: &Pa
 
 /// Checks for common cases of "catchall" patterns that may not be intended as such.
 fn pat_is_catchall(pat: &super::Pat<'_>) -> bool {
-    use super::PatKind::*;
+    use PatKind::*;
     match &*pat.kind {
         Binding { subpattern: None, .. } => true,
         Binding { subpattern: Some(s), .. } | Deref { subpattern: s } => pat_is_catchall(s),
@@ -356,14 +367,47 @@ fn unreachable_pattern(tcx: TyCtxt<'_>, span: Span, id: HirId, catchall: Option<
 }
 
 fn irrefutable_let_pattern(tcx: TyCtxt<'_>, span: Span, id: HirId, source: hir::MatchSource) {
-    tcx.struct_span_lint_hir(IRREFUTABLE_LET_PATTERNS, id, span, |lint| {
-        let msg = match source {
-            hir::MatchSource::IfLetDesugar { .. } => "irrefutable if-let pattern",
-            hir::MatchSource::WhileLetDesugar => "irrefutable while-let pattern",
-            _ => bug!(),
-        };
-        lint.build(msg).emit()
+    tcx.struct_span_lint_hir(IRREFUTABLE_LET_PATTERNS, id, span, |lint| match source {
+        hir::MatchSource::IfLetDesugar { .. } => {
+            let mut diag = lint.build("irrefutable `if let` pattern");
+            diag.note("this pattern will always match, so the `if let` is useless");
+            diag.help("consider replacing the `if let` with a `let`");
+            diag.emit()
+        }
+        hir::MatchSource::WhileLetDesugar => {
+            let mut diag = lint.build("irrefutable `while let` pattern");
+            diag.note("this pattern will always match, so the loop will never exit");
+            diag.help("consider instead using a `loop { ... }` with a `let` inside it");
+            diag.emit()
+        }
+        hir::MatchSource::IfLetGuardDesugar => {
+            let mut diag = lint.build("irrefutable `if let` guard pattern");
+            diag.note("this pattern will always match, so the guard is useless");
+            diag.help("consider removing the guard and adding a `let` inside the match arm");
+            diag.emit()
+        }
+        _ => {
+            bug!(
+                "expected `if let`, `while let`, or `if let` guard HIR match source, found {:?}",
+                source,
+            )
+        }
     });
+}
+
+fn check_if_let_guard<'p, 'tcx>(
+    cx: &mut MatchCheckCtxt<'p, 'tcx>,
+    pat: &'p super::Pat<'tcx>,
+    pat_id: HirId,
+) {
+    let arms = [MatchArm { pat, hir_id: pat_id, has_guard: false }];
+    let report = compute_match_usefulness(&cx, &arms, pat_id, pat.ty);
+    report_arm_reachability(&cx, &report, hir::MatchSource::IfLetGuardDesugar);
+
+    if report.non_exhaustiveness_witnesses.is_empty() {
+        // The match is exhaustive, i.e. the `if let` pattern is irrefutable.
+        irrefutable_let_pattern(cx.tcx, pat.span, pat_id, hir::MatchSource::IfLetGuardDesugar)
+    }
 }
 
 /// Report unreachable arms, if any.
@@ -372,12 +416,13 @@ fn report_arm_reachability<'p, 'tcx>(
     report: &UsefulnessReport<'p, 'tcx>,
     source: hir::MatchSource,
 ) {
+    use Reachability::*;
     let mut catchall = None;
     for (arm_index, (arm, is_useful)) in report.arm_usefulness.iter().enumerate() {
         match is_useful {
-            NotUseful => {
+            Unreachable => {
                 match source {
-                    hir::MatchSource::IfDesugar { .. } | hir::MatchSource::WhileDesugar => bug!(),
+                    hir::MatchSource::WhileDesugar => bug!(),
 
                     hir::MatchSource::IfLetDesugar { .. } | hir::MatchSource::WhileLetDesugar => {
                         // Check which arm we're on.
@@ -390,6 +435,11 @@ fn report_arm_reachability<'p, 'tcx>(
                         }
                     }
 
+                    hir::MatchSource::IfLetGuardDesugar => {
+                        assert_eq!(arm_index, 0);
+                        unreachable_pattern(cx.tcx, arm.pat.span, arm.hir_id, None);
+                    }
+
                     hir::MatchSource::ForLoopDesugar | hir::MatchSource::Normal => {
                         unreachable_pattern(cx.tcx, arm.pat.span, arm.hir_id, catchall);
                     }
@@ -399,17 +449,16 @@ fn report_arm_reachability<'p, 'tcx>(
                     hir::MatchSource::AwaitDesugar | hir::MatchSource::TryDesugar => {}
                 }
             }
-            Useful(unreachables) if unreachables.is_empty() => {}
+            Reachable(unreachables) if unreachables.is_empty() => {}
             // The arm is reachable, but contains unreachable subpatterns (from or-patterns).
-            Useful(unreachables) => {
-                let mut unreachables: Vec<_> = unreachables.iter().flatten().copied().collect();
+            Reachable(unreachables) => {
+                let mut unreachables = unreachables.clone();
                 // Emit lints in the order in which they occur in the file.
                 unreachables.sort_unstable();
                 for span in unreachables {
                     unreachable_pattern(cx.tcx, span, arm.hir_id, None);
                 }
             }
-            UsefulWithWitness(_) => bug!(),
         }
         if !arm.has_guard && catchall.is_none() && pat_is_catchall(arm.pat) {
             catchall = Some(arm.pat.span);
@@ -448,16 +497,25 @@ fn non_exhaustive_match<'p, 'tcx>(
         err.span_label(sp, pattern_not_covered_label(&witnesses, &joined_patterns));
     };
 
+    let is_variant_list_non_exhaustive = match scrut_ty.kind() {
+        ty::Adt(def, _) if def.is_variant_list_non_exhaustive() && !def.did.is_local() => true,
+        _ => false,
+    };
+
     adt_defined_here(cx, &mut err, scrut_ty, &witnesses);
     err.help(
         "ensure that all possible cases are being handled, \
               possibly by adding wildcards or more match arms",
     );
-    err.note(&format!("the matched value is of type `{}`", scrut_ty));
+    err.note(&format!(
+        "the matched value is of type `{}`{}",
+        scrut_ty,
+        if is_variant_list_non_exhaustive { ", which is marked as non-exhaustive" } else { "" }
+    ));
     if (scrut_ty == cx.tcx.types.usize || scrut_ty == cx.tcx.types.isize)
         && !is_empty_match
         && witnesses.len() == 1
-        && witnesses[0].is_wildcard()
+        && is_wildcard(&witnesses[0])
     {
         err.note(&format!(
             "`{}` does not have a fixed maximum value, \
@@ -470,6 +528,11 @@ fn non_exhaustive_match<'p, 'tcx>(
                     to the crate attributes to enable precise `{}` matching",
                 scrut_ty,
             ));
+        }
+    }
+    if let ty::Ref(_, sub_ty, _) = scrut_ty.kind() {
+        if cx.tcx.is_ty_uninhabited_from(cx.module, sub_ty, cx.param_env) {
+            err.note("references are always considered inhabited");
         }
     }
     err.emit();

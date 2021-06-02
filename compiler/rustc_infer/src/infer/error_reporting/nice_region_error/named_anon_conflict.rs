@@ -1,5 +1,6 @@
 //! Error Reporting for Anonymous Region Lifetime Errors
 //! where one region is named and the other is anonymous.
+use crate::infer::error_reporting::nice_region_error::find_anon_type::find_anon_type;
 use crate::infer::error_reporting::nice_region_error::NiceRegionError;
 use rustc_errors::{struct_span_err, Applicability, DiagnosticBuilder};
 use rustc_hir::intravisit::Visitor;
@@ -9,7 +10,7 @@ use rustc_middle::ty;
 impl<'a, 'tcx> NiceRegionError<'a, 'tcx> {
     /// When given a `ConcreteFailure` for a function with parameters containing a named region and
     /// an anonymous region, emit an descriptive diagnostic error.
-    pub(super) fn try_report_named_anon_conflict(&self) -> Option<DiagnosticBuilder<'a>> {
+    pub(super) fn try_report_named_anon_conflict(&self) -> Option<DiagnosticBuilder<'tcx>> {
         let (span, sub, sup) = self.regions()?;
 
         debug!(
@@ -74,7 +75,7 @@ impl<'a, 'tcx> NiceRegionError<'a, 'tcx> {
             return None;
         }
 
-        if let Some((_, fndecl)) = self.find_anon_type(anon, &br) {
+        if let Some((_, fndecl)) = find_anon_type(self.tcx(), anon, &br) {
             if self.is_self_anon(is_first, scope_def_id) {
                 return None;
             }
@@ -113,12 +114,16 @@ impl<'a, 'tcx> NiceRegionError<'a, 'tcx> {
         );
 
         diag.span_label(span, format!("lifetime `{}` required", named));
-        diag.span_suggestion(
-            new_ty_span,
-            &format!("add explicit lifetime `{}` to {}", named, span_label_var),
-            new_ty.to_string(),
-            Applicability::Unspecified,
-        );
+        // Suggesting `'static` is nearly always incorrect, and can steer users
+        // down the wrong path.
+        if *named != ty::ReStatic {
+            diag.span_suggestion(
+                new_ty_span,
+                &format!("add explicit lifetime `{}` to {}", named, span_label_var),
+                new_ty.to_string(),
+                Applicability::Unspecified,
+            );
+        }
 
         Some(diag)
     }

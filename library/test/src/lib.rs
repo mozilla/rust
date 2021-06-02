@@ -24,13 +24,13 @@
 #![feature(rustc_private)]
 #![feature(nll)]
 #![feature(available_concurrency)]
+#![feature(bench_black_box)]
 #![feature(internal_output_capture)]
 #![feature(panic_unwind)]
 #![feature(staged_api)]
 #![feature(termination_trait_lib)]
 #![feature(test)]
 #![feature(total_cmp)]
-#![feature(str_split_once)]
 
 // Public reexports
 pub use self::bench::{black_box, Bencher};
@@ -49,18 +49,19 @@ pub mod test {
         cli::{parse_opts, TestOpts},
         filter_tests,
         helpers::metrics::{Metric, MetricMap},
-        options::{Options, RunIgnored, RunStrategy, ShouldPanic},
+        options::{Concurrent, Options, RunIgnored, RunStrategy, ShouldPanic},
         run_test, test_main, test_main_static,
         test_result::{TestResult, TrFailed, TrFailedMsg, TrIgnored, TrOk},
         time::{TestExecTime, TestTimeOptions},
         types::{
             DynTestFn, DynTestName, StaticBenchFn, StaticTestFn, StaticTestName, TestDesc,
-            TestDescAndFn, TestName, TestType,
+            TestDescAndFn, TestId, TestName, TestType,
         },
     };
 }
 
 use std::{
+    collections::VecDeque,
     env, io,
     io::prelude::Write,
     panic::{self, catch_unwind, AssertUnwindSafe, PanicInfo},
@@ -208,9 +209,20 @@ where
     use std::collections::{self, HashMap};
     use std::hash::BuildHasherDefault;
     use std::sync::mpsc::RecvTimeoutError;
+
+    struct RunningTest {
+        join_handle: Option<thread::JoinHandle<()>>,
+    }
+
     // Use a deterministic hasher
     type TestMap =
-        HashMap<TestDesc, Instant, BuildHasherDefault<collections::hash_map::DefaultHasher>>;
+        HashMap<TestId, RunningTest, BuildHasherDefault<collections::hash_map::DefaultHasher>>;
+
+    struct TimeoutEntry {
+        id: TestId,
+        desc: TestDesc,
+        timeout: Instant,
+    }
 
     let tests_len = tests.len();
 
@@ -239,7 +251,9 @@ where
 
     let (filtered_tests, filtered_benchs): (Vec<_>, _) = filtered_tests
         .into_iter()
-        .partition(|e| matches!(e.testfn, StaticTestFn(_) | DynTestFn(_)));
+        .enumerate()
+        .map(|(i, e)| (TestId(i), e))
+        .partition(|(_, e)| matches!(e.testfn, StaticTestFn(_) | DynTestFn(_)));
 
     let concurrency = opts.test_threads.unwrap_or_else(get_concurrency);
 
@@ -255,32 +269,41 @@ where
     };
 
     let mut running_tests: TestMap = HashMap::default();
+    let mut timeout_queue: VecDeque<TimeoutEntry> = VecDeque::new();
 
-    fn get_timed_out_tests(running_tests: &mut TestMap) -> Vec<TestDesc> {
+    fn get_timed_out_tests(
+        running_tests: &TestMap,
+        timeout_queue: &mut VecDeque<TimeoutEntry>,
+    ) -> Vec<TestDesc> {
         let now = Instant::now();
-        let timed_out = running_tests
-            .iter()
-            .filter_map(|(desc, timeout)| if &now >= timeout { Some(desc.clone()) } else { None })
-            .collect();
-        for test in &timed_out {
-            running_tests.remove(test);
+        let mut timed_out = Vec::new();
+        while let Some(timeout_entry) = timeout_queue.front() {
+            if now < timeout_entry.timeout {
+                break;
+            }
+            let timeout_entry = timeout_queue.pop_front().unwrap();
+            if running_tests.contains_key(&timeout_entry.id) {
+                timed_out.push(timeout_entry.desc);
+            }
         }
         timed_out
     }
 
-    fn calc_timeout(running_tests: &TestMap) -> Option<Duration> {
-        running_tests.values().min().map(|next_timeout| {
+    fn calc_timeout(timeout_queue: &VecDeque<TimeoutEntry>) -> Option<Duration> {
+        timeout_queue.front().map(|&TimeoutEntry { timeout: next_timeout, .. }| {
             let now = Instant::now();
-            if *next_timeout >= now { *next_timeout - now } else { Duration::new(0, 0) }
+            if next_timeout >= now { next_timeout - now } else { Duration::new(0, 0) }
         })
     }
 
     if concurrency == 1 {
         while !remaining.is_empty() {
-            let test = remaining.pop().unwrap();
+            let (id, test) = remaining.pop().unwrap();
             let event = TestEvent::TeWait(test.desc.clone());
             notify_about_test_event(event)?;
-            run_test(opts, !opts.run_tests, test, run_strategy, tx.clone(), Concurrent::No);
+            let join_handle =
+                run_test(opts, !opts.run_tests, id, test, run_strategy, tx.clone(), Concurrent::No);
+            assert!(join_handle.is_none());
             let completed_test = rx.recv().unwrap();
 
             let event = TestEvent::TeResult(completed_test);
@@ -289,21 +312,31 @@ where
     } else {
         while pending > 0 || !remaining.is_empty() {
             while pending < concurrency && !remaining.is_empty() {
-                let test = remaining.pop().unwrap();
+                let (id, test) = remaining.pop().unwrap();
                 let timeout = time::get_default_test_timeout();
-                running_tests.insert(test.desc.clone(), timeout);
+                let desc = test.desc.clone();
 
-                let event = TestEvent::TeWait(test.desc.clone());
+                let event = TestEvent::TeWait(desc.clone());
                 notify_about_test_event(event)?; //here no pad
-                run_test(opts, !opts.run_tests, test, run_strategy, tx.clone(), Concurrent::Yes);
+                let join_handle = run_test(
+                    opts,
+                    !opts.run_tests,
+                    id,
+                    test,
+                    run_strategy,
+                    tx.clone(),
+                    Concurrent::Yes,
+                );
+                running_tests.insert(id, RunningTest { join_handle });
+                timeout_queue.push_back(TimeoutEntry { id, desc, timeout });
                 pending += 1;
             }
 
             let mut res;
             loop {
-                if let Some(timeout) = calc_timeout(&running_tests) {
+                if let Some(timeout) = calc_timeout(&timeout_queue) {
                     res = rx.recv_timeout(timeout);
-                    for test in get_timed_out_tests(&mut running_tests) {
+                    for test in get_timed_out_tests(&running_tests, &mut timeout_queue) {
                         let event = TestEvent::TeTimeout(test);
                         notify_about_test_event(event)?;
                     }
@@ -323,8 +356,16 @@ where
                 }
             }
 
-            let completed_test = res.unwrap();
-            running_tests.remove(&completed_test.desc);
+            let mut completed_test = res.unwrap();
+            let running_test = running_tests.remove(&completed_test.id).unwrap();
+            if let Some(join_handle) = running_test.join_handle {
+                if let Err(_) = join_handle.join() {
+                    if let TrOk = completed_test.result {
+                        completed_test.result =
+                            TrFailedMsg("panicked after reporting success".to_string());
+                    }
+                }
+            }
 
             let event = TestEvent::TeResult(completed_test);
             notify_about_test_event(event)?;
@@ -334,10 +375,10 @@ where
 
     if opts.bench_benchmarks {
         // All benchmarks run at the end, in serial.
-        for b in filtered_benchs {
+        for (id, b) in filtered_benchs {
             let event = TestEvent::TeWait(b.desc.clone());
             notify_about_test_event(event)?;
-            run_test(opts, false, b, run_strategy, tx.clone(), Concurrent::No);
+            run_test(opts, false, id, b, run_strategy, tx.clone(), Concurrent::No);
             let completed_test = rx.recv().unwrap();
 
             let event = TestEvent::TeResult(completed_test);
@@ -359,8 +400,8 @@ pub fn filter_tests(opts: &TestOpts, tests: Vec<TestDescAndFn>) -> Vec<TestDescA
     };
 
     // Remove tests that don't match the test filter
-    if let Some(ref filter) = opts.filter {
-        filtered.retain(|test| matches_filter(test, filter));
+    if !opts.filters.is_empty() {
+        filtered.retain(|test| opts.filters.iter().any(|filter| matches_filter(test, filter)));
     }
 
     // Skip tests that match any of the skip filters
@@ -411,11 +452,12 @@ pub fn convert_benchmarks_to_tests(tests: Vec<TestDescAndFn>) -> Vec<TestDescAnd
 pub fn run_test(
     opts: &TestOpts,
     force_ignore: bool,
+    id: TestId,
     test: TestDescAndFn,
     strategy: RunStrategy,
     monitor_ch: Sender<CompletedTest>,
     concurrency: Concurrent,
-) {
+) -> Option<thread::JoinHandle<()>> {
     let TestDescAndFn { desc, testfn } = test;
 
     // Emscripten can catch panics but other wasm targets cannot
@@ -424,9 +466,9 @@ pub fn run_test(
         && !cfg!(target_os = "emscripten");
 
     if force_ignore || desc.ignore || ignore_because_no_process_support {
-        let message = CompletedTest::new(desc, TrIgnored, None, Vec::new());
+        let message = CompletedTest::new(id, desc, TrIgnored, None, Vec::new());
         monitor_ch.send(message).unwrap();
-        return;
+        return None;
     }
 
     struct TestRunOpts {
@@ -437,16 +479,18 @@ pub fn run_test(
     }
 
     fn run_test_inner(
+        id: TestId,
         desc: TestDesc,
         monitor_ch: Sender<CompletedTest>,
         testfn: Box<dyn FnOnce() + Send>,
         opts: TestRunOpts,
-    ) {
+    ) -> Option<thread::JoinHandle<()>> {
         let concurrency = opts.concurrency;
         let name = desc.name.clone();
 
         let runtest = move || match opts.strategy {
             RunStrategy::InProcess => run_test_in_process(
+                id,
                 desc,
                 opts.nocapture,
                 opts.time.is_some(),
@@ -455,6 +499,7 @@ pub fn run_test(
                 opts.time,
             ),
             RunStrategy::SpawnPrimary => spawn_test_subprocess(
+                id,
                 desc,
                 opts.nocapture,
                 opts.time.is_some(),
@@ -469,9 +514,21 @@ pub fn run_test(
         let supports_threads = !cfg!(target_os = "emscripten") && !cfg!(target_arch = "wasm32");
         if concurrency == Concurrent::Yes && supports_threads {
             let cfg = thread::Builder::new().name(name.as_slice().to_owned());
-            cfg.spawn(runtest).unwrap();
+            let mut runtest = Arc::new(Mutex::new(Some(runtest)));
+            let runtest2 = runtest.clone();
+            match cfg.spawn(move || runtest2.lock().unwrap().take().unwrap()()) {
+                Ok(handle) => Some(handle),
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    // `ErrorKind::WouldBlock` means hitting the thread limit on some
+                    // platforms, so run the test synchronously here instead.
+                    Arc::get_mut(&mut runtest).unwrap().get_mut().unwrap().take().unwrap()();
+                    None
+                }
+                Err(e) => panic!("failed to spawn thread to run test: {}", e),
+            }
         } else {
             runtest();
+            None
         }
     }
 
@@ -481,13 +538,15 @@ pub fn run_test(
     match testfn {
         DynBenchFn(bencher) => {
             // Benchmarks aren't expected to panic, so we run them all in-process.
-            crate::bench::benchmark(desc, monitor_ch, opts.nocapture, |harness| {
+            crate::bench::benchmark(id, desc, monitor_ch, opts.nocapture, |harness| {
                 bencher.run(harness)
             });
+            None
         }
         StaticBenchFn(benchfn) => {
             // Benchmarks aren't expected to panic, so we run them all in-process.
-            crate::bench::benchmark(desc, monitor_ch, opts.nocapture, benchfn);
+            crate::bench::benchmark(id, desc, monitor_ch, opts.nocapture, benchfn);
+            None
         }
         DynTestFn(f) => {
             match strategy {
@@ -495,13 +554,15 @@ pub fn run_test(
                 _ => panic!("Cannot run dynamic test fn out-of-process"),
             };
             run_test_inner(
+                id,
                 desc,
                 monitor_ch,
                 Box::new(move || __rust_begin_short_backtrace(f)),
                 test_run_opts,
-            );
+            )
         }
         StaticTestFn(f) => run_test_inner(
+            id,
             desc,
             monitor_ch,
             Box::new(move || __rust_begin_short_backtrace(f)),
@@ -520,6 +581,7 @@ fn __rust_begin_short_backtrace<F: FnOnce()>(f: F) {
 }
 
 fn run_test_in_process(
+    id: TestId,
     desc: TestDesc,
     nocapture: bool,
     report_time: bool,
@@ -548,11 +610,12 @@ fn run_test_in_process(
         Err(e) => calc_result(&desc, Err(e.as_ref()), &time_opts, &exec_time),
     };
     let stdout = data.lock().unwrap_or_else(|e| e.into_inner()).to_vec();
-    let message = CompletedTest::new(desc, test_result, exec_time, stdout);
+    let message = CompletedTest::new(id, desc, test_result, exec_time, stdout);
     monitor_ch.send(message).unwrap();
 }
 
 fn spawn_test_subprocess(
+    id: TestId,
     desc: TestDesc,
     nocapture: bool,
     report_time: bool,
@@ -602,7 +665,7 @@ fn spawn_test_subprocess(
         (result, test_output, exec_time)
     })();
 
-    let message = CompletedTest::new(desc, result, exec_time, test_output);
+    let message = CompletedTest::new(id, desc, result, exec_time, test_output);
     monitor_ch.send(message).unwrap();
 }
 

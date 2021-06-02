@@ -10,8 +10,18 @@ use crate::os::wasi::prelude::*;
 use crate::path::{self, PathBuf};
 use crate::str;
 use crate::sys::memchr;
-use crate::sys::{unsupported, Void};
+use crate::sys::unsupported;
 use crate::vec;
+
+// Add a few symbols not in upstream `libc` just yet.
+mod libc {
+    pub use libc::*;
+
+    extern "C" {
+        pub fn getcwd(buf: *mut c_char, size: size_t) -> *mut c_char;
+        pub fn chdir(dir: *const c_char) -> c_int;
+    }
+}
 
 #[cfg(not(target_feature = "atomics"))]
 pub unsafe fn env_lock() -> impl Any {
@@ -41,14 +51,43 @@ pub fn error_string(errno: i32) -> String {
 }
 
 pub fn getcwd() -> io::Result<PathBuf> {
-    unsupported()
+    let mut buf = Vec::with_capacity(512);
+    loop {
+        unsafe {
+            let ptr = buf.as_mut_ptr() as *mut libc::c_char;
+            if !libc::getcwd(ptr, buf.capacity()).is_null() {
+                let len = CStr::from_ptr(buf.as_ptr() as *const libc::c_char).to_bytes().len();
+                buf.set_len(len);
+                buf.shrink_to_fit();
+                return Ok(PathBuf::from(OsString::from_vec(buf)));
+            } else {
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::ERANGE) {
+                    return Err(error);
+                }
+            }
+
+            // Trigger the internal buffer resizing logic of `Vec` by requiring
+            // more space than the current capacity.
+            let cap = buf.capacity();
+            buf.set_len(cap);
+            buf.reserve(1);
+        }
+    }
 }
 
-pub fn chdir(_: &path::Path) -> io::Result<()> {
-    unsupported()
+pub fn chdir(p: &path::Path) -> io::Result<()> {
+    let p: &OsStr = p.as_ref();
+    let p = CString::new(p.as_bytes())?;
+    unsafe {
+        match libc::chdir(p.as_ptr()) == (0 as libc::c_int) {
+            true => Ok(()),
+            false => Err(io::Error::last_os_error()),
+        }
+    }
 }
 
-pub struct SplitPaths<'a>(&'a Void);
+pub struct SplitPaths<'a>(!, PhantomData<&'a ()>);
 
 pub fn split_paths(_unparsed: &OsStr) -> SplitPaths<'_> {
     panic!("unsupported")
@@ -57,7 +96,7 @@ pub fn split_paths(_unparsed: &OsStr) -> SplitPaths<'_> {
 impl<'a> Iterator for SplitPaths<'a> {
     type Item = PathBuf;
     fn next(&mut self) -> Option<PathBuf> {
-        match *self.0 {}
+        self.0
     }
 }
 
@@ -90,8 +129,10 @@ pub fn current_exe() -> io::Result<PathBuf> {
 }
 pub struct Env {
     iter: vec::IntoIter<(OsString, OsString)>,
-    _dont_send_or_sync_me: PhantomData<*mut ()>,
 }
+
+impl !Send for Env {}
+impl !Sync for Env {}
 
 impl Iterator for Env {
     type Item = (OsString, OsString);
@@ -116,7 +157,7 @@ pub fn env() -> Env {
                 environ = environ.add(1);
             }
         }
-        return Env { iter: result.into_iter(), _dont_send_or_sync_me: PhantomData };
+        return Env { iter: result.into_iter() };
     }
 
     // See src/libstd/sys/unix/os.rs, same as that

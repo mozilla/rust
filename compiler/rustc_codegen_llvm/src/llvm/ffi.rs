@@ -54,7 +54,7 @@ pub enum CallConv {
 }
 
 /// LLVMRustLinkage
-#[derive(PartialEq)]
+#[derive(Copy, Clone, PartialEq)]
 #[repr(C)]
 pub enum Linkage {
     ExternalLinkage = 0,
@@ -72,6 +72,7 @@ pub enum Linkage {
 
 // LLVMRustVisibility
 #[repr(C)]
+#[derive(Copy, Clone, PartialEq)]
 pub enum Visibility {
     Default = 0,
     Hidden = 1,
@@ -131,6 +132,8 @@ pub enum Attribute {
     ReturnsTwice = 25,
     ReadNone = 26,
     InaccessibleMemOnly = 27,
+    SanitizeHWAddress = 28,
+    WillReturn = 29,
 }
 
 /// LLVMIntPredicate
@@ -188,33 +191,6 @@ pub enum RealPredicate {
     RealPredicateTrue = 15,
 }
 
-impl RealPredicate {
-    pub fn from_generic(realpred: rustc_codegen_ssa::common::RealPredicate) -> Self {
-        match realpred {
-            rustc_codegen_ssa::common::RealPredicate::RealPredicateFalse => {
-                RealPredicate::RealPredicateFalse
-            }
-            rustc_codegen_ssa::common::RealPredicate::RealOEQ => RealPredicate::RealOEQ,
-            rustc_codegen_ssa::common::RealPredicate::RealOGT => RealPredicate::RealOGT,
-            rustc_codegen_ssa::common::RealPredicate::RealOGE => RealPredicate::RealOGE,
-            rustc_codegen_ssa::common::RealPredicate::RealOLT => RealPredicate::RealOLT,
-            rustc_codegen_ssa::common::RealPredicate::RealOLE => RealPredicate::RealOLE,
-            rustc_codegen_ssa::common::RealPredicate::RealONE => RealPredicate::RealONE,
-            rustc_codegen_ssa::common::RealPredicate::RealORD => RealPredicate::RealORD,
-            rustc_codegen_ssa::common::RealPredicate::RealUNO => RealPredicate::RealUNO,
-            rustc_codegen_ssa::common::RealPredicate::RealUEQ => RealPredicate::RealUEQ,
-            rustc_codegen_ssa::common::RealPredicate::RealUGT => RealPredicate::RealUGT,
-            rustc_codegen_ssa::common::RealPredicate::RealUGE => RealPredicate::RealUGE,
-            rustc_codegen_ssa::common::RealPredicate::RealULT => RealPredicate::RealULT,
-            rustc_codegen_ssa::common::RealPredicate::RealULE => RealPredicate::RealULE,
-            rustc_codegen_ssa::common::RealPredicate::RealUNE => RealPredicate::RealUNE,
-            rustc_codegen_ssa::common::RealPredicate::RealPredicateTrue => {
-                RealPredicate::RealPredicateTrue
-            }
-        }
-    }
-}
-
 /// LLVMTypeKind
 #[derive(Copy, Clone, PartialEq, Debug)]
 #[repr(C)]
@@ -238,6 +214,7 @@ pub enum TypeKind {
     Token = 16,
     ScalableVector = 17,
     BFloat = 18,
+    X86_AMX = 19,
 }
 
 impl TypeKind {
@@ -262,6 +239,7 @@ impl TypeKind {
             TypeKind::Token => rustc_codegen_ssa::common::TypeKind::Token,
             TypeKind::ScalableVector => rustc_codegen_ssa::common::TypeKind::ScalableVector,
             TypeKind::BFloat => rustc_codegen_ssa::common::TypeKind::BFloat,
+            TypeKind::X86_AMX => rustc_codegen_ssa::common::TypeKind::X86_AMX,
         }
     }
 }
@@ -439,6 +417,8 @@ pub struct SanitizerOptions {
     pub sanitize_memory_recover: bool,
     pub sanitize_memory_track_origins: c_int,
     pub sanitize_thread: bool,
+    pub sanitize_hwaddress: bool,
+    pub sanitize_hwaddress_recover: bool,
 }
 
 /// LLVMRelocMode
@@ -671,9 +651,7 @@ pub mod coverageinfo {
     /// array", encoded separately), and source location (start and end positions of the represented
     /// code region).
     ///
-    /// Aligns with [llvm::coverage::CounterMappingRegion](https://github.com/rust-lang/llvm-project/blob/rustc/11.0-2020-10-12/llvm/include/llvm/ProfileData/Coverage/CoverageMapping.h#L224-L227)
-    /// Important: The Rust struct layout (order and types of fields) must match its C++
-    /// counterpart.
+    /// Matches LLVMRustCounterMappingRegion.
     #[derive(Copy, Clone, Debug)]
     #[repr(C)]
     pub struct CounterMappingRegion {
@@ -707,7 +685,7 @@ pub mod coverageinfo {
     }
 
     impl CounterMappingRegion {
-        pub fn code_region(
+        crate fn code_region(
             counter: coverage_map::Counter,
             file_id: u32,
             start_line: u32,
@@ -727,7 +705,10 @@ pub mod coverageinfo {
             }
         }
 
-        pub fn expansion_region(
+        // This function might be used in the future; the LLVM API is still evolving, as is coverage
+        // support.
+        #[allow(dead_code)]
+        crate fn expansion_region(
             file_id: u32,
             expanded_file_id: u32,
             start_line: u32,
@@ -747,7 +728,10 @@ pub mod coverageinfo {
             }
         }
 
-        pub fn skipped_region(
+        // This function might be used in the future; the LLVM API is still evolving, as is coverage
+        // support.
+        #[allow(dead_code)]
+        crate fn skipped_region(
             file_id: u32,
             start_line: u32,
             start_col: u32,
@@ -766,7 +750,10 @@ pub mod coverageinfo {
             }
         }
 
-        pub fn gap_region(
+        // This function might be used in the future; the LLVM API is still evolving, as is coverage
+        // support.
+        #[allow(dead_code)]
+        crate fn gap_region(
             counter: coverage_map::Counter,
             file_id: u32,
             start_line: u32,
@@ -1027,6 +1014,7 @@ extern "C" {
     pub fn LLVMSetSection(Global: &Value, Section: *const c_char);
     pub fn LLVMRustGetVisibility(Global: &Value) -> Visibility;
     pub fn LLVMRustSetVisibility(Global: &Value, Viz: Visibility);
+    pub fn LLVMRustSetDSOLocal(Global: &Value, is_dso_local: bool);
     pub fn LLVMGetAlignment(Global: &Value) -> c_uint;
     pub fn LLVMSetAlignment(Global: &Value, Bytes: c_uint);
     pub fn LLVMSetDLLStorageClass(V: &Value, C: DLLStorageClass);
@@ -1047,6 +1035,7 @@ extern "C" {
     pub fn LLVMDeleteGlobal(GlobalVar: &Value);
     pub fn LLVMGetInitializer(GlobalVar: &Value) -> Option<&Value>;
     pub fn LLVMSetInitializer(GlobalVar: &'a Value, ConstantVal: &'a Value);
+    pub fn LLVMIsThreadLocal(GlobalVar: &Value) -> Bool;
     pub fn LLVMSetThreadLocal(GlobalVar: &Value, IsThreadLocal: Bool);
     pub fn LLVMSetThreadLocalMode(GlobalVar: &Value, Mode: ThreadLocalMode);
     pub fn LLVMIsGlobalConstant(GlobalVar: &Value) -> Bool;
@@ -1070,6 +1059,7 @@ extern "C" {
     pub fn LLVMRustAddDereferenceableAttr(Fn: &Value, index: c_uint, bytes: u64);
     pub fn LLVMRustAddDereferenceableOrNullAttr(Fn: &Value, index: c_uint, bytes: u64);
     pub fn LLVMRustAddByValAttr(Fn: &Value, index: c_uint, ty: &Type);
+    pub fn LLVMRustAddStructRetAttr(Fn: &Value, index: c_uint, ty: &Type);
     pub fn LLVMRustAddFunctionAttribute(Fn: &Value, index: c_uint, attr: Attribute);
     pub fn LLVMRustAddFunctionAttrStringValue(
         Fn: &Value,
@@ -1091,7 +1081,6 @@ extern "C" {
         Fn: &'a Value,
         Name: *const c_char,
     ) -> &'a BasicBlock;
-    pub fn LLVMDeleteBasicBlock(BB: &BasicBlock);
 
     // Operations on instructions
     pub fn LLVMIsAInstruction(Val: &Value) -> Option<&Value>;
@@ -1100,10 +1089,12 @@ extern "C" {
     // Operations on call sites
     pub fn LLVMSetInstructionCallConv(Instr: &Value, CC: c_uint);
     pub fn LLVMRustAddCallSiteAttribute(Instr: &Value, index: c_uint, attr: Attribute);
+    pub fn LLVMRustAddCallSiteAttrString(Instr: &Value, index: c_uint, Name: *const c_char);
     pub fn LLVMRustAddAlignmentCallSiteAttr(Instr: &Value, index: c_uint, bytes: u32);
     pub fn LLVMRustAddDereferenceableCallSiteAttr(Instr: &Value, index: c_uint, bytes: u64);
     pub fn LLVMRustAddDereferenceableOrNullCallSiteAttr(Instr: &Value, index: c_uint, bytes: u64);
     pub fn LLVMRustAddByValCallSiteAttr(Instr: &Value, index: c_uint, ty: &Type);
+    pub fn LLVMRustAddStructRetCallSiteAttr(Instr: &Value, index: c_uint, ty: &Type);
 
     // Operations on load/store instructions (only)
     pub fn LLVMSetVolatile(MemoryAccessInst: &Value, volatile: Bool);
@@ -1364,7 +1355,7 @@ extern "C" {
     pub fn LLVMBuildNeg(B: &Builder<'a>, V: &'a Value, Name: *const c_char) -> &'a Value;
     pub fn LLVMBuildFNeg(B: &Builder<'a>, V: &'a Value, Name: *const c_char) -> &'a Value;
     pub fn LLVMBuildNot(B: &Builder<'a>, V: &'a Value, Name: *const c_char) -> &'a Value;
-    pub fn LLVMRustSetHasUnsafeAlgebra(Instr: &Value);
+    pub fn LLVMRustSetFastMath(Instr: &Value);
 
     // Memory
     pub fn LLVMBuildAlloca(B: &Builder<'a>, Ty: &'a Type, Name: *const c_char) -> &'a Value;
@@ -1708,6 +1699,10 @@ extern "C" {
         PM: &PassManager<'_>,
     );
 
+    pub fn LLVMGetHostCPUFeatures() -> *mut c_char;
+
+    pub fn LLVMDisposeMessage(message: *mut c_char);
+
     // Stuff that's in llvm-wrapper/ because it's not upstream yet.
 
     /// Opens an object file.
@@ -1784,7 +1779,7 @@ extern "C" {
         NumVirtualFileMappingIDs: c_uint,
         Expressions: *const coverage_map::CounterExpression,
         NumExpressions: c_uint,
-        MappingRegions: *mut coverageinfo::CounterMappingRegion,
+        MappingRegions: *const coverageinfo::CounterMappingRegion,
         NumMappingRegions: c_uint,
         BufferOut: &RustString,
     );
@@ -1807,6 +1802,7 @@ extern "C" {
     pub fn LLVMRustDebugMetadataVersion() -> u32;
     pub fn LLVMRustVersionMajor() -> u32;
     pub fn LLVMRustVersionMinor() -> u32;
+    pub fn LLVMRustVersionPatch() -> u32;
 
     pub fn LLVMRustAddModuleFlag(M: &Module, name: *const c_char, value: u32);
 
@@ -1830,6 +1826,8 @@ extern "C" {
         SplitName: *const c_char,
         SplitNameLen: size_t,
         kind: DebugEmissionKind,
+        DWOId: u64,
+        SplitDebugInlining: bool,
     ) -> &'a DIDescriptor;
 
     pub fn LLVMRustDIBuilderCreateFile(
@@ -2096,7 +2094,6 @@ extern "C" {
     );
 
     pub fn LLVMRustDIBuilderCreateDebugLocation(
-        Context: &'a Context,
         Line: c_uint,
         Column: c_uint,
         Scope: &'a DIScope,
@@ -2121,6 +2118,7 @@ extern "C" {
         Recover: bool,
     ) -> &'static mut Pass;
     pub fn LLVMRustCreateThreadSanitizerPass() -> &'static mut Pass;
+    pub fn LLVMRustCreateHWAddressSanitizerPass(Recover: bool) -> &'static mut Pass;
     pub fn LLVMRustAddPass(PM: &PassManager<'_>, Pass: &'static mut Pass);
     pub fn LLVMRustAddLastExtensionPasses(
         PMB: &PassManagerBuilder,
@@ -2131,7 +2129,13 @@ extern "C" {
     pub fn LLVMRustHasFeature(T: &TargetMachine, s: *const c_char) -> bool;
 
     pub fn LLVMRustPrintTargetCPUs(T: &TargetMachine);
-    pub fn LLVMRustPrintTargetFeatures(T: &TargetMachine);
+    pub fn LLVMRustGetTargetFeaturesCount(T: &TargetMachine) -> size_t;
+    pub fn LLVMRustGetTargetFeature(
+        T: &TargetMachine,
+        Index: size_t,
+        Feature: &mut *const c_char,
+        Desc: &mut *const c_char,
+    );
 
     pub fn LLVMRustGetHostCPUName(len: *mut usize) -> *const c_char;
     pub fn LLVMRustCreateTargetMachine(
@@ -2151,6 +2155,7 @@ extern "C" {
         EmitStackSizeSection: bool,
         RelaxELFRelocations: bool,
         UseInitArray: bool,
+        SplitDwarfFile: *const c_char,
     ) -> Option<&'static mut TargetMachine>;
     pub fn LLVMRustDisposeTargetMachine(T: &'static mut TargetMachine);
     pub fn LLVMRustAddBuilderLibraryInfo(
@@ -2179,6 +2184,7 @@ extern "C" {
         PM: &PassManager<'a>,
         M: &'a Module,
         Output: *const c_char,
+        DwoOutput: *const c_char,
         FileType: FileType,
     ) -> LLVMRustResult;
     pub fn LLVMRustOptimizeWithNewPassManager(
@@ -2198,10 +2204,14 @@ extern "C" {
         SanitizerOptions: Option<&SanitizerOptions>,
         PGOGenPath: *const c_char,
         PGOUsePath: *const c_char,
+        InstrumentCoverage: bool,
+        InstrumentGCOV: bool,
         llvm_selfprofiler: *mut c_void,
         begin_callback: SelfProfileBeforePassCallback,
         end_callback: SelfProfileAfterPassCallback,
-    );
+        ExtraPasses: *const c_char,
+        ExtraPassesLen: size_t,
+    ) -> LLVMRustResult;
     pub fn LLVMRustPrintModule(
         M: &'a Module,
         Output: *const c_char,
@@ -2310,6 +2320,7 @@ extern "C" {
     pub fn LLVMRustUnsetComdat(V: &Value);
     pub fn LLVMRustSetModulePICLevel(M: &Module);
     pub fn LLVMRustSetModulePIELevel(M: &Module);
+    pub fn LLVMRustSetModuleCodeModel(M: &Module, Model: CodeModel);
     pub fn LLVMRustModuleBufferCreate(M: &Module) -> &'static mut ModuleBuffer;
     pub fn LLVMRustModuleBufferPtr(p: &ModuleBuffer) -> *const u8;
     pub fn LLVMRustModuleBufferLen(p: &ModuleBuffer) -> usize;

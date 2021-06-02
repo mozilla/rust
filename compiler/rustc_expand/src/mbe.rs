@@ -69,7 +69,7 @@ enum KleeneOp {
     ZeroOrMore,
     /// Kleene plus (`+`) for one or more repetitions
     OneOrMore,
-    /// Kleene optional (`?`) for zero or one reptitions
+    /// Kleene optional (`?`) for zero or one repetitions
     ZeroOrOne,
 }
 
@@ -84,7 +84,7 @@ enum TokenTree {
     /// e.g., `$var`
     MetaVar(Span, Ident),
     /// e.g., `$var:expr`. This is only used in the left hand side of MBE macros.
-    MetaVarDecl(Span, Ident /* name to bind */, NonterminalKind),
+    MetaVarDecl(Span, Ident /* name to bind */, Option<NonterminalKind>),
 }
 
 impl TokenTree {

@@ -1,5 +1,3 @@
-#![feature(min_const_generics)]
-
 fn foo<const C: usize>() {}
 
 const BAR: usize = 42;
@@ -15,6 +13,7 @@ fn b() {
     //~| ERROR expected trait, found constant `BAR`
     //~| ERROR type provided when a constant was expected
     //~| WARN trait objects without an explicit `dyn` are deprecated
+    //~| WARN this was previously accepted by the compiler
 }
 fn c() {
     foo::<3 + 3>(); //~ ERROR expressions must be enclosed in braces

@@ -51,6 +51,14 @@ pub struct Feature {
     pub has_gate_test: bool,
     pub tracking_issue: Option<NonZeroU32>,
 }
+impl Feature {
+    fn tracking_issue_display(&self) -> impl fmt::Display {
+        match self.tracking_issue {
+            None => "none".to_string(),
+            Some(x) => x.to_string(),
+        }
+    }
+}
 
 pub type Features = HashMap<String, Feature>;
 
@@ -88,7 +96,7 @@ pub fn check(
         &[
             &src_path.join("test/ui"),
             &src_path.join("test/ui-fulldeps"),
-            &src_path.join("test/compile-fail"),
+            &src_path.join("test/rustdoc-ui"),
         ],
         &mut |path| super::filter_dirs(path),
         &mut |entry, contents| {
@@ -330,7 +338,6 @@ fn collect_lang_features_in(base: &Path, file: &str, bad: &mut bool) -> Features
             let issue_str = parts.next().unwrap().trim();
             let tracking_issue = if issue_str.starts_with("None") {
                 if level == Status::Unstable && !next_feature_omits_tracking_issue {
-                    *bad = true;
                     tidy_error!(
                         bad,
                         "{}:{}: no tracking issue for feature {}",
@@ -362,10 +369,12 @@ fn get_and_check_lib_features(
                     if f.tracking_issue != s.tracking_issue && f.level != Status::Stable {
                         tidy_error!(
                             bad,
-                            "{}:{}: mismatches the `issue` in {}",
+                            "{}:{}: `issue` \"{}\" mismatches the {} `issue` of \"{}\"",
                             file.display(),
                             line,
-                            display
+                            f.tracking_issue_display(),
+                            display,
+                            s.tracking_issue_display(),
                         );
                     }
                 }
@@ -423,7 +432,16 @@ fn map_lib_features(
                         mf(Err($msg), file, i + 1);
                         continue;
                     }};
-                };
+                }
+
+                lazy_static::lazy_static! {
+                    static ref COMMENT_LINE: Regex = Regex::new(r"^\s*//").unwrap();
+                }
+                // exclude commented out lines
+                if COMMENT_LINE.is_match(line) {
+                    continue;
+                }
+
                 if let Some((ref name, ref mut f)) = becoming_feature {
                     if f.tracking_issue.is_none() {
                         f.tracking_issue = find_attr_val(line, "issue").and_then(handle_issue_none);

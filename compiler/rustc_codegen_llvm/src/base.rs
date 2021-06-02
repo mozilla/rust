@@ -1,17 +1,15 @@
-//! Codegen the completed AST to the LLVM IR.
-//!
-//! Some functions here, such as codegen_block and codegen_expr, return a value --
-//! the result of the codegen to LLVM -- while others, such as codegen_fn
-//! and mono_item, are called only for the side effect of adding a
-//! particular definition to the LLVM IR output we're producing.
+//! Codegen the MIR to the LLVM IR.
 //!
 //! Hopefully useful general knowledge about codegen:
 //!
-//! * There's no way to find out the `Ty` type of a Value. Doing so
+//! * There's no way to find out the [`Ty`] type of a [`Value`]. Doing so
 //!   would be "trying to get the eggs out of an omelette" (credit:
-//!   pcwalton). You can, instead, find out its `llvm::Type` by calling `val_ty`,
-//!   but one `llvm::Type` corresponds to many `Ty`s; for instance, `tup(int, int,
-//!   int)` and `rec(x=int, y=int, z=int)` will have the same `llvm::Type`.
+//!   pcwalton). You can, instead, find out its [`llvm::Type`] by calling [`val_ty`],
+//!   but one [`llvm::Type`] corresponds to many [`Ty`]s; for instance, `tup(int, int,
+//!   int)` and `rec(x=int, y=int, z=int)` will have the same [`llvm::Type`].
+//!
+//! [`Ty`]: rustc_middle::ty::Ty
+//! [`val_ty`]: common::val_ty
 
 use super::ModuleLlvm;
 
@@ -20,7 +18,6 @@ use crate::builder::Builder;
 use crate::common;
 use crate::context::CodegenCx;
 use crate::llvm;
-use crate::metadata;
 use crate::value::Value;
 
 use rustc_codegen_ssa::base::maybe_create_entry_wrapper;
@@ -34,8 +31,9 @@ use rustc_middle::middle::cstore::EncodedMetadata;
 use rustc_middle::middle::exported_symbols;
 use rustc_middle::mir::mono::{Linkage, Visibility};
 use rustc_middle::ty::TyCtxt;
-use rustc_session::config::{DebugInfo, SanitizerSet};
+use rustc_session::config::DebugInfo;
 use rustc_span::symbol::Symbol;
+use rustc_target::spec::SanitizerSet;
 
 use std::ffi::CString;
 use std::time::Instant;
@@ -47,6 +45,22 @@ pub fn write_compressed_metadata<'tcx>(
 ) {
     use snap::write::FrameEncoder;
     use std::io::Write;
+
+    // Historical note:
+    //
+    // When using link.exe it was seen that the section name `.note.rustc`
+    // was getting shortened to `.note.ru`, and according to the PE and COFF
+    // specification:
+    //
+    // > Executable images do not use a string table and do not support
+    // > section names longer than 8 characters
+    //
+    // https://docs.microsoft.com/en-us/windows/win32/debug/pe-format
+    //
+    // As a result, we choose a slightly shorter name! As to why
+    // `.note.rustc` works on MinGW, see
+    // https://github.com/llvm/llvm-project/blob/llvmorg-12.0.0/lld/COFF/Writer.cpp#L1190-L1197
+    let section_name = if tcx.sess.target.is_like_osx { "__DATA,.rustc" } else { ".rustc" };
 
     let (metadata_llcx, metadata_llmod) = (&*llvm_module.llcx, llvm_module.llmod());
     let mut compressed = tcx.metadata_encoding_version();
@@ -60,7 +74,6 @@ pub fn write_compressed_metadata<'tcx>(
         unsafe { llvm::LLVMAddGlobal(metadata_llmod, common::val_ty(llconst), buf.as_ptr()) };
     unsafe {
         llvm::LLVMSetInitializer(llglobal, llconst);
-        let section_name = metadata::metadata_section_name(&tcx.sess.target);
         let name = SmallCStr::new(section_name);
         llvm::LLVMSetSection(llglobal, name.as_ptr());
 
@@ -145,7 +158,7 @@ pub fn compile_codegen_unit(
 
             // Finalize code coverage by injecting the coverage map. Note, the coverage map will
             // also be added to the `llvm.used` variable, created next.
-            if cx.sess().opts.debugging_opts.instrument_coverage {
+            if cx.sess().instrument_coverage() {
                 cx.coverageinfo_finalize();
             }
 

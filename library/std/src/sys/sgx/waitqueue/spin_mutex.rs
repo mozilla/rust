@@ -1,9 +1,13 @@
+//! Trivial spinlock-based implementation of `sync::Mutex`.
+// FIXME: Perhaps use Intel TSX to avoid locking?
+
 #[cfg(test)]
 mod tests;
 
 use crate::cell::UnsafeCell;
+use crate::hint;
 use crate::ops::{Deref, DerefMut};
-use crate::sync::atomic::{spin_loop_hint, AtomicBool, Ordering};
+use crate::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Default)]
 pub struct SpinMutex<T> {
@@ -32,7 +36,7 @@ impl<T> SpinMutex<T> {
             match self.try_lock() {
                 None => {
                     while self.lock.load(Ordering::Relaxed) {
-                        spin_loop_hint()
+                        hint::spin_loop()
                     }
                 }
                 Some(guard) => return guard,
@@ -42,7 +46,7 @@ impl<T> SpinMutex<T> {
 
     #[inline(always)]
     pub fn try_lock(&self) -> Option<SpinMutexGuard<'_, T>> {
-        if !self.lock.compare_and_swap(false, true, Ordering::Acquire) {
+        if self.lock.compare_exchange(false, true, Ordering::Acquire, Ordering::Acquire).is_ok() {
             Some(SpinMutexGuard { mutex: self })
         } else {
             None

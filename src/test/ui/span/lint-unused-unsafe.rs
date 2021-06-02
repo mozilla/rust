@@ -1,11 +1,14 @@
 // Exercise the unused_unsafe attribute in some positive and negative cases
 
+// revisions: mir thir
+// [thir]compile-flags: -Zthir-unsafeck
+
 #![allow(dead_code)]
 #![deny(unused_unsafe)]
 
 
 mod foo {
-    extern {
+    extern "C" {
         pub fn bar();
     }
 }

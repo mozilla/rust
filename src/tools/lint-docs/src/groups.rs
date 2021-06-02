@@ -13,6 +13,7 @@ static GROUP_DESCRIPTIONS: &[(&str, &str)] = &[
     ("nonstandard-style", "Violation of standard naming conventions"),
     ("future-incompatible", "Lints that detect code that has future-compatibility problems"),
     ("rust-2018-compatibility", "Lints used to transition code from the 2015 edition to 2018"),
+    ("rust-2021-compatibility", "Lints used to transition code from the 2018 edition to 2021"),
 ];
 
 type LintGroups = BTreeMap<String, BTreeSet<String>>;
@@ -116,13 +117,23 @@ impl<'a> LintExtractor<'a> {
         result.push('\n');
         result.push_str("[warn-by-default]: listing/warn-by-default.md\n");
         for lint_name in to_link {
-            let lint_def =
-                lints.iter().find(|l| l.name == lint_name.replace("-", "_")).ok_or_else(|| {
-                    format!(
-                        "`rustc -W help` defined lint `{}` but that lint does not appear to exist",
+            let lint_def = match lints.iter().find(|l| l.name == lint_name.replace("-", "_")) {
+                Some(def) => def,
+                None => {
+                    let msg = format!(
+                        "`rustc -W help` defined lint `{}` but that lint does not \
+                        appear to exist\n\
+                        Check that the lint definition includes the appropriate doc comments.",
                         lint_name
-                    )
-                })?;
+                    );
+                    if self.validate {
+                        return Err(msg.into());
+                    } else {
+                        eprintln!("warning: {}", msg);
+                        continue;
+                    }
+                }
+            };
             write!(
                 result,
                 "[{}]: listing/{}#{}\n",

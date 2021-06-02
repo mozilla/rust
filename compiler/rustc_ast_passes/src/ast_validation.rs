@@ -16,7 +16,7 @@ use rustc_data_structures::fx::FxHashMap;
 use rustc_errors::{error_code, pluralize, struct_span_err, Applicability};
 use rustc_parse::validate_attr;
 use rustc_session::lint::builtin::PATTERNS_IN_FNS_WITHOUT_BODY;
-use rustc_session::lint::LintBuffer;
+use rustc_session::lint::{BuiltinLintDiagnostics, LintBuffer};
 use rustc_session::Session;
 use rustc_span::symbol::{kw, sym, Ident};
 use rustc_span::Span;
@@ -175,8 +175,28 @@ impl<'a> AstValidator<'a> {
                     }
                 }
             }
+            TyKind::AnonymousStruct(ref fields, ..) | TyKind::AnonymousUnion(ref fields, ..) => {
+                self.with_banned_assoc_ty_bound(|this| {
+                    walk_list!(this, visit_struct_field_def, fields)
+                });
+            }
             _ => visit::walk_ty(self, t),
         }
+    }
+
+    fn visit_struct_field_def(&mut self, field: &'a FieldDef) {
+        if let Some(ident) = field.ident {
+            if ident.name == kw::Underscore {
+                self.check_anonymous_field(field);
+                self.visit_vis(&field.vis);
+                self.visit_ident(ident);
+                self.visit_ty_common(&field.ty);
+                self.walk_ty(&field.ty);
+                walk_list!(self, visit_attribute, &field.attrs);
+                return;
+            }
+        }
+        self.visit_field_def(field);
     }
 
     fn err_handler(&self) -> &rustc_errors::Handler {
@@ -184,7 +204,7 @@ impl<'a> AstValidator<'a> {
     }
 
     fn check_lifetime(&self, ident: Ident) {
-        let valid_names = [kw::UnderscoreLifetime, kw::StaticLifetime, kw::Invalid];
+        let valid_names = [kw::UnderscoreLifetime, kw::StaticLifetime, kw::Empty];
         if !valid_names.contains(&ident.name) && ident.without_first_quote().is_reserved() {
             self.err_handler().span_err(ident.span, "lifetimes cannot use keyword names");
         }
@@ -213,14 +233,74 @@ impl<'a> AstValidator<'a> {
         err.emit();
     }
 
-    fn check_decl_no_pat(decl: &FnDecl, mut report_err: impl FnMut(Span, bool)) {
+    fn check_anonymous_field(&self, field: &FieldDef) {
+        let FieldDef { ty, .. } = field;
+        match &ty.kind {
+            TyKind::AnonymousStruct(..) | TyKind::AnonymousUnion(..) => {
+                // We already checked for `kw::Underscore` before calling this function,
+                // so skip the check
+            }
+            TyKind::Path(..) => {
+                // If the anonymous field contains a Path as type, we can't determine
+                // if the path is a valid struct or union, so skip the check
+            }
+            _ => {
+                let msg = "unnamed fields can only have struct or union types";
+                let label = "not a struct or union";
+                self.err_handler()
+                    .struct_span_err(field.span, msg)
+                    .span_label(ty.span, label)
+                    .emit();
+            }
+        }
+    }
+
+    fn deny_anonymous_struct(&self, ty: &Ty) {
+        match &ty.kind {
+            TyKind::AnonymousStruct(..) => {
+                self.err_handler()
+                    .struct_span_err(
+                        ty.span,
+                        "anonymous structs are not allowed outside of unnamed struct or union fields",
+                    )
+                    .span_label(ty.span, "anonymous struct declared here")
+                    .emit();
+            }
+            TyKind::AnonymousUnion(..) => {
+                self.err_handler()
+                    .struct_span_err(
+                        ty.span,
+                        "anonymous unions are not allowed outside of unnamed struct or union fields",
+                    )
+                    .span_label(ty.span, "anonymous union declared here")
+                    .emit();
+            }
+            _ => {}
+        }
+    }
+
+    fn deny_anonymous_field(&self, field: &FieldDef) {
+        if let Some(ident) = field.ident {
+            if ident.name == kw::Underscore {
+                self.err_handler()
+                    .struct_span_err(
+                        field.span,
+                        "anonymous fields are not allowed outside of structs or unions",
+                    )
+                    .span_label(ident.span, "anonymous field declared here")
+                    .emit()
+            }
+        }
+    }
+
+    fn check_decl_no_pat(decl: &FnDecl, mut report_err: impl FnMut(Span, Option<Ident>, bool)) {
         for Param { pat, .. } in &decl.inputs {
             match pat.kind {
                 PatKind::Ident(BindingMode::ByValue(Mutability::Not), _, None) | PatKind::Wild => {}
-                PatKind::Ident(BindingMode::ByValue(Mutability::Mut), _, None) => {
-                    report_err(pat.span, true)
+                PatKind::Ident(BindingMode::ByValue(Mutability::Mut), ident, None) => {
+                    report_err(pat.span, Some(ident), true)
                 }
-                _ => report_err(pat.span, false),
+                _ => report_err(pat.span, None, false),
             }
         }
     }
@@ -532,6 +612,25 @@ impl<'a> AstValidator<'a> {
         }
     }
 
+    /// An item in `extern { ... }` cannot use non-ascii identifier.
+    fn check_foreign_item_ascii_only(&self, ident: Ident) {
+        let symbol_str = ident.as_str();
+        if !symbol_str.is_ascii() {
+            let n = 83942;
+            self.err_handler()
+                .struct_span_err(
+                    ident.span,
+                    "items in `extern` blocks cannot use non-ascii identifiers",
+                )
+                .span_label(self.current_extern_span(), "in this `extern` block")
+                .note(&format!(
+                    "This limitation may be lifted in the future; see issue #{} <https://github.com/rust-lang/rust/issues/{}> for more information",
+                    n, n,
+                ))
+                .emit();
+        }
+    }
+
     /// Reject C-varadic type unless the function is foreign,
     /// or free and `unsafe extern "C"` semantically.
     fn check_c_varadic_type(&self, fk: FnKind<'a>) {
@@ -592,7 +691,7 @@ impl<'a> AstValidator<'a> {
             self.session,
             ident.span,
             E0754,
-            "trying to load file for module `{}` with non ascii identifer name",
+            "trying to load file for module `{}` with non-ascii identifier name",
             ident.name
         )
         .help("consider using `#[path]` attribute to specify filesystem path")
@@ -713,109 +812,12 @@ impl<'a> AstValidator<'a> {
             )
             .emit();
     }
-}
 
-/// Checks that generic parameters are in the correct order,
-/// which is lifetimes, then types and then consts. (`<'a, T, const N: usize>`)
-fn validate_generic_param_order<'a>(
-    sess: &Session,
-    handler: &rustc_errors::Handler,
-    generics: impl Iterator<Item = (ParamKindOrd, Option<&'a [GenericBound]>, Span, Option<String>)>,
-    span: Span,
-) {
-    let mut max_param: Option<ParamKindOrd> = None;
-    let mut out_of_order = FxHashMap::default();
-    let mut param_idents = vec![];
-
-    for (kind, bounds, span, ident) in generics {
-        if let Some(ident) = ident {
-            param_idents.push((kind, bounds, param_idents.len(), ident));
-        }
-        let max_param = &mut max_param;
-        match max_param {
-            Some(max_param) if *max_param > kind => {
-                let entry = out_of_order.entry(kind).or_insert((*max_param, vec![]));
-                entry.1.push(span);
-            }
-            Some(_) | None => *max_param = Some(kind),
-        };
-    }
-
-    let mut ordered_params = "<".to_string();
-    if !out_of_order.is_empty() {
-        param_idents.sort_by_key(|&(po, _, i, _)| (po, i));
-        let mut first = true;
-        for (_, bounds, _, ident) in param_idents {
-            if !first {
-                ordered_params += ", ";
-            }
-            ordered_params += &ident;
-            if let Some(bounds) = bounds {
-                if !bounds.is_empty() {
-                    ordered_params += ": ";
-                    ordered_params += &pprust::bounds_to_string(&bounds);
-                }
-            }
-            first = false;
-        }
-    }
-    ordered_params += ">";
-
-    for (param_ord, (max_param, spans)) in &out_of_order {
-        let mut err =
-            handler.struct_span_err(
-                spans.clone(),
-                &format!(
-                    "{} parameters must be declared prior to {} parameters",
-                    param_ord, max_param,
-                ),
-            );
-        err.span_suggestion(
-            span,
-            &format!(
-                "reorder the parameters: lifetimes{}",
-                if sess.features_untracked().const_generics {
-                    ", then consts and types"
-                } else if sess.features_untracked().min_const_generics {
-                    ", then types, then consts"
-                } else {
-                    ", then types"
-                },
-            ),
-            ordered_params.clone(),
-            Applicability::MachineApplicable,
-        );
-        err.emit();
-    }
-}
-
-impl<'a> Visitor<'a> for AstValidator<'a> {
-    fn visit_attribute(&mut self, attr: &Attribute) {
-        validate_attr::check_meta(&self.session.parse_sess, attr);
-    }
-
-    fn visit_expr(&mut self, expr: &'a Expr) {
-        match &expr.kind {
-            ExprKind::LlvmInlineAsm(..) if !self.session.target.allow_asm => {
-                struct_span_err!(
-                    self.session,
-                    expr.span,
-                    E0472,
-                    "llvm_asm! is unsupported on this target"
-                )
-                .emit();
-            }
-            _ => {}
-        }
-
-        visit::walk_expr(self, expr);
-    }
-
-    fn visit_ty(&mut self, ty: &'a Ty) {
+    fn visit_ty_common(&mut self, ty: &'a Ty) {
         match ty.kind {
             TyKind::BareFn(ref bfty) => {
                 self.check_fn_decl(&bfty.decl, SelfSemantic::No);
-                Self::check_decl_no_pat(&bfty.decl, |span, _| {
+                Self::check_decl_no_pat(&bfty.decl, |span, _, _| {
                     struct_span_err!(
                         self.session,
                         span,
@@ -871,13 +873,130 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
                 if !bounds.iter().any(|b| matches!(b, GenericBound::Trait(..))) {
                     self.err_handler().span_err(ty.span, "at least one trait must be specified");
                 }
+            }
+            _ => {}
+        }
+    }
+}
 
-                self.walk_ty(ty);
-                return;
+/// Checks that generic parameters are in the correct order,
+/// which is lifetimes, then types and then consts. (`<'a, T, const N: usize>`)
+fn validate_generic_param_order(
+    sess: &Session,
+    handler: &rustc_errors::Handler,
+    generics: &[GenericParam],
+    span: Span,
+) {
+    let mut max_param: Option<ParamKindOrd> = None;
+    let mut out_of_order = FxHashMap::default();
+    let mut param_idents = vec![];
+
+    for param in generics {
+        let ident = Some(param.ident.to_string());
+        let (kind, bounds, span) = (&param.kind, Some(&*param.bounds), param.ident.span);
+        let (ord_kind, ident) = match &param.kind {
+            GenericParamKind::Lifetime => (ParamKindOrd::Lifetime, ident),
+            GenericParamKind::Type { default: _ } => (ParamKindOrd::Type, ident),
+            GenericParamKind::Const { ref ty, kw_span: _, default: _ } => {
+                let ty = pprust::ty_to_string(ty);
+                let unordered = sess.features_untracked().unordered_const_ty_params();
+                (ParamKindOrd::Const { unordered }, Some(format!("const {}: {}", param.ident, ty)))
+            }
+        };
+        if let Some(ident) = ident {
+            param_idents.push((kind, ord_kind, bounds, param_idents.len(), ident));
+        }
+        let max_param = &mut max_param;
+        match max_param {
+            Some(max_param) if *max_param > ord_kind => {
+                let entry = out_of_order.entry(ord_kind).or_insert((*max_param, vec![]));
+                entry.1.push(span);
+            }
+            Some(_) | None => *max_param = Some(ord_kind),
+        };
+    }
+
+    let mut ordered_params = "<".to_string();
+    if !out_of_order.is_empty() {
+        param_idents.sort_by_key(|&(_, po, _, i, _)| (po, i));
+        let mut first = true;
+        for (kind, _, bounds, _, ident) in param_idents {
+            if !first {
+                ordered_params += ", ";
+            }
+            ordered_params += &ident;
+            if let Some(bounds) = bounds {
+                if !bounds.is_empty() {
+                    ordered_params += ": ";
+                    ordered_params += &pprust::bounds_to_string(&bounds);
+                }
+            }
+            match kind {
+                GenericParamKind::Type { default: Some(default) } => {
+                    ordered_params += " = ";
+                    ordered_params += &pprust::ty_to_string(default);
+                }
+                GenericParamKind::Type { default: None } => (),
+                GenericParamKind::Lifetime => (),
+                // FIXME(const_generics_defaults)
+                GenericParamKind::Const { ty: _, kw_span: _, default: _ } => (),
+            }
+            first = false;
+        }
+    }
+    ordered_params += ">";
+
+    for (param_ord, (max_param, spans)) in &out_of_order {
+        let mut err =
+            handler.struct_span_err(
+                spans.clone(),
+                &format!(
+                    "{} parameters must be declared prior to {} parameters",
+                    param_ord, max_param,
+                ),
+            );
+        err.span_suggestion(
+            span,
+            &format!(
+                "reorder the parameters: lifetimes, {}",
+                if sess.features_untracked().const_generics {
+                    "then consts and types"
+                } else {
+                    "then types, then consts"
+                }
+            ),
+            ordered_params.clone(),
+            Applicability::MachineApplicable,
+        );
+        err.emit();
+    }
+}
+
+impl<'a> Visitor<'a> for AstValidator<'a> {
+    fn visit_attribute(&mut self, attr: &Attribute) {
+        validate_attr::check_meta(&self.session.parse_sess, attr);
+    }
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        match &expr.kind {
+            ExprKind::LlvmInlineAsm(..) if !self.session.target.allow_asm => {
+                struct_span_err!(
+                    self.session,
+                    expr.span,
+                    E0472,
+                    "llvm_asm! is unsupported on this target"
+                )
+                .emit();
             }
             _ => {}
         }
 
+        visit::walk_expr(self, expr);
+    }
+
+    fn visit_ty(&mut self, ty: &'a Ty) {
+        self.visit_ty_common(ty);
+        self.deny_anonymous_struct(ty);
         self.walk_ty(ty)
     }
 
@@ -891,6 +1010,11 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
         visit::walk_lifetime(self, lifetime);
     }
 
+    fn visit_field_def(&mut self, s: &'a FieldDef) {
+        self.deny_anonymous_field(s);
+        visit::walk_field_def(self, s)
+    }
+
     fn visit_item(&mut self, item: &'a Item) {
         if item.attrs.iter().any(|attr| self.session.is_proc_macro_attr(attr)) {
             self.has_proc_macro_decls = true;
@@ -901,7 +1025,7 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
         }
 
         match item.kind {
-            ItemKind::Impl {
+            ItemKind::Impl(box ImplKind {
                 unsafety,
                 polarity,
                 defaultness: _,
@@ -910,7 +1034,7 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
                 of_trait: Some(ref t),
                 ref self_ty,
                 items: _,
-            } => {
+            }) => {
                 self.with_in_trait_impl(true, |this| {
                     this.invalid_visibility(&item.vis, None);
                     if let TyKind::Err = self_ty.kind {
@@ -938,7 +1062,7 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
                 });
                 return; // Avoid visiting again.
             }
-            ItemKind::Impl {
+            ItemKind::Impl(box ImplKind {
                 unsafety,
                 polarity,
                 defaultness,
@@ -947,7 +1071,7 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
                 of_trait: None,
                 ref self_ty,
                 items: _,
-            } => {
+            }) => {
                 let error = |annotation_span, annotation| {
                     let mut err = self.err_handler().struct_span_err(
                         self_ty.span,
@@ -979,7 +1103,7 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
                         .emit();
                 }
             }
-            ItemKind::Fn(def, _, _, ref body) => {
+            ItemKind::Fn(box FnKind(def, _, _, ref body)) => {
                 self.check_defaultness(item.span, def);
 
                 if body.is_none() {
@@ -1008,7 +1132,13 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
                     }
                 }
             }
-            ItemKind::Trait(is_auto, _, ref generics, ref bounds, ref trait_items) => {
+            ItemKind::Trait(box TraitKind(
+                is_auto,
+                _,
+                ref generics,
+                ref bounds,
+                ref trait_items,
+            )) => {
                 if is_auto == IsAuto::Yes {
                     // Auto traits cannot have generics, super traits nor contain items.
                     self.deny_generic_params(generics, item.ident.span);
@@ -1029,22 +1159,52 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
                 walk_list!(self, visit_attribute, &item.attrs);
                 return;
             }
-            ItemKind::Mod(Mod { inline, unsafety, .. }) => {
+            ItemKind::Mod(unsafety, ref mod_kind) => {
                 if let Unsafe::Yes(span) = unsafety {
                     self.err_handler().span_err(span, "module cannot be declared unsafe");
                 }
                 // Ensure that `path` attributes on modules are recorded as used (cf. issue #35584).
-                if !inline && !self.session.contains_name(&item.attrs, sym::path) {
+                if !matches!(mod_kind, ModKind::Loaded(_, Inline::Yes, _))
+                    && !self.session.contains_name(&item.attrs, sym::path)
+                {
                     self.check_mod_file_item_asciionly(item.ident);
                 }
             }
-            ItemKind::Union(ref vdata, _) => {
-                if let VariantData::Tuple(..) | VariantData::Unit(..) = vdata {
-                    self.err_handler()
-                        .span_err(item.span, "tuple and unit unions are not permitted");
+            ItemKind::Struct(ref vdata, ref generics) => match vdata {
+                // Duplicating the `Visitor` logic allows catching all cases
+                // of `Anonymous(Struct, Union)` outside of a field struct or union.
+                //
+                // Inside `visit_ty` the validator catches every `Anonymous(Struct, Union)` it
+                // encounters, and only on `ItemKind::Struct` and `ItemKind::Union`
+                // it uses `visit_ty_common`, which doesn't contain that specific check.
+                VariantData::Struct(ref fields, ..) => {
+                    self.visit_vis(&item.vis);
+                    self.visit_ident(item.ident);
+                    self.visit_generics(generics);
+                    self.with_banned_assoc_ty_bound(|this| {
+                        walk_list!(this, visit_struct_field_def, fields);
+                    });
+                    walk_list!(self, visit_attribute, &item.attrs);
+                    return;
                 }
+                _ => {}
+            },
+            ItemKind::Union(ref vdata, ref generics) => {
                 if vdata.fields().is_empty() {
                     self.err_handler().span_err(item.span, "unions cannot have zero fields");
+                }
+                match vdata {
+                    VariantData::Struct(ref fields, ..) => {
+                        self.visit_vis(&item.vis);
+                        self.visit_ident(item.ident);
+                        self.visit_generics(generics);
+                        self.with_banned_assoc_ty_bound(|this| {
+                            walk_list!(this, visit_struct_field_def, fields);
+                        });
+                        walk_list!(self, visit_attribute, &item.attrs);
+                        return;
+                    }
+                    _ => {}
                 }
             }
             ItemKind::Const(def, .., None) => {
@@ -1056,7 +1216,7 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
                 let msg = "free static item without body";
                 self.error_item_without_body(item.span, "static", msg, " = <expr>;");
             }
-            ItemKind::TyAlias(def, _, ref bounds, ref body) => {
+            ItemKind::TyAlias(box TyAliasKind(def, _, ref bounds, ref body)) => {
                 self.check_defaultness(item.span, def);
                 if body.is_none() {
                     let msg = "free type alias without body";
@@ -1072,19 +1232,22 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
 
     fn visit_foreign_item(&mut self, fi: &'a ForeignItem) {
         match &fi.kind {
-            ForeignItemKind::Fn(def, sig, _, body) => {
+            ForeignItemKind::Fn(box FnKind(def, sig, _, body)) => {
                 self.check_defaultness(fi.span, *def);
                 self.check_foreign_fn_bodyless(fi.ident, body.as_deref());
                 self.check_foreign_fn_headerless(fi.ident, fi.span, sig.header);
+                self.check_foreign_item_ascii_only(fi.ident);
             }
-            ForeignItemKind::TyAlias(def, generics, bounds, body) => {
+            ForeignItemKind::TyAlias(box TyAliasKind(def, generics, bounds, body)) => {
                 self.check_defaultness(fi.span, *def);
                 self.check_foreign_kind_bodyless(fi.ident, "type", body.as_ref().map(|b| b.span));
                 self.check_type_no_bounds(bounds, "`extern` blocks");
                 self.check_foreign_ty_genericless(generics);
+                self.check_foreign_item_ascii_only(fi.ident);
             }
             ForeignItemKind::Static(_, _, body) => {
                 self.check_foreign_kind_bodyless(fi.ident, "static", body.as_ref().map(|b| b.span));
+                self.check_foreign_item_ascii_only(fi.ident);
             }
             ForeignItemKind::MacCall(..) => {}
         }
@@ -1123,20 +1286,23 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
     }
 
     fn visit_generics(&mut self, generics: &'a Generics) {
-        let mut prev_ty_default = None;
+        let cg_defaults = self.session.features_untracked().const_generics_defaults;
+
+        let mut prev_param_default = None;
         for param in &generics.params {
             match param.kind {
                 GenericParamKind::Lifetime => (),
-                GenericParamKind::Type { default: Some(_), .. } => {
-                    prev_ty_default = Some(param.ident.span);
+                GenericParamKind::Type { default: Some(_), .. }
+                | GenericParamKind::Const { default: Some(_), .. } => {
+                    prev_param_default = Some(param.ident.span);
                 }
                 GenericParamKind::Type { .. } | GenericParamKind::Const { .. } => {
-                    if let Some(span) = prev_ty_default {
+                    if let Some(span) = prev_param_default {
                         let mut err = self.err_handler().struct_span_err(
                             span,
-                            "type parameters with a default must be trailing",
+                            "generic parameters with a default must be trailing",
                         );
-                        if matches!(param.kind, GenericParamKind::Const { .. }) {
+                        if matches!(param.kind, GenericParamKind::Const { .. }) && !cg_defaults {
                             err.note(
                                 "using type defaults and const parameters \
                                  in the same parameter list is currently not permitted",
@@ -1152,22 +1318,7 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
         validate_generic_param_order(
             self.session,
             self.err_handler(),
-            generics.params.iter().map(|param| {
-                let ident = Some(param.ident.to_string());
-                let (kind, ident) = match &param.kind {
-                    GenericParamKind::Lifetime => (ParamKindOrd::Lifetime, ident),
-                    GenericParamKind::Type { default: _ } => (ParamKindOrd::Type, ident),
-                    GenericParamKind::Const { ref ty, kw_span: _ } => {
-                        let ty = pprust::ty_to_string(ty);
-                        let unordered = self.session.features_untracked().const_generics;
-                        (
-                            ParamKindOrd::Const { unordered },
-                            Some(format!("const {}: {}", param.ident, ty)),
-                        )
-                    }
-                };
-                (kind, Some(&*param.bounds), param.ident.span, ident)
-            }),
+            &generics.params,
             generics.span,
         );
 
@@ -1176,8 +1327,41 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
                 deny_equality_constraints(self, predicate, generics);
             }
         }
+        walk_list!(self, visit_generic_param, &generics.params);
+        for predicate in &generics.where_clause.predicates {
+            match predicate {
+                WherePredicate::BoundPredicate(bound_pred) => {
+                    // A type binding, eg `for<'c> Foo: Send+Clone+'c`
+                    self.check_late_bound_lifetime_defs(&bound_pred.bound_generic_params);
 
-        visit::walk_generics(self, generics)
+                    // This is slightly complicated. Our representation for poly-trait-refs contains a single
+                    // binder and thus we only allow a single level of quantification. However,
+                    // the syntax of Rust permits quantification in two places in where clauses,
+                    // e.g., `T: for <'a> Foo<'a>` and `for <'a, 'b> &'b T: Foo<'a>`. If both are
+                    // defined, then error.
+                    if !bound_pred.bound_generic_params.is_empty() {
+                        for bound in &bound_pred.bounds {
+                            match bound {
+                                GenericBound::Trait(t, _) => {
+                                    if !t.bound_generic_params.is_empty() {
+                                        struct_span_err!(
+                                            self.err_handler(),
+                                            t.span,
+                                            E0316,
+                                            "nested quantification of lifetimes"
+                                        )
+                                        .emit();
+                                    }
+                                }
+                                GenericBound::Outlives(_) => {}
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            self.visit_where_predicate(predicate);
+        }
     }
 
     fn visit_generic_param(&mut self, param: &'a GenericParam) {
@@ -1208,11 +1392,11 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
     }
 
     fn visit_pat(&mut self, pat: &'a Pat) {
-        match pat.kind {
-            PatKind::Lit(ref expr) => {
+        match &pat.kind {
+            PatKind::Lit(expr) => {
                 self.check_expr_within_pat(expr, false);
             }
-            PatKind::Range(ref start, ref end, _) => {
+            PatKind::Range(start, end, _) => {
                 if let Some(expr) = start {
                     self.check_expr_within_pat(expr, true);
                 }
@@ -1224,14 +1408,6 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
         }
 
         visit::walk_pat(self, pat)
-    }
-
-    fn visit_where_predicate(&mut self, p: &'a WherePredicate) {
-        if let &WherePredicate::BoundPredicate(ref bound_predicate) = p {
-            // A type binding, eg `for<'c> Foo: Send+Clone+'c`
-            self.check_late_bound_lifetime_defs(&bound_predicate.bound_generic_params);
-        }
-        visit::walk_where_predicate(self, p);
     }
 
     fn visit_poly_trait_ref(&mut self, t: &'a PolyTraitRef, m: &'a TraitBoundModifier) {
@@ -1285,7 +1461,7 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
 
         // Functions without bodies cannot have patterns.
         if let FnKind::Fn(ctxt, _, sig, _, None) = fk {
-            Self::check_decl_no_pat(&sig.decl, |span, mut_ident| {
+            Self::check_decl_no_pat(&sig.decl, |span, ident, mut_ident| {
                 let (code, msg, label) = match ctxt {
                     FnCtxt::Foreign => (
                         error_code!(E0130),
@@ -1299,7 +1475,16 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
                     ),
                 };
                 if mut_ident && matches!(ctxt, FnCtxt::Assoc(_)) {
-                    self.lint_buffer.buffer_lint(PATTERNS_IN_FNS_WITHOUT_BODY, id, span, msg);
+                    if let Some(ident) = ident {
+                        let diag = BuiltinLintDiagnostics::PatternsInFnsWithoutBody(span, ident);
+                        self.lint_buffer.buffer_lint_with_diagnostic(
+                            PATTERNS_IN_FNS_WITHOUT_BODY,
+                            id,
+                            span,
+                            msg,
+                            diag,
+                        )
+                    }
                 } else {
                     self.err_handler()
                         .struct_span_err(span, msg)
@@ -1323,10 +1508,10 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
                 AssocItemKind::Const(_, _, body) => {
                     self.check_impl_item_provided(item.span, body, "constant", " = <expr>;");
                 }
-                AssocItemKind::Fn(_, _, _, body) => {
+                AssocItemKind::Fn(box FnKind(_, _, _, body)) => {
                     self.check_impl_item_provided(item.span, body, "function", " { <body> }");
                 }
-                AssocItemKind::TyAlias(_, _, bounds, body) => {
+                AssocItemKind::TyAlias(box TyAliasKind(_, _, bounds, body)) => {
                     self.check_impl_item_provided(item.span, body, "type", " = <type>;");
                     self.check_type_no_bounds(bounds, "`impl`s");
                 }
@@ -1336,7 +1521,7 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
 
         if ctxt == AssocCtxt::Trait || self.in_trait_impl {
             self.invalid_visibility(&item.vis, None);
-            if let AssocItemKind::Fn(_, sig, _, _) = &item.kind {
+            if let AssocItemKind::Fn(box FnKind(_, sig, _, _)) = &item.kind {
                 self.check_trait_fn_not_const(sig.header.constness);
                 self.check_trait_fn_not_async(item.span, sig.header.asyncness);
             }

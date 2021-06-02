@@ -62,7 +62,7 @@ impl Socket {
                     target_os = "illumos",
                     target_os = "linux",
                     target_os = "netbsd",
-                    target_os = "opensbd",
+                    target_os = "openbsd",
                 ))] {
                     // On platforms that support it we pass the SOCK_CLOEXEC
                     // flag to atomically create the socket and set it as
@@ -99,7 +99,7 @@ impl Socket {
                     target_os = "illumos",
                     target_os = "linux",
                     target_os = "netbsd",
-                    target_os = "opensbd",
+                    target_os = "openbsd",
                 ))] {
                     // Like above, set cloexec atomically
                     cvt(libc::socketpair(fam, ty | libc::SOCK_CLOEXEC, 0, fds.as_mut_ptr()))?;
@@ -139,9 +139,9 @@ impl Socket {
         let mut pollfd = libc::pollfd { fd: self.0.raw(), events: libc::POLLOUT, revents: 0 };
 
         if timeout.as_secs() == 0 && timeout.subsec_nanos() == 0 {
-            return Err(io::Error::new(
+            return Err(io::Error::new_const(
                 io::ErrorKind::InvalidInput,
-                "cannot set a 0 duration timeout",
+                &"cannot set a 0 duration timeout",
             ));
         }
 
@@ -150,7 +150,7 @@ impl Socket {
         loop {
             let elapsed = start.elapsed();
             if elapsed >= timeout {
-                return Err(io::Error::new(io::ErrorKind::TimedOut, "connection timed out"));
+                return Err(io::Error::new_const(io::ErrorKind::TimedOut, &"connection timed out"));
             }
 
             let timeout = timeout - elapsed;
@@ -177,7 +177,10 @@ impl Socket {
                     // for POLLHUP rather than read readiness
                     if pollfd.revents & libc::POLLHUP != 0 {
                         let e = self.take_error()?.unwrap_or_else(|| {
-                            io::Error::new(io::ErrorKind::Other, "no error set after POLLHUP")
+                            io::Error::new_const(
+                                io::ErrorKind::Other,
+                                &"no error set after POLLHUP",
+                            )
                         });
                         return Err(e);
                     }
@@ -195,24 +198,18 @@ impl Socket {
         // glibc 2.10 and musl 0.9.5.
         cfg_if::cfg_if! {
             if #[cfg(any(
+                target_os = "android",
                 target_os = "dragonfly",
                 target_os = "freebsd",
                 target_os = "illumos",
                 target_os = "linux",
                 target_os = "netbsd",
-                target_os = "opensbd",
+                target_os = "openbsd",
             ))] {
                 let fd = cvt_r(|| unsafe {
                     libc::accept4(self.0.raw(), storage, len, libc::SOCK_CLOEXEC)
                 })?;
                 Ok(Socket(FileDesc::new(fd)))
-            // While the Android kernel supports the syscall,
-            // it is not included in all versions of Android's libc.
-            } else if #[cfg(target_os = "android")] {
-                let fd = cvt_r(|| unsafe {
-                    libc::syscall(libc::SYS_accept4, self.0.raw(), storage, len, libc::SOCK_CLOEXEC)
-                })?;
-                Ok(Socket(FileDesc::new(fd as c_int)))
             } else {
                 let fd = cvt_r(|| unsafe { libc::accept(self.0.raw(), storage, len) })?;
                 let fd = FileDesc::new(fd);
@@ -324,9 +321,9 @@ impl Socket {
         let timeout = match dur {
             Some(dur) => {
                 if dur.as_secs() == 0 && dur.subsec_nanos() == 0 {
-                    return Err(io::Error::new(
+                    return Err(io::Error::new_const(
                         io::ErrorKind::InvalidInput,
-                        "cannot set a 0 duration timeout",
+                        &"cannot set a 0 duration timeout",
                     ));
                 }
 

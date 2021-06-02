@@ -1,7 +1,7 @@
 //! Code related to processing overloaded binary and unary operators.
 
 use super::method::MethodCallee;
-use super::FnCtxt;
+use super::{has_expected_num_generic_args, FnCtxt};
 use rustc_ast as ast;
 use rustc_errors::{self, struct_span_err, Applicability, DiagnosticBuilder};
 use rustc_hir as hir;
@@ -503,8 +503,14 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             if !self.tcx.has_typeck_results(def_id) {
                 return false;
             }
-            // We're emitting a suggestion, so we can just ignore regions
-            let fn_sig = self.tcx.fn_sig(def_id).skip_binder();
+            // FIXME: Instead of exiting early when encountering bound vars in
+            // the function signature, consider keeping the binder here and
+            // propagating it downwards.
+            let fn_sig = if let Some(fn_sig) = self.tcx.fn_sig(def_id).no_bound_vars() {
+                fn_sig
+            } else {
+                return false;
+            };
 
             let other_ty = if let FnDef(def_id, _) = *other_ty.kind() {
                 if !self.tcx.has_typeck_results(def_id) {
@@ -675,7 +681,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         format!("cannot apply unary operator `{}`", op.as_str()),
                     );
                     match actual.kind() {
-                        Uint(_) if op == hir::UnOp::UnNeg => {
+                        Uint(_) if op == hir::UnOp::Neg => {
                             err.note("unsigned values cannot be negated");
 
                             if let hir::ExprKind::Unary(
@@ -705,9 +711,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         Ref(_, ref lty, _) if *lty.kind() == Str => {}
                         _ => {
                             let missing_trait = match op {
-                                hir::UnOp::UnNeg => "std::ops::Neg",
-                                hir::UnOp::UnNot => "std::ops::Not",
-                                hir::UnOp::UnDeref => "std::ops::UnDerf",
+                                hir::UnOp::Neg => "std::ops::Neg",
+                                hir::UnOp::Not => "std::ops::Not",
+                                hir::UnOp::Deref => "std::ops::UnDerf",
                             };
                             suggest_impl_missing(&mut err, operand_ty, &missing_trait);
                         }
@@ -776,9 +782,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     span_bug!(span, "&& and || are not overloadable")
                 }
             }
-        } else if let Op::Unary(hir::UnOp::UnNot, _) = op {
+        } else if let Op::Unary(hir::UnOp::Not, _) = op {
             (sym::not, lang.not_trait())
-        } else if let Op::Unary(hir::UnOp::UnNeg, _) = op {
+        } else if let Op::Unary(hir::UnOp::Neg, _) = op {
             (sym::neg, lang.neg_trait())
         } else {
             bug!("lookup_op_method: op not supported: {:?}", op)
@@ -788,6 +794,23 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             "lookup_op_method(lhs_ty={:?}, op={:?}, opname={:?}, trait_did={:?})",
             lhs_ty, op, opname, trait_did
         );
+
+        // Catches cases like #83893, where a lang item is declared with the
+        // wrong number of generic arguments. Should have yielded an error
+        // elsewhere by now, but we have to catch it here so that we do not
+        // index `other_tys` out of bounds (if the lang item has too many
+        // generic arguments, `other_tys` is too short).
+        if !has_expected_num_generic_args(
+            self.tcx,
+            trait_did,
+            match op {
+                // Binary ops have a generic right-hand side, unary ops don't
+                Op::Binary(..) => 1,
+                Op::Unary(..) => 0,
+            },
+        ) {
+            return Err(());
+        }
 
         let method = trait_did.and_then(|trait_did| {
             let opname = Ident::with_dummy_span(opname);

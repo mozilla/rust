@@ -1,4 +1,6 @@
-#![feature(unsafe_block_in_unsafe_fn)]
+// revisions: mir thir
+// [thir]compile-flags: -Zthir-unsafeck
+
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(unused_unsafe)]
 
@@ -13,6 +15,9 @@ unsafe fn deny_level() {
     //~^ ERROR dereference of raw pointer is unsafe and requires unsafe block
     VOID = ();
     //~^ ERROR use of mutable static is unsafe and requires unsafe block
+
+    unsafe {}
+    //~^ ERROR unnecessary `unsafe` block
 }
 
 // Check that `unsafe_op_in_unsafe_fn` works starting from the `warn` level.
@@ -25,6 +30,8 @@ unsafe fn warning_level() {
     //~^ ERROR dereference of raw pointer is unsafe and requires unsafe block
     VOID = ();
     //~^ ERROR use of mutable static is unsafe and requires unsafe block
+    unsafe {}
+    //~^ ERROR unnecessary `unsafe` block
 }
 
 unsafe fn explicit_block() {

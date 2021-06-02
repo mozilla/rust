@@ -12,20 +12,16 @@
 //! initialization and can otherwise silence errors, if
 //! move analysis runs after promotion on broken MIR.
 
-use rustc_ast::LitKind;
 use rustc_hir as hir;
-use rustc_hir::def_id::DefId;
 use rustc_middle::mir::traversal::ReversePostorder;
 use rustc_middle::mir::visit::{MutVisitor, MutatingUseContext, PlaceContext, Visitor};
 use rustc_middle::mir::*;
 use rustc_middle::ty::cast::CastTy;
 use rustc_middle::ty::subst::InternalSubsts;
 use rustc_middle::ty::{self, List, TyCtxt, TypeFoldable};
-use rustc_span::symbol::sym;
 use rustc_span::Span;
 
 use rustc_index::vec::{Idx, IndexVec};
-use rustc_target::spec::abi::Abi;
 
 use std::cell::Cell;
 use std::{cmp, iter, mem};
@@ -36,8 +32,8 @@ use crate::transform::MirPass;
 
 /// A `MirPass` for promotion.
 ///
-/// Promotion is the extraction of promotable temps into separate MIR bodies. This pass also emits
-/// errors when promotion of `#[rustc_args_required_const]` arguments fails.
+/// Promotion is the extraction of promotable temps into separate MIR bodies so they can have
+/// `'static` lifetime.
 ///
 /// After this pass is run, `promoted_fragments` will hold the MIR body corresponding to each
 /// newly created `Constant`.
@@ -90,7 +86,7 @@ pub enum TempState {
 impl TempState {
     pub fn is_promotable(&self) -> bool {
         debug!("is_promotable: self={:?}", self);
-        matches!(self, TempState::Defined { .. } )
+        matches!(self, TempState::Defined { .. })
     }
 }
 
@@ -101,53 +97,14 @@ impl TempState {
 pub enum Candidate {
     /// Borrow of a constant temporary, candidate for lifetime extension.
     Ref(Location),
-
-    /// Promotion of the `x` in `[x; 32]`.
-    Repeat(Location),
-
-    /// Currently applied to function calls where the callee has the unstable
-    /// `#[rustc_args_required_const]` attribute as well as the SIMD shuffle
-    /// intrinsic. The intrinsic requires the arguments are indeed constant and
-    /// the attribute currently provides the semantic requirement that arguments
-    /// must be constant.
-    Argument { bb: BasicBlock, index: usize },
-
-    /// `const` operand in asm!.
-    InlineAsm { bb: BasicBlock, index: usize },
 }
 
 impl Candidate {
-    /// Returns `true` if we should use the "explicit" rules for promotability for this `Candidate`.
-    fn forces_explicit_promotion(&self) -> bool {
-        match self {
-            Candidate::Ref(_) | Candidate::Repeat(_) => false,
-            Candidate::Argument { .. } | Candidate::InlineAsm { .. } => true,
-        }
-    }
-
     fn source_info(&self, body: &Body<'_>) -> SourceInfo {
         match self {
-            Candidate::Ref(location) | Candidate::Repeat(location) => *body.source_info(*location),
-            Candidate::Argument { bb, .. } | Candidate::InlineAsm { bb, .. } => {
-                *body.source_info(body.terminator_loc(*bb))
-            }
+            Candidate::Ref(location) => *body.source_info(*location),
         }
     }
-}
-
-fn args_required_const(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Vec<usize>> {
-    let attrs = tcx.get_attrs(def_id);
-    let attr = attrs.iter().find(|a| tcx.sess.check_name(a, sym::rustc_args_required_const))?;
-    let mut ret = vec![];
-    for meta in attr.meta_item_list()? {
-        match meta.literal()?.kind {
-            LitKind::Int(a, _) => {
-                ret.push(a as usize);
-            }
-            _ => bug!("invalid arg index"),
-        }
-    }
-    Some(ret)
 }
 
 struct Collector<'a, 'tcx> {
@@ -213,47 +170,6 @@ impl<'tcx> Visitor<'tcx> for Collector<'_, 'tcx> {
             Rvalue::Ref(..) => {
                 self.candidates.push(Candidate::Ref(location));
             }
-            Rvalue::Repeat(..) if self.ccx.tcx.features().const_in_array_repeat_expressions => {
-                // FIXME(#49147) only promote the element when it isn't `Copy`
-                // (so that code that can copy it at runtime is unaffected).
-                self.candidates.push(Candidate::Repeat(location));
-            }
-            _ => {}
-        }
-    }
-
-    fn visit_terminator(&mut self, terminator: &Terminator<'tcx>, location: Location) {
-        self.super_terminator(terminator, location);
-
-        match terminator.kind {
-            TerminatorKind::Call { ref func, .. } => {
-                if let ty::FnDef(def_id, _) = *func.ty(self.ccx.body, self.ccx.tcx).kind() {
-                    let fn_sig = self.ccx.tcx.fn_sig(def_id);
-                    if let Abi::RustIntrinsic | Abi::PlatformIntrinsic = fn_sig.abi() {
-                        let name = self.ccx.tcx.item_name(def_id);
-                        // FIXME(eddyb) use `#[rustc_args_required_const(2)]` for shuffles.
-                        if name.as_str().starts_with("simd_shuffle") {
-                            self.candidates
-                                .push(Candidate::Argument { bb: location.block, index: 2 });
-
-                            return; // Don't double count `simd_shuffle` candidates
-                        }
-                    }
-
-                    if let Some(constant_args) = args_required_const(self.ccx.tcx, def_id) {
-                        for index in constant_args {
-                            self.candidates.push(Candidate::Argument { bb: location.block, index });
-                        }
-                    }
-                }
-            }
-            TerminatorKind::InlineAsm { ref operands, .. } => {
-                for (index, op) in operands.iter().enumerate() {
-                    if let InlineAsmOperand::Const { .. } = op {
-                        self.candidates.push(Candidate::InlineAsm { bb: location.block, index })
-                    }
-                }
-            }
             _ => {}
         }
     }
@@ -280,14 +196,6 @@ pub fn collect_temps_and_candidates(
 struct Validator<'a, 'tcx> {
     ccx: &'a ConstCx<'a, 'tcx>,
     temps: &'a IndexVec<Local, TempState>,
-
-    /// Explicit promotion happens e.g. for constant arguments declared via
-    /// `rustc_args_required_const`.
-    /// Implicit promotion has almost the same rules, except that disallows `const fn`
-    /// except for those marked `#[rustc_promotable]`. This is to avoid changing
-    /// a legitimate run-time operation into a failing compile-time operation
-    /// e.g. due to addresses being compared inside the function.
-    explicit: bool,
 }
 
 impl std::ops::Deref for Validator<'a, 'tcx> {
@@ -304,93 +212,31 @@ impl<'tcx> Validator<'_, 'tcx> {
     fn validate_candidate(&self, candidate: Candidate) -> Result<(), Unpromotable> {
         match candidate {
             Candidate::Ref(loc) => {
-                assert!(!self.explicit);
-
                 let statement = &self.body[loc.block].statements[loc.statement_index];
                 match &statement.kind {
                     StatementKind::Assign(box (_, Rvalue::Ref(_, kind, place))) => {
-                        match kind {
-                            BorrowKind::Shared | BorrowKind::Mut { .. } => {}
-
-                            // FIXME(eddyb) these aren't promoted here but *could*
-                            // be promoted as part of a larger value because
-                            // `validate_rvalue`  doesn't check them, need to
-                            // figure out what is the intended behavior.
-                            BorrowKind::Shallow | BorrowKind::Unique => return Err(Unpromotable),
-                        }
-
                         // We can only promote interior borrows of promotable temps (non-temps
                         // don't get promoted anyway).
                         self.validate_local(place.local)?;
 
+                        // The reference operation itself must be promotable.
+                        // (Needs to come after `validate_local` to avoid ICEs.)
+                        self.validate_ref(*kind, place)?;
+
+                        // We do not check all the projections (they do not get promoted anyway),
+                        // but we do stay away from promoting anything involving a dereference.
                         if place.projection.contains(&ProjectionElem::Deref) {
                             return Err(Unpromotable);
                         }
+
+                        // We cannot promote things that need dropping, since the promoted value
+                        // would not get dropped.
                         if self.qualif_local::<qualifs::NeedsDrop>(place.local) {
                             return Err(Unpromotable);
                         }
 
-                        // FIXME(eddyb) this duplicates part of `validate_rvalue`.
-                        let has_mut_interior =
-                            self.qualif_local::<qualifs::HasMutInterior>(place.local);
-                        if has_mut_interior {
-                            return Err(Unpromotable);
-                        }
-
-                        if let BorrowKind::Mut { .. } = kind {
-                            let ty = place.ty(self.body, self.tcx).ty;
-
-                            // In theory, any zero-sized value could be borrowed
-                            // mutably without consequences. However, only &mut []
-                            // is allowed right now.
-                            if let ty::Array(_, len) = ty.kind() {
-                                match len.try_eval_usize(self.tcx, self.param_env) {
-                                    Some(0) => {}
-                                    _ => return Err(Unpromotable),
-                                }
-                            } else {
-                                return Err(Unpromotable);
-                            }
-                        }
-
                         Ok(())
                     }
-                    _ => bug!(),
-                }
-            }
-            Candidate::Repeat(loc) => {
-                assert!(!self.explicit);
-
-                let statement = &self.body[loc.block].statements[loc.statement_index];
-                match &statement.kind {
-                    StatementKind::Assign(box (_, Rvalue::Repeat(ref operand, _))) => {
-                        if !self.tcx.features().const_in_array_repeat_expressions {
-                            return Err(Unpromotable);
-                        }
-
-                        self.validate_operand(operand)
-                    }
-                    _ => bug!(),
-                }
-            }
-            Candidate::Argument { bb, index } => {
-                assert!(self.explicit);
-
-                let terminator = self.body[bb].terminator();
-                match &terminator.kind {
-                    TerminatorKind::Call { args, .. } => self.validate_operand(&args[index]),
-                    _ => bug!(),
-                }
-            }
-            Candidate::InlineAsm { bb, index } => {
-                assert!(self.explicit);
-
-                let terminator = self.body[bb].terminator();
-                match &terminator.kind {
-                    TerminatorKind::InlineAsm { operands, .. } => match &operands[index] {
-                        InlineAsmOperand::Const { value } => self.validate_operand(value),
-                        _ => bug!(),
-                    },
                     _ => bug!(),
                 }
             }
@@ -439,10 +285,11 @@ impl<'tcx> Validator<'_, 'tcx> {
     // FIXME(eddyb) maybe cache this?
     fn validate_local(&self, local: Local) -> Result<(), Unpromotable> {
         if let TempState::Defined { location: loc, .. } = self.temps[local] {
-            let num_stmts = self.body[loc.block].statements.len();
+            let block = &self.body[loc.block];
+            let num_stmts = block.statements.len();
 
             if loc.statement_index < num_stmts {
-                let statement = &self.body[loc.block].statements[loc.statement_index];
+                let statement = &block.statements[loc.statement_index];
                 match &statement.kind {
                     StatementKind::Assign(box (_, rhs)) => self.validate_rvalue(rhs),
                     _ => {
@@ -454,7 +301,7 @@ impl<'tcx> Validator<'_, 'tcx> {
                     }
                 }
             } else {
-                let terminator = self.body[loc.block].terminator();
+                let terminator = block.terminator();
                 match &terminator.kind {
                     TerminatorKind::Call { func, args, .. } => self.validate_call(func, args),
                     TerminatorKind::Yield { .. } => Err(Unpromotable),
@@ -469,43 +316,43 @@ impl<'tcx> Validator<'_, 'tcx> {
     }
 
     fn validate_place(&self, place: PlaceRef<'tcx>) -> Result<(), Unpromotable> {
-        match place {
-            PlaceRef { local, projection: [] } => self.validate_local(local),
-            PlaceRef { local, projection: [proj_base @ .., elem] } => {
+        match place.last_projection() {
+            None => self.validate_local(place.local),
+            Some((place_base, elem)) => {
                 // Validate topmost projection, then recurse.
-                match *elem {
+                match elem {
                     ProjectionElem::Deref => {
                         let mut promotable = false;
-                        // This is a special treatment for cases like *&STATIC where STATIC is a
-                        // global static variable.
-                        // This pattern is generated only when global static variables are directly
-                        // accessed and is qualified for promotion safely.
-                        if let TempState::Defined { location, .. } = self.temps[local] {
-                            let def_stmt =
-                                self.body[location.block].statements.get(location.statement_index);
-                            if let Some(Statement {
-                                kind:
-                                    StatementKind::Assign(box (_, Rvalue::Use(Operand::Constant(c)))),
-                                ..
-                            }) = def_stmt
-                            {
-                                if let Some(did) = c.check_static_ptr(self.tcx) {
-                                    // Evaluating a promoted may not read statics except if it got
-                                    // promoted from a static (this is a CTFE check). So we
-                                    // can only promote static accesses inside statics.
-                                    if let Some(hir::ConstContext::Static(..)) = self.const_kind {
-                                        // The `is_empty` predicate is introduced to exclude the case
-                                        // where the projection operations are [ .field, * ].
-                                        // The reason is because promotion will be illegal if field
-                                        // accesses precede the dereferencing.
-                                        // Discussion can be found at
-                                        // https://github.com/rust-lang/rust/pull/74945#discussion_r463063247
-                                        // There may be opportunity for generalization, but this needs to be
-                                        // accounted for.
-                                        if proj_base.is_empty()
-                                            && !self.tcx.is_thread_local_static(did)
+                        // We need to make sure this is a `Deref` of a local with no further projections.
+                        // Discussion can be found at
+                        // https://github.com/rust-lang/rust/pull/74945#discussion_r463063247
+                        if let Some(local) = place_base.as_local() {
+                            // This is a special treatment for cases like *&STATIC where STATIC is a
+                            // global static variable.
+                            // This pattern is generated only when global static variables are directly
+                            // accessed and is qualified for promotion safely.
+                            if let TempState::Defined { location, .. } = self.temps[local] {
+                                let def_stmt = self.body[location.block]
+                                    .statements
+                                    .get(location.statement_index);
+                                if let Some(Statement {
+                                    kind:
+                                        StatementKind::Assign(box (
+                                            _,
+                                            Rvalue::Use(Operand::Constant(c)),
+                                        )),
+                                    ..
+                                }) = def_stmt
+                                {
+                                    if let Some(did) = c.check_static_ptr(self.tcx) {
+                                        // Evaluating a promoted may not read statics except if it got
+                                        // promoted from a static (this is a CTFE check). So we
+                                        // can only promote static accesses inside statics.
+                                        if let Some(hir::ConstContext::Static(..)) = self.const_kind
                                         {
-                                            promotable = true;
+                                            if !self.tcx.is_thread_local_static(did) {
+                                                promotable = true;
+                                            }
                                         }
                                     }
                                 }
@@ -522,12 +369,52 @@ impl<'tcx> Validator<'_, 'tcx> {
                     ProjectionElem::ConstantIndex { .. } | ProjectionElem::Subslice { .. } => {}
 
                     ProjectionElem::Index(local) => {
+                        let mut promotable = false;
+                        // Only accept if we can predict the index and are indexing an array.
+                        let val =
+                            if let TempState::Defined { location: loc, .. } = self.temps[local] {
+                                let block = &self.body[loc.block];
+                                if loc.statement_index < block.statements.len() {
+                                    let statement = &block.statements[loc.statement_index];
+                                    match &statement.kind {
+                                        StatementKind::Assign(box (
+                                            _,
+                                            Rvalue::Use(Operand::Constant(c)),
+                                        )) => c.literal.try_eval_usize(self.tcx, self.param_env),
+                                        _ => None,
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+                        if let Some(idx) = val {
+                            // Determine the type of the thing we are indexing.
+                            let ty = place_base.ty(self.body, self.tcx).ty;
+                            match ty.kind() {
+                                ty::Array(_, len) => {
+                                    // It's an array; determine its length.
+                                    if let Some(len) = len.try_eval_usize(self.tcx, self.param_env)
+                                    {
+                                        // If the index is in-bounds, go ahead.
+                                        if idx < len {
+                                            promotable = true;
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        if !promotable {
+                            return Err(Unpromotable);
+                        }
+
                         self.validate_local(local)?;
                     }
 
                     ProjectionElem::Field(..) => {
-                        let base_ty =
-                            Place::ty_from(place.local, proj_base, self.body, self.tcx).ty;
+                        let base_ty = place_base.ty(self.body, self.tcx).ty;
                         if let Some(def) = base_ty.ty_adt_def() {
                             // No promotion of union field accesses.
                             if def.is_union() {
@@ -537,7 +424,7 @@ impl<'tcx> Validator<'_, 'tcx> {
                     }
                 }
 
-                self.validate_place(PlaceRef { local: place.local, projection: proj_base })
+                self.validate_place(place_base)
             }
         }
     }
@@ -572,117 +459,177 @@ impl<'tcx> Validator<'_, 'tcx> {
         }
     }
 
-    fn validate_rvalue(&self, rvalue: &Rvalue<'tcx>) -> Result<(), Unpromotable> {
-        match *rvalue {
-            Rvalue::Cast(CastKind::Misc, ref operand, cast_ty) => {
-                let operand_ty = operand.ty(self.body, self.tcx);
-                let cast_in = CastTy::from_ty(operand_ty).expect("bad input type for cast");
-                let cast_out = CastTy::from_ty(cast_ty).expect("bad output type for cast");
-                if let (CastTy::Ptr(_) | CastTy::FnPtr, CastTy::Int(_)) = (cast_in, cast_out) {
-                    // ptr-to-int casts are not possible in consts and thus not promotable
+    fn validate_ref(&self, kind: BorrowKind, place: &Place<'tcx>) -> Result<(), Unpromotable> {
+        match kind {
+            // Reject these borrow types just to be safe.
+            // FIXME(RalfJung): could we allow them? Should we? No point in it until we have a usecase.
+            BorrowKind::Shallow | BorrowKind::Unique => return Err(Unpromotable),
+
+            BorrowKind::Shared => {
+                let has_mut_interior = self.qualif_local::<qualifs::HasMutInterior>(place.local);
+                if has_mut_interior {
                     return Err(Unpromotable);
                 }
             }
 
-            Rvalue::BinaryOp(op, ref lhs, _) => {
-                if let ty::RawPtr(_) | ty::FnPtr(..) = lhs.ty(self.body, self.tcx).kind() {
-                    assert!(
-                        op == BinOp::Eq
-                            || op == BinOp::Ne
-                            || op == BinOp::Le
-                            || op == BinOp::Lt
-                            || op == BinOp::Ge
-                            || op == BinOp::Gt
-                            || op == BinOp::Offset
-                    );
+            BorrowKind::Mut { .. } => {
+                let ty = place.ty(self.body, self.tcx).ty;
 
-                    // raw pointer operations are not allowed inside consts and thus not promotable
+                // In theory, any zero-sized value could be borrowed
+                // mutably without consequences. However, only &mut []
+                // is allowed right now.
+                if let ty::Array(_, len) = ty.kind() {
+                    match len.try_eval_usize(self.tcx, self.param_env) {
+                        Some(0) => {}
+                        _ => return Err(Unpromotable),
+                    }
+                } else {
                     return Err(Unpromotable);
                 }
             }
-
-            Rvalue::NullaryOp(NullOp::Box, _) => return Err(Unpromotable),
-
-            // FIXME(RalfJung): the rest is *implicitly considered promotable*... that seems dangerous.
-            _ => {}
         }
 
+        Ok(())
+    }
+
+    fn validate_rvalue(&self, rvalue: &Rvalue<'tcx>) -> Result<(), Unpromotable> {
         match rvalue {
-            Rvalue::ThreadLocalRef(_) => Err(Unpromotable),
+            Rvalue::Use(operand) | Rvalue::Repeat(operand, _) => {
+                self.validate_operand(operand)?;
+            }
 
-            Rvalue::NullaryOp(..) => Ok(()),
+            Rvalue::Discriminant(place) | Rvalue::Len(place) => {
+                self.validate_place(place.as_ref())?
+            }
 
-            Rvalue::Discriminant(place) | Rvalue::Len(place) => self.validate_place(place.as_ref()),
+            Rvalue::ThreadLocalRef(_) => return Err(Unpromotable),
 
-            Rvalue::Use(operand)
-            | Rvalue::Repeat(operand, _)
-            | Rvalue::UnaryOp(_, operand)
-            | Rvalue::Cast(_, operand, _) => self.validate_operand(operand),
+            Rvalue::Cast(kind, operand, cast_ty) => {
+                if matches!(kind, CastKind::Misc) {
+                    let operand_ty = operand.ty(self.body, self.tcx);
+                    let cast_in = CastTy::from_ty(operand_ty).expect("bad input type for cast");
+                    let cast_out = CastTy::from_ty(cast_ty).expect("bad output type for cast");
+                    if let (CastTy::Ptr(_) | CastTy::FnPtr, CastTy::Int(_)) = (cast_in, cast_out) {
+                        // ptr-to-int casts are not possible in consts and thus not promotable
+                        return Err(Unpromotable);
+                    }
+                    // int-to-ptr casts are fine, they just use the integer value at pointer type.
+                }
 
-            Rvalue::BinaryOp(_, lhs, rhs) | Rvalue::CheckedBinaryOp(_, lhs, rhs) => {
+                self.validate_operand(operand)?;
+            }
+
+            Rvalue::NullaryOp(op, _) => match op {
+                NullOp::Box => return Err(Unpromotable),
+                NullOp::SizeOf => {}
+            },
+
+            Rvalue::UnaryOp(op, operand) => {
+                match op {
+                    // These operations can never fail.
+                    UnOp::Neg | UnOp::Not => {}
+                }
+
+                self.validate_operand(operand)?;
+            }
+
+            Rvalue::BinaryOp(op, box (lhs, rhs)) | Rvalue::CheckedBinaryOp(op, box (lhs, rhs)) => {
+                let op = *op;
+                let lhs_ty = lhs.ty(self.body, self.tcx);
+
+                if let ty::RawPtr(_) | ty::FnPtr(..) = lhs_ty.kind() {
+                    // Raw and fn pointer operations are not allowed inside consts and thus not promotable.
+                    assert!(matches!(
+                        op,
+                        BinOp::Eq
+                            | BinOp::Ne
+                            | BinOp::Le
+                            | BinOp::Lt
+                            | BinOp::Ge
+                            | BinOp::Gt
+                            | BinOp::Offset
+                    ));
+                    return Err(Unpromotable);
+                }
+
+                match op {
+                    BinOp::Div | BinOp::Rem => {
+                        if lhs_ty.is_integral() {
+                            // Integer division: the RHS must be a non-zero const.
+                            let const_val = match rhs {
+                                Operand::Constant(c) => {
+                                    c.literal.try_eval_bits(self.tcx, self.param_env, lhs_ty)
+                                }
+                                _ => None,
+                            };
+                            match const_val {
+                                Some(x) if x != 0 => {}        // okay
+                                _ => return Err(Unpromotable), // value not known or 0 -- not okay
+                            }
+                        }
+                    }
+                    // The remaining operations can never fail.
+                    BinOp::Eq
+                    | BinOp::Ne
+                    | BinOp::Le
+                    | BinOp::Lt
+                    | BinOp::Ge
+                    | BinOp::Gt
+                    | BinOp::Offset
+                    | BinOp::Add
+                    | BinOp::Sub
+                    | BinOp::Mul
+                    | BinOp::BitXor
+                    | BinOp::BitAnd
+                    | BinOp::BitOr
+                    | BinOp::Shl
+                    | BinOp::Shr => {}
+                }
+
                 self.validate_operand(lhs)?;
-                self.validate_operand(rhs)
+                self.validate_operand(rhs)?;
             }
 
             Rvalue::AddressOf(_, place) => {
                 // We accept `&raw *`, i.e., raw reborrows -- creating a raw pointer is
                 // no problem, only using it is.
-                if let [proj_base @ .., ProjectionElem::Deref] = place.projection.as_ref() {
-                    let base_ty = Place::ty_from(place.local, proj_base, self.body, self.tcx).ty;
+                if let Some((place_base, ProjectionElem::Deref)) = place.as_ref().last_projection()
+                {
+                    let base_ty = place_base.ty(self.body, self.tcx).ty;
                     if let ty::Ref(..) = base_ty.kind() {
-                        return self.validate_place(PlaceRef {
-                            local: place.local,
-                            projection: proj_base,
-                        });
+                        return self.validate_place(place_base);
                     }
                 }
-                Err(Unpromotable)
+                return Err(Unpromotable);
             }
 
             Rvalue::Ref(_, kind, place) => {
-                if let BorrowKind::Mut { .. } = kind {
-                    let ty = place.ty(self.body, self.tcx).ty;
-
-                    // In theory, any zero-sized value could be borrowed
-                    // mutably without consequences. However, only &mut []
-                    // is allowed right now.
-                    if let ty::Array(_, len) = ty.kind() {
-                        match len.try_eval_usize(self.tcx, self.param_env) {
-                            Some(0) => {}
-                            _ => return Err(Unpromotable),
-                        }
-                    } else {
-                        return Err(Unpromotable);
-                    }
-                }
-
                 // Special-case reborrows to be more like a copy of the reference.
-                let mut place = place.as_ref();
-                if let [proj_base @ .., ProjectionElem::Deref] = &place.projection {
-                    let base_ty = Place::ty_from(place.local, proj_base, self.body, self.tcx).ty;
+                let mut place_simplified = place.as_ref();
+                if let Some((place_base, ProjectionElem::Deref)) =
+                    place_simplified.last_projection()
+                {
+                    let base_ty = place_base.ty(self.body, self.tcx).ty;
                     if let ty::Ref(..) = base_ty.kind() {
-                        place = PlaceRef { local: place.local, projection: proj_base };
+                        place_simplified = place_base;
                     }
                 }
 
-                self.validate_place(place)?;
+                self.validate_place(place_simplified)?;
 
-                let has_mut_interior = self.qualif_local::<qualifs::HasMutInterior>(place.local);
-                if has_mut_interior {
-                    return Err(Unpromotable);
-                }
-
-                Ok(())
+                // Check that the reference is fine (using the original place!).
+                // (Needs to come after `validate_place` to avoid ICEs.)
+                self.validate_ref(*kind, place)?;
             }
 
-            Rvalue::Aggregate(_, ref operands) => {
+            Rvalue::Aggregate(_, operands) => {
                 for o in operands {
                     self.validate_operand(o)?;
                 }
-
-                Ok(())
             }
         }
+
+        Ok(())
     }
 
     fn validate_call(
@@ -692,13 +639,12 @@ impl<'tcx> Validator<'_, 'tcx> {
     ) -> Result<(), Unpromotable> {
         let fn_ty = callee.ty(self.body, self.tcx);
 
-        // When doing explicit promotion and inside const/static items, we promote all (eligible) function calls.
+        // Inside const/static items, we promote all (eligible) function calls.
         // Everywhere else, we require `#[rustc_promotable]` on the callee.
-        let promote_all_const_fn = self.explicit
-            || matches!(
-                self.const_kind,
-                Some(hir::ConstContext::Static(_) | hir::ConstContext::Const)
-            );
+        let promote_all_const_fn = matches!(
+            self.const_kind,
+            Some(hir::ConstContext::Static(_) | hir::ConstContext::Const)
+        );
         if !promote_all_const_fn {
             if let ty::FnDef(def_id, _) = *fn_ty.kind() {
                 // Never promote runtime `const fn` calls of
@@ -736,43 +682,12 @@ pub fn validate_candidates(
     temps: &IndexVec<Local, TempState>,
     candidates: &[Candidate],
 ) -> Vec<Candidate> {
-    let mut validator = Validator { ccx, temps, explicit: false };
+    let validator = Validator { ccx, temps };
 
     candidates
         .iter()
         .copied()
-        .filter(|&candidate| {
-            validator.explicit = candidate.forces_explicit_promotion();
-
-            // FIXME(eddyb) also emit the errors for shuffle indices
-            // and `#[rustc_args_required_const]` arguments here.
-
-            let is_promotable = validator.validate_candidate(candidate).is_ok();
-
-            // If we use explicit validation, we carry the risk of turning a legitimate run-time
-            // operation into a failing compile-time operation. Make sure that does not happen
-            // by asserting that there is no possible run-time behavior here in case promotion
-            // fails.
-            if validator.explicit && !is_promotable {
-                ccx.tcx.sess.delay_span_bug(
-                    ccx.body.span,
-                    "Explicit promotion requested, but failed to promote",
-                );
-            }
-
-            match candidate {
-                Candidate::Argument { bb, index } | Candidate::InlineAsm { bb, index }
-                    if !is_promotable =>
-                {
-                    let span = ccx.body[bb].terminator().source_info.span;
-                    let msg = format!("argument {} is required to be a constant", index + 1);
-                    ccx.tcx.sess.span_err(span, &msg);
-                }
-                _ => (),
-            }
-
-            is_promotable
-        })
+        .filter(|&candidate| validator.validate_candidate(candidate).is_ok())
         .collect()
 }
 
@@ -864,7 +779,7 @@ impl<'a, 'tcx> Promoter<'a, 'tcx> {
                         let unit = Rvalue::Use(Operand::Constant(box Constant {
                             span: statement.source_info.span,
                             user_ty: None,
-                            literal: ty::Const::zero_sized(self.tcx, self.tcx.types.unit),
+                            literal: ty::Const::zero_sized(self.tcx, self.tcx.types.unit).into(),
                         }));
                         mem::replace(rhs, unit)
                     },
@@ -941,20 +856,22 @@ impl<'a, 'tcx> Promoter<'a, 'tcx> {
                 Operand::Constant(Box::new(Constant {
                     span,
                     user_ty: None,
-                    literal: tcx.mk_const(ty::Const {
-                        ty,
-                        val: ty::ConstKind::Unevaluated(
-                            def,
-                            InternalSubsts::for_item(tcx, def.did, |param, _| {
-                                if let ty::GenericParamDefKind::Lifetime = param.kind {
-                                    tcx.lifetimes.re_erased.into()
-                                } else {
-                                    tcx.mk_param_from_def(param)
-                                }
+                    literal: tcx
+                        .mk_const(ty::Const {
+                            ty,
+                            val: ty::ConstKind::Unevaluated(ty::Unevaluated {
+                                def,
+                                substs: InternalSubsts::for_item(tcx, def.did, |param, _| {
+                                    if let ty::GenericParamDefKind::Lifetime = param.kind {
+                                        tcx.lifetimes.re_erased.into()
+                                    } else {
+                                        tcx.mk_param_from_def(param)
+                                    }
+                                }),
+                                promoted: Some(promoted_id),
                             }),
-                            Some(promoted_id),
-                        ),
-                    }),
+                        })
+                        .into(),
                 }))
             };
             let (blocks, local_decls) = self.source.basic_blocks_and_local_decls_mut();
@@ -1010,56 +927,6 @@ impl<'a, 'tcx> Promoter<'a, 'tcx> {
                         _ => bug!(),
                     }
                 }
-                Candidate::Repeat(loc) => {
-                    let statement = &mut blocks[loc.block].statements[loc.statement_index];
-                    match statement.kind {
-                        StatementKind::Assign(box (_, Rvalue::Repeat(ref mut operand, _))) => {
-                            let ty = operand.ty(local_decls, self.tcx);
-                            let span = statement.source_info.span;
-
-                            Rvalue::Use(mem::replace(operand, promoted_operand(ty, span)))
-                        }
-                        _ => bug!(),
-                    }
-                }
-                Candidate::Argument { bb, index } => {
-                    let terminator = blocks[bb].terminator_mut();
-                    match terminator.kind {
-                        TerminatorKind::Call { ref mut args, .. } => {
-                            let ty = args[index].ty(local_decls, self.tcx);
-                            let span = terminator.source_info.span;
-
-                            Rvalue::Use(mem::replace(&mut args[index], promoted_operand(ty, span)))
-                        }
-                        // We expected a `TerminatorKind::Call` for which we'd like to promote an
-                        // argument. `qualify_consts` saw a `TerminatorKind::Call` here, but
-                        // we are seeing a `Goto`. That means that the `promote_temps` method
-                        // already promoted this call away entirely. This case occurs when calling
-                        // a function requiring a constant argument and as that constant value
-                        // providing a value whose computation contains another call to a function
-                        // requiring a constant argument.
-                        TerminatorKind::Goto { .. } => return None,
-                        _ => bug!(),
-                    }
-                }
-                Candidate::InlineAsm { bb, index } => {
-                    let terminator = blocks[bb].terminator_mut();
-                    match terminator.kind {
-                        TerminatorKind::InlineAsm { ref mut operands, .. } => {
-                            match &mut operands[index] {
-                                InlineAsmOperand::Const { ref mut value } => {
-                                    let ty = value.ty(local_decls, self.tcx);
-                                    let span = terminator.source_info.span;
-
-                                    Rvalue::Use(mem::replace(value, promoted_operand(ty, span)))
-                                }
-                                _ => bug!(),
-                            }
-                        }
-
-                        _ => bug!(),
-                    }
-                }
             }
         };
 
@@ -1102,8 +969,7 @@ pub fn promote_candidates<'tcx>(
     let mut extra_statements = vec![];
     for candidate in candidates.into_iter().rev() {
         match candidate {
-            Candidate::Repeat(Location { block, statement_index })
-            | Candidate::Ref(Location { block, statement_index }) => {
+            Candidate::Ref(Location { block, statement_index }) => {
                 if let StatementKind::Assign(box (place, _)) =
                     &body[block].statements[statement_index].kind
                 {
@@ -1115,7 +981,6 @@ pub fn promote_candidates<'tcx>(
                     }
                 }
             }
-            Candidate::Argument { .. } | Candidate::InlineAsm { .. } => {}
         }
 
         // Declare return place local so that `mir::Body::new` doesn't complain.
@@ -1133,7 +998,7 @@ pub fn promote_candidates<'tcx>(
             0,
             vec![],
             body.span,
-            body.generator_kind,
+            body.generator_kind(),
         );
 
         let promoter = Promoter {
@@ -1188,26 +1053,37 @@ pub fn promote_candidates<'tcx>(
     promotions
 }
 
-/// This function returns `true` if the `const_in_array_repeat_expressions` feature attribute should
-/// be suggested. This function is probably quite expensive, it shouldn't be run in the happy path.
-/// Feature attribute should be suggested if `operand` can be promoted and the feature is not
-/// enabled.
-crate fn should_suggest_const_in_array_repeat_expressions_attribute<'tcx>(
+/// This function returns `true` if the function being called in the array
+/// repeat expression is a `const` function.
+crate fn is_const_fn_in_array_repeat_expression<'tcx>(
     ccx: &ConstCx<'_, 'tcx>,
-    operand: &Operand<'tcx>,
+    place: &Place<'tcx>,
+    body: &Body<'tcx>,
 ) -> bool {
-    let mut rpo = traversal::reverse_postorder(&ccx.body);
-    let (temps, _) = collect_temps_and_candidates(&ccx, &mut rpo);
-    let validator = Validator { ccx, temps: &temps, explicit: false };
+    match place.as_local() {
+        // rule out cases such as: `let my_var = some_fn(); [my_var; N]`
+        Some(local) if body.local_decls[local].is_user_variable() => return false,
+        None => return false,
+        _ => {}
+    }
 
-    let should_promote = validator.validate_operand(operand).is_ok();
-    let feature_flag = validator.ccx.tcx.features().const_in_array_repeat_expressions;
-    debug!(
-        "should_suggest_const_in_array_repeat_expressions_flag: def_id={:?} \
-            should_promote={:?} feature_flag={:?}",
-        validator.ccx.def_id(),
-        should_promote,
-        feature_flag
-    );
-    should_promote && !feature_flag
+    for block in body.basic_blocks() {
+        if let Some(Terminator { kind: TerminatorKind::Call { func, destination, .. }, .. }) =
+            &block.terminator
+        {
+            if let Operand::Constant(box Constant { literal, .. }) = func {
+                if let ty::FnDef(def_id, _) = *literal.ty().kind() {
+                    if let Some((destination_place, _)) = destination {
+                        if destination_place == place {
+                            if is_const_fn(ccx.tcx, def_id) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    false
 }

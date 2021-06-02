@@ -2,15 +2,16 @@ use super::FnCtxt;
 use crate::astconv::AstConv;
 
 use rustc_ast::util::parser::ExprPrecedence;
-use rustc_span::{self, Span};
+use rustc_span::{self, MultiSpan, Span};
 
 use rustc_errors::{Applicability, DiagnosticBuilder};
 use rustc_hir as hir;
 use rustc_hir::def::{CtorOf, DefKind};
 use rustc_hir::lang_items::LangItem;
-use rustc_hir::{ExprKind, ItemKind, Node};
+use rustc_hir::{Expr, ExprKind, ItemKind, Node, Stmt, StmtKind};
 use rustc_infer::infer;
-use rustc_middle::ty::{self, Ty};
+use rustc_middle::lint::in_external_macro;
+use rustc_middle::ty::{self, Binder, Ty};
 use rustc_span::symbol::kw;
 
 use std::iter;
@@ -40,15 +41,23 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expr: &'tcx hir::Expr<'tcx>,
         expected: Ty<'tcx>,
         found: Ty<'tcx>,
-        cause_span: Span,
         blk_id: hir::HirId,
     ) -> bool {
         let expr = expr.peel_drop_temps();
-        self.suggest_missing_semicolon(err, expr, expected, cause_span);
+        // If the expression is from an external macro, then do not suggest
+        // adding a semicolon, because there's nowhere to put it.
+        // See issue #81943.
+        if expr.can_have_side_effects() && !in_external_macro(self.tcx.sess, expr.span) {
+            self.suggest_missing_semicolon(err, expr, expected);
+        }
         let mut pointing_at_return_type = false;
         if let Some((fn_decl, can_suggest)) = self.get_fn_decl(blk_id) {
             pointing_at_return_type =
                 self.suggest_missing_return_type(err, &fn_decl, expected, found, can_suggest);
+            let fn_id = self.tcx.hir().get_return_block(blk_id).unwrap();
+            self.suggest_missing_break_or_return_expr(
+                err, expr, &fn_decl, expected, found, blk_id, fn_id,
+            );
         }
         pointing_at_return_type
     }
@@ -197,6 +206,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         found: Ty<'tcx>,
         expected_ty_expr: Option<&'tcx hir::Expr<'tcx>>,
     ) {
+        let expr = expr.peel_blocks();
         if let Some((sp, msg, suggestion, applicability)) = self.check_ref(expr, found, expected) {
             err.span_suggestion(sp, msg, suggestion, applicability);
         } else if let (ty::FnDef(def_id, ..), true) =
@@ -211,8 +221,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 self.is_hir_id_from_struct_pattern_shorthand_field(expr.hir_id, expr.span);
             let methods = self.get_conversion_methods(expr.span, expected, found, expr.hir_id);
             if let Ok(expr_text) = self.sess().source_map().span_to_snippet(expr.span) {
-                let mut suggestions = iter::repeat(&expr_text)
-                    .zip(methods.iter())
+                let mut suggestions = iter::zip(iter::repeat(&expr_text), &methods)
                     .filter_map(|(receiver, method)| {
                         let method_call = format!(".{}()", method.ident);
                         if receiver.ends_with(&method_call) {
@@ -287,6 +296,38 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         }
     }
 
+    /// When encountering a closure that captures variables, where a FnPtr is expected,
+    /// suggest a non-capturing closure
+    pub(in super::super) fn suggest_no_capture_closure(
+        &self,
+        err: &mut DiagnosticBuilder<'_>,
+        expected: Ty<'tcx>,
+        found: Ty<'tcx>,
+    ) {
+        if let (ty::FnPtr(_), ty::Closure(def_id, _)) = (expected.kind(), found.kind()) {
+            if let Some(upvars) = self.tcx.upvars_mentioned(*def_id) {
+                // Report upto four upvars being captured to reduce the amount error messages
+                // reported back to the user.
+                let spans_and_labels = upvars
+                    .iter()
+                    .take(4)
+                    .map(|(var_hir_id, upvar)| {
+                        let var_name = self.tcx.hir().name(*var_hir_id).to_string();
+                        let msg = format!("`{}` captured here", var_name);
+                        (upvar.span, msg)
+                    })
+                    .collect::<Vec<_>>();
+
+                let mut multi_span: MultiSpan =
+                    spans_and_labels.iter().map(|(sp, _)| *sp).collect::<Vec<_>>().into();
+                for (sp, label) in spans_and_labels {
+                    multi_span.push_span_label(sp, label);
+                }
+                err.span_note(multi_span, "closures can only be coerced to `fn` types if they do not capture any variables");
+            }
+        }
+    }
+
     /// When encountering an `impl Future` where `BoxFuture` is expected, suggest `Box::pin`.
     pub(in super::super) fn suggest_calling_boxed_future_when_appropriate(
         &self,
@@ -349,7 +390,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         err: &mut DiagnosticBuilder<'_>,
         expression: &'tcx hir::Expr<'tcx>,
         expected: Ty<'tcx>,
-        cause_span: Span,
     ) {
         if expected.is_unit() {
             // `BlockTailExpression` only relevant if the tail expr would be
@@ -358,11 +398,14 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 ExprKind::Call(..)
                 | ExprKind::MethodCall(..)
                 | ExprKind::Loop(..)
+                | ExprKind::If(..)
                 | ExprKind::Match(..)
-                | ExprKind::Block(..) => {
+                | ExprKind::Block(..)
+                    if expression.can_have_side_effects() =>
+                {
                     err.span_suggestion(
-                        cause_span.shrink_to_hi(),
-                        "try adding a semicolon",
+                        expression.span.shrink_to_hi(),
+                        "consider using a semicolon here",
                         ";".to_string(),
                         Applicability::MachineApplicable,
                     );
@@ -419,7 +462,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 // are not, the expectation must have been caused by something else.
                 debug!("suggest_missing_return_type: return type {:?} node {:?}", ty, ty.kind);
                 let sp = ty.span;
-                let ty = AstConv::ast_ty_to_ty(self, ty);
+                let ty = <dyn AstConv<'_>>::ast_ty_to_ty(self, ty);
                 debug!("suggest_missing_return_type: return type {:?}", ty);
                 debug!("suggest_missing_return_type: expected type {:?}", ty);
                 if ty.kind() == expected.kind() {
@@ -427,6 +470,61 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     return true;
                 }
                 false
+            }
+        }
+    }
+
+    pub(in super::super) fn suggest_missing_break_or_return_expr(
+        &self,
+        err: &mut DiagnosticBuilder<'_>,
+        expr: &'tcx hir::Expr<'tcx>,
+        fn_decl: &hir::FnDecl<'_>,
+        expected: Ty<'tcx>,
+        found: Ty<'tcx>,
+        id: hir::HirId,
+        fn_id: hir::HirId,
+    ) {
+        if !expected.is_unit() {
+            return;
+        }
+        let found = self.resolve_vars_with_obligations(found);
+
+        let in_loop = self.is_loop(id)
+            || self.tcx.hir().parent_iter(id).any(|(parent_id, _)| self.is_loop(parent_id));
+
+        let in_local_statement = self.is_local_statement(id)
+            || self
+                .tcx
+                .hir()
+                .parent_iter(id)
+                .any(|(parent_id, _)| self.is_local_statement(parent_id));
+
+        if in_loop && in_local_statement {
+            err.multipart_suggestion(
+                "you might have meant to break the loop with this value",
+                vec![
+                    (expr.span.shrink_to_lo(), "break ".to_string()),
+                    (expr.span.shrink_to_hi(), ";".to_string()),
+                ],
+                Applicability::MaybeIncorrect,
+            );
+            return;
+        }
+
+        if let hir::FnRetTy::Return(ty) = fn_decl.output {
+            let ty = <dyn AstConv<'_>>::ast_ty_to_ty(self, ty);
+            let bound_vars = self.tcx.late_bound_vars(fn_id);
+            let ty = self.tcx.erase_late_bound_regions(Binder::bind_with_vars(ty, bound_vars));
+            let ty = self.normalize_associated_types_in(expr.span, ty);
+            if self.can_coerce(found, ty) {
+                err.multipart_suggestion(
+                    "you might have meant to return this value",
+                    vec![
+                        (expr.span.shrink_to_lo(), "return ".to_string()),
+                        (expr.span.shrink_to_hi(), ";".to_string()),
+                    ],
+                    Applicability::MaybeIncorrect,
+                );
             }
         }
     }
@@ -441,5 +539,15 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             // `{ 42 } &&x` (#61475) or `{ 42 } && if x { 1 } else { 0 }`
             self.tcx.sess.parse_sess.expr_parentheses_needed(err, *sp, None);
         }
+    }
+
+    fn is_loop(&self, id: hir::HirId) -> bool {
+        let node = self.tcx.hir().get(id);
+        matches!(node, Node::Expr(Expr { kind: ExprKind::Loop(..), .. }))
+    }
+
+    fn is_local_statement(&self, id: hir::HirId) -> bool {
+        let node = self.tcx.hir().get(id);
+        matches!(node, Node::Stmt(Stmt { kind: StmtKind::Local(..), .. }))
     }
 }

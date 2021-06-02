@@ -1,19 +1,20 @@
 //! # Token Streams
 //!
 //! `TokenStream`s represent syntactic objects before they are converted into ASTs.
-//! A `TokenStream` is, roughly speaking, a sequence (eg stream) of `TokenTree`s,
-//! which are themselves a single `Token` or a `Delimited` subsequence of tokens.
+//! A `TokenStream` is, roughly speaking, a sequence of [`TokenTree`]s,
+//! which are themselves a single [`Token`] or a `Delimited` subsequence of tokens.
 //!
 //! ## Ownership
 //!
 //! `TokenStream`s are persistent data structures constructed as ropes with reference
 //! counted-children. In general, this means that calling an operation on a `TokenStream`
 //! (such as `slice`) produces an entirely new `TokenStream` from the borrowed reference to
-//! the original. This essentially coerces `TokenStream`s into 'views' of their subparts,
+//! the original. This essentially coerces `TokenStream`s into "views" of their subparts,
 //! and a borrowed `TokenStream` is sufficient to build an owned `TokenStream` without taking
 //! ownership of the original.
 
 use crate::token::{self, DelimToken, Token, TokenKind};
+use crate::AttrVec;
 
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_data_structures::sync::{self, Lrc};
@@ -24,9 +25,9 @@ use smallvec::{smallvec, SmallVec};
 
 use std::{fmt, iter, mem};
 
-/// When the main rust parser encounters a syntax-extension invocation, it
-/// parses the arguments to the invocation as a token-tree. This is a very
-/// loose structure, such that all sorts of different AST-fragments can
+/// When the main Rust parser encounters a syntax-extension invocation, it
+/// parses the arguments to the invocation as a token tree. This is a very
+/// loose structure, such that all sorts of different AST fragments can
 /// be passed to syntax extensions using a uniform type.
 ///
 /// If the syntax extension is an MBE macro, it will attempt to match its
@@ -38,10 +39,16 @@ use std::{fmt, iter, mem};
 /// Nothing special happens to misnamed or misplaced `SubstNt`s.
 #[derive(Debug, Clone, PartialEq, Encodable, Decodable, HashStable_Generic)]
 pub enum TokenTree {
-    /// A single token
+    /// A single token.
     Token(Token),
-    /// A delimited sequence of token trees
+    /// A delimited sequence of token trees.
     Delimited(DelimSpan, DelimToken, TokenStream),
+}
+
+#[derive(Copy, Clone)]
+pub enum CanSynthesizeMissingTokens {
+    Yes,
+    No,
 }
 
 // Ensure all fields of `TokenTree` is `Send` and `Sync`.
@@ -56,7 +63,7 @@ where
 }
 
 impl TokenTree {
-    /// Checks if this TokenTree is equal to the other, regardless of span information.
+    /// Checks if this `TokenTree` is equal to the other, regardless of span information.
     pub fn eq_unspanned(&self, other: &TokenTree) -> bool {
         match (self, other) {
             (TokenTree::Token(token), TokenTree::Token(token2)) => token.kind == token2.kind,
@@ -67,7 +74,7 @@ impl TokenTree {
         }
     }
 
-    /// Retrieves the TokenTree's span.
+    /// Retrieves the `TokenTree`'s span.
     pub fn span(&self) -> Span {
         match self {
             TokenTree::Token(token) => token.span,
@@ -81,10 +88,6 @@ impl TokenTree {
             TokenTree::Token(token) => token.span = span,
             TokenTree::Delimited(dspan, ..) => *dspan = DelimSpan::from_single(span),
         }
-    }
-
-    pub fn joint(self) -> TokenStream {
-        TokenStream::new(vec![(self, Spacing::Joint)])
     }
 
     pub fn token(kind: TokenKind, span: Span) -> TokenTree {
@@ -121,20 +124,16 @@ where
 }
 
 pub trait CreateTokenStream: sync::Send + sync::Sync {
-    fn add_trailing_semi(&self) -> Box<dyn CreateTokenStream>;
-    fn create_token_stream(&self) -> TokenStream;
+    fn create_token_stream(&self) -> AttrAnnotatedTokenStream;
 }
 
-impl CreateTokenStream for TokenStream {
-    fn add_trailing_semi(&self) -> Box<dyn CreateTokenStream> {
-        panic!("Cannot call `add_trailing_semi` on a `TokenStream`!");
-    }
-    fn create_token_stream(&self) -> TokenStream {
+impl CreateTokenStream for AttrAnnotatedTokenStream {
+    fn create_token_stream(&self) -> AttrAnnotatedTokenStream {
         self.clone()
     }
 }
 
-/// A lazy version of `TokenStream`, which defers creation
+/// A lazy version of [`TokenStream`], which defers creation
 /// of an actual `TokenStream` until it is needed.
 /// `Box` is here only to reduce the structure size.
 #[derive(Clone)]
@@ -145,21 +144,14 @@ impl LazyTokenStream {
         LazyTokenStream(Lrc::new(Box::new(inner)))
     }
 
-    /// Extends the captured stream by one token,
-    /// which must be a trailing semicolon. This
-    /// affects the `TokenStream` created by `make_tokenstream`.
-    pub fn add_trailing_semi(&self) -> LazyTokenStream {
-        LazyTokenStream(Lrc::new(self.0.add_trailing_semi()))
-    }
-
-    pub fn create_token_stream(&self) -> TokenStream {
+    pub fn create_token_stream(&self) -> AttrAnnotatedTokenStream {
         self.0.create_token_stream()
     }
 }
 
 impl fmt::Debug for LazyTokenStream {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt("LazyTokenStream", f)
+        write!(f, "LazyTokenStream({:?})", self.create_token_stream())
     }
 }
 
@@ -182,18 +174,158 @@ impl<CTX> HashStable<CTX> for LazyTokenStream {
     }
 }
 
-/// A `TokenStream` is an abstract sequence of tokens, organized into `TokenTree`s.
+/// A `AttrAnnotatedTokenStream` is similar to a `TokenStream`, but with extra
+/// information about the tokens for attribute targets. This is used
+/// during expansion to perform early cfg-expansion, and to process attributes
+/// during proc-macro invocations.
+#[derive(Clone, Debug, Default, Encodable, Decodable)]
+pub struct AttrAnnotatedTokenStream(pub Lrc<Vec<(AttrAnnotatedTokenTree, Spacing)>>);
+
+/// Like `TokenTree`, but for `AttrAnnotatedTokenStream`
+#[derive(Clone, Debug, Encodable, Decodable)]
+pub enum AttrAnnotatedTokenTree {
+    Token(Token),
+    Delimited(DelimSpan, DelimToken, AttrAnnotatedTokenStream),
+    /// Stores the attributes for an attribute target,
+    /// along with the tokens for that attribute target.
+    /// See `AttributesData` for more information
+    Attributes(AttributesData),
+}
+
+impl AttrAnnotatedTokenStream {
+    pub fn new(tokens: Vec<(AttrAnnotatedTokenTree, Spacing)>) -> AttrAnnotatedTokenStream {
+        AttrAnnotatedTokenStream(Lrc::new(tokens))
+    }
+
+    /// Converts this `AttrAnnotatedTokenStream` to a plain `TokenStream
+    /// During conversion, `AttrAnnotatedTokenTree::Attributes` get 'flattened'
+    /// back to a `TokenStream` of the form `outer_attr attr_target`.
+    /// If there are inner attributes, they are inserted into the proper
+    /// place in the attribute target tokens.
+    pub fn to_tokenstream(&self) -> TokenStream {
+        let trees: Vec<_> = self
+            .0
+            .iter()
+            .flat_map(|tree| match &tree.0 {
+                AttrAnnotatedTokenTree::Token(inner) => {
+                    smallvec![(TokenTree::Token(inner.clone()), tree.1)].into_iter()
+                }
+                AttrAnnotatedTokenTree::Delimited(span, delim, stream) => smallvec![(
+                    TokenTree::Delimited(*span, *delim, stream.to_tokenstream()),
+                    tree.1,
+                )]
+                .into_iter(),
+                AttrAnnotatedTokenTree::Attributes(data) => {
+                    let mut outer_attrs = Vec::new();
+                    let mut inner_attrs = Vec::new();
+                    let attrs: Vec<_> = data.attrs.clone().into();
+                    for attr in attrs {
+                        match attr.style {
+                            crate::AttrStyle::Outer => {
+                                assert!(
+                                    inner_attrs.len() == 0,
+                                    "Found outer attribute {:?} after inner attrs {:?}",
+                                    attr,
+                                    inner_attrs
+                                );
+                                outer_attrs.push(attr);
+                            }
+                            crate::AttrStyle::Inner => {
+                                inner_attrs.push(attr);
+                            }
+                        }
+                    }
+
+                    let mut target_tokens: Vec<_> = data
+                        .tokens
+                        .create_token_stream()
+                        .to_tokenstream()
+                        .0
+                        .iter()
+                        .cloned()
+                        .collect();
+                    if !inner_attrs.is_empty() {
+                        let mut found = false;
+                        // Check the last two trees (to account for a trailing semi)
+                        for (tree, _) in target_tokens.iter_mut().rev().take(2) {
+                            if let TokenTree::Delimited(span, delim, delim_tokens) = tree {
+                                // Inner attributes are only supported on extern blocks, functions, impls,
+                                // and modules. All of these have their inner attributes placed at
+                                // the beginning of the rightmost outermost braced group:
+                                // e.g. fn foo() { #![my_attr} }
+                                //
+                                // Therefore, we can insert them back into the right location
+                                // without needing to do any extra position tracking.
+                                //
+                                // Note: Outline modules are an exception - they can
+                                // have attributes like `#![my_attr]` at the start of a file.
+                                // Support for custom attributes in this position is not
+                                // properly implemented - we always synthesize fake tokens,
+                                // so we never reach this code.
+
+                                let mut builder = TokenStreamBuilder::new();
+                                for inner_attr in &inner_attrs {
+                                    builder.push(inner_attr.tokens().to_tokenstream());
+                                }
+                                builder.push(delim_tokens.clone());
+                                *tree = TokenTree::Delimited(*span, *delim, builder.build());
+                                found = true;
+                                break;
+                            }
+                        }
+
+                        assert!(
+                            found,
+                            "Failed to find trailing delimited group in: {:?}",
+                            target_tokens
+                        );
+                    }
+                    let mut flat: SmallVec<[_; 1]> = SmallVec::new();
+                    for attr in outer_attrs {
+                        // FIXME: Make this more efficient
+                        flat.extend(attr.tokens().to_tokenstream().0.clone().iter().cloned());
+                    }
+                    flat.extend(target_tokens);
+                    flat.into_iter()
+                }
+            })
+            .collect();
+        TokenStream::new(trees)
+    }
+}
+
+/// Stores the tokens for an attribute target, along
+/// with its attributes.
+///
+/// This is constructed during parsing when we need to capture
+/// tokens.
+///
+/// For example, `#[cfg(FALSE)] struct Foo {}` would
+/// have an `attrs` field containing the `#[cfg(FALSE)]` attr,
+/// and a `tokens` field storing the (unparesd) tokens `struct Foo {}`
+#[derive(Clone, Debug, Encodable, Decodable)]
+pub struct AttributesData {
+    /// Attributes, both outer and inner.
+    /// These are stored in the original order that they were parsed in.
+    pub attrs: AttrVec,
+    /// The underlying tokens for the attribute target that `attrs`
+    /// are applied to
+    pub tokens: LazyTokenStream,
+}
+
+/// A `TokenStream` is an abstract sequence of tokens, organized into [`TokenTree`]s.
 ///
 /// The goal is for procedural macros to work with `TokenStream`s and `TokenTree`s
 /// instead of a representation of the abstract syntax tree.
-/// Today's `TokenTree`s can still contain AST via `token::Interpolated` for back-compat.
+/// Today's `TokenTree`s can still contain AST via `token::Interpolated` for
+/// backwards compatibility.
 #[derive(Clone, Debug, Default, Encodable, Decodable)]
 pub struct TokenStream(pub(crate) Lrc<Vec<TreeAndSpacing>>);
 
 pub type TreeAndSpacing = (TokenTree, Spacing);
 
 // `TokenStream` is used a lot. Make sure it doesn't unintentionally get bigger.
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
 rustc_data_structures::static_assert_size!(TokenStream, 8);
 
 #[derive(Clone, Copy, Debug, PartialEq, Encodable, Decodable)]
@@ -243,6 +375,12 @@ impl TokenStream {
     }
 }
 
+impl From<(AttrAnnotatedTokenTree, Spacing)> for AttrAnnotatedTokenStream {
+    fn from((tree, spacing): (AttrAnnotatedTokenTree, Spacing)) -> AttrAnnotatedTokenStream {
+        AttrAnnotatedTokenStream::new(vec![(tree, spacing)])
+    }
+}
+
 impl From<TokenTree> for TokenStream {
     fn from(tree: TokenTree) -> TokenStream {
         TokenStream::new(vec![(tree, Spacing::Alone)])
@@ -280,14 +418,6 @@ impl TokenStream {
 
     pub fn len(&self) -> usize {
         self.0.len()
-    }
-
-    pub fn span(&self) -> Option<Span> {
-        match &**self.0 {
-            [] => None,
-            [(tt, _)] => Some(tt.span()),
-            [(tt_start, _), .., (tt_end, _)] => Some(tt_start.span().to(tt_end.span())),
-        }
     }
 
     pub fn from_streams(mut streams: SmallVec<[TokenStream; 2]>) -> TokenStream {
@@ -329,10 +459,6 @@ impl TokenStream {
         }
     }
 
-    pub fn trees_ref(&self) -> CursorRef<'_> {
-        CursorRef::new(self)
-    }
-
     pub fn trees(&self) -> Cursor {
         self.clone().into_trees()
     }
@@ -345,7 +471,7 @@ impl TokenStream {
     pub fn eq_unspanned(&self, other: &TokenStream) -> bool {
         let mut t1 = self.trees();
         let mut t2 = other.trees();
-        for (t1, t2) in t1.by_ref().zip(t2.by_ref()) {
+        for (t1, t2) in iter::zip(&mut t1, &mut t2) {
             if !t1.eq_unspanned(&t2) {
                 return false;
             }
@@ -423,7 +549,7 @@ impl TokenStreamBuilder {
     }
 }
 
-/// By-reference iterator over a `TokenStream`.
+/// By-reference iterator over a [`TokenStream`].
 #[derive(Clone)]
 pub struct CursorRef<'t> {
     stream: &'t TokenStream,
@@ -431,10 +557,6 @@ pub struct CursorRef<'t> {
 }
 
 impl<'t> CursorRef<'t> {
-    fn new(stream: &TokenStream) -> CursorRef<'_> {
-        CursorRef { stream, index: 0 }
-    }
-
     fn next_with_spacing(&mut self) -> Option<&'t TreeAndSpacing> {
         self.stream.0.get(self.index).map(|tree| {
             self.index += 1;
@@ -451,8 +573,8 @@ impl<'t> Iterator for CursorRef<'t> {
     }
 }
 
-/// Owning by-value iterator over a `TokenStream`.
-/// FIXME: Many uses of this can be replaced with by-reference iterator to avoid clones.
+/// Owning by-value iterator over a [`TokenStream`].
+// FIXME: Many uses of this can be replaced with by-reference iterator to avoid clones.
 #[derive(Clone)]
 pub struct Cursor {
     pub stream: TokenStream,
@@ -479,6 +601,10 @@ impl Cursor {
         } else {
             None
         }
+    }
+
+    pub fn index(&self) -> usize {
+        self.index
     }
 
     pub fn append(&mut self, new_stream: TokenStream) {

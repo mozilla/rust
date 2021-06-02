@@ -4,12 +4,15 @@
 
 use core::cmp::Ordering;
 use core::hash::{Hash, Hasher};
-use core::ops::{Add, AddAssign, Deref};
+use core::ops::Deref;
+#[cfg(not(no_global_oom_handling))]
+use core::ops::{Add, AddAssign};
 
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use core::borrow::{Borrow, BorrowMut};
 
 use crate::fmt;
+#[cfg(not(no_global_oom_handling))]
 use crate::string::String;
 
 use Cow::*;
@@ -31,6 +34,7 @@ where
 /// implementing the `Clone` trait. But `Clone` works only for going from `&T`
 /// to `T`. The `ToOwned` trait generalizes `Clone` to construct owned data
 /// from any borrow of a given type.
+#[cfg_attr(not(test), rustc_diagnostic_item = "ToOwned")]
 #[stable(feature = "rust1", since = "1.0.0")]
 pub trait ToOwned {
     /// The resulting type after obtaining ownership.
@@ -102,6 +106,11 @@ where
 /// non-mutating methods directly on the data it encloses. If mutation
 /// is desired, `to_mut` will obtain a mutable reference to an owned
 /// value, cloning if necessary.
+///
+/// If you need reference-counting pointers, note that
+/// [`Rc::make_mut`][crate::rc::Rc::make_mut] and
+/// [`Arc::make_mut`][crate::sync::Arc::make_mut] can provide clone-on-write
+/// functionality as well.
 ///
 /// # Examples
 ///
@@ -423,6 +432,7 @@ impl<T: ?Sized + ToOwned> AsRef<T> for Cow<'_, T> {
     }
 }
 
+#[cfg(not(no_global_oom_handling))]
 #[stable(feature = "cow_add", since = "1.14.0")]
 impl<'a> Add<&'a str> for Cow<'a, str> {
     type Output = Cow<'a, str>;
@@ -434,6 +444,7 @@ impl<'a> Add<&'a str> for Cow<'a, str> {
     }
 }
 
+#[cfg(not(no_global_oom_handling))]
 #[stable(feature = "cow_add", since = "1.14.0")]
 impl<'a> Add<Cow<'a, str>> for Cow<'a, str> {
     type Output = Cow<'a, str>;
@@ -445,6 +456,7 @@ impl<'a> Add<Cow<'a, str>> for Cow<'a, str> {
     }
 }
 
+#[cfg(not(no_global_oom_handling))]
 #[stable(feature = "cow_add", since = "1.14.0")]
 impl<'a> AddAssign<&'a str> for Cow<'a, str> {
     fn add_assign(&mut self, rhs: &'a str) {
@@ -461,6 +473,7 @@ impl<'a> AddAssign<&'a str> for Cow<'a, str> {
     }
 }
 
+#[cfg(not(no_global_oom_handling))]
 #[stable(feature = "cow_add", since = "1.14.0")]
 impl<'a> AddAssign<Cow<'a, str>> for Cow<'a, str> {
     fn add_assign(&mut self, rhs: Cow<'a, str>) {

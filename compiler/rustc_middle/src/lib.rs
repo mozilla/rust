@@ -8,7 +8,7 @@
 //! - **MIR.** The "mid-level (M) intermediate representation (IR)" is
 //!   defined in the `mir` module. This module contains only the
 //!   *definition* of the MIR; the passes that transform and operate
-//!   on MIR are found in `librustc_mir` crate.
+//!   on MIR are found in `rustc_mir` crate.
 //! - **Types.** The internal representation of types used in rustc is
 //!   defined in the `ty` module. This includes the **type context**
 //!   (or `tcx`), which is the central context during most of
@@ -24,13 +24,11 @@
 
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/nightly-rustc/")]
 #![feature(array_windows)]
-#![feature(assoc_char_funcs)]
+#![feature(assert_matches)]
 #![feature(backtrace)]
 #![feature(bool_to_option)]
 #![feature(box_patterns)]
 #![feature(box_syntax)]
-#![feature(cmp_min_max_by)]
-#![feature(const_fn)]
 #![feature(const_panic)]
 #![feature(core_intrinsics)]
 #![feature(discriminant_kind)]
@@ -38,8 +36,6 @@
 #![feature(extern_types)]
 #![feature(nll)]
 #![feature(once_cell)]
-#![feature(option_expect_none)]
-#![feature(or_patterns)]
 #![feature(min_specialization)]
 #![feature(trusted_len)]
 #![feature(test)]
@@ -52,6 +48,9 @@
 #![feature(exclusive_range_pattern)]
 #![feature(control_flow_enum)]
 #![feature(associated_type_defaults)]
+#![feature(iter_zip)]
+#![feature(thread_local_const_init)]
+#![feature(trusted_step)]
 #![recursion_limit = "512"]
 
 #[macro_use]
@@ -76,6 +75,7 @@ pub mod query;
 
 #[macro_use]
 pub mod arena;
+#[macro_use]
 pub mod dep_graph;
 pub mod hir;
 pub mod ich;
@@ -83,6 +83,7 @@ pub mod infer;
 pub mod lint;
 pub mod middle;
 pub mod mir;
+pub mod thir;
 pub mod traits;
 pub mod ty;
 

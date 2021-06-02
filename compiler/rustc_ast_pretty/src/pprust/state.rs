@@ -9,7 +9,7 @@ use rustc_ast::util::classify;
 use rustc_ast::util::comments::{gather_comments, Comment, CommentStyle};
 use rustc_ast::util::parser::{self, AssocOp, Fixity};
 use rustc_ast::{self as ast, BlockCheckMode, PatKind, RangeEnd, RangeSyntax};
-use rustc_ast::{GenericArg, MacArgs};
+use rustc_ast::{GenericArg, MacArgs, ModKind};
 use rustc_ast::{GenericBound, SelfKind, TraitBoundModifier};
 use rustc_ast::{InlineAsmOperand, InlineAsmRegOrRegClass};
 use rustc_ast::{InlineAsmOptions, InlineAsmTemplatePiece};
@@ -87,14 +87,6 @@ pub struct State<'a> {
     pub s: pp::Printer,
     comments: Option<Comments<'a>>,
     ann: &'a (dyn PpAnn + 'a),
-    is_expanded: bool,
-    // If `true`, additional parenthesis (separate from `ExprKind::Paren`)
-    // are inserted to ensure that proper precedence is preserved
-    // in the pretty-printed output.
-    //
-    // This is usually `true`, except when performing the pretty-print/reparse
-    // check in `nt_to_tokenstream`
-    insert_extra_parens: bool,
 }
 
 crate const INDENT_UNIT: usize = 4;
@@ -110,13 +102,8 @@ pub fn print_crate<'a>(
     is_expanded: bool,
     edition: Edition,
 ) -> String {
-    let mut s = State {
-        s: pp::mk_printer(),
-        comments: Some(Comments::new(sm, filename, input)),
-        ann,
-        is_expanded,
-        insert_extra_parens: true,
-    };
+    let mut s =
+        State { s: pp::mk_printer(), comments: Some(Comments::new(sm, filename, input)), ann };
 
     if is_expanded && !krate.attrs.iter().any(|attr| attr.has_name(sym::no_core)) {
         // We need to print `#![no_std]` (and its feature gate) so that
@@ -140,7 +127,10 @@ pub fn print_crate<'a>(
         }
     }
 
-    s.print_mod(&krate.module, &krate.attrs);
+    s.print_inner_attributes(&krate.attrs);
+    for item in &krate.items {
+        s.print_item(item);
+    }
     s.print_remaining_comments();
     s.ann.post(&mut s, AnnNode::Crate(krate));
     s.s.eof()
@@ -150,12 +140,15 @@ pub fn print_crate<'a>(
 // and also addresses some specific regressions described in #63896 and #73345.
 fn tt_prepend_space(tt: &TokenTree, prev: &TokenTree) -> bool {
     if let TokenTree::Token(token) = prev {
+        if matches!(token.kind, token::Dot) {
+            return false;
+        }
         if let token::DocComment(comment_kind, ..) = token.kind {
             return comment_kind != CommentKind::Line;
         }
     }
     match tt {
-        TokenTree::Token(token) => token.kind != token::Comma,
+        TokenTree::Token(token) => !matches!(token.kind, token::Comma | token::Not | token::Dot),
         TokenTree::Delimited(_, DelimToken::Paren, _) => {
             !matches!(prev, TokenTree::Token(Token { kind: token::Ident(..), .. }))
         }
@@ -235,7 +228,6 @@ impl std::ops::DerefMut for State<'_> {
 }
 
 pub trait PrintState<'a>: std::ops::Deref<Target = pp::Printer> + std::ops::DerefMut {
-    fn insert_extra_parens(&self) -> bool;
     fn comments(&mut self) -> &mut Option<Comments<'a>>;
     fn print_ident(&mut self, ident: Ident);
     fn print_generic_args(&mut self, args: &ast::GenericArgs, colons_before_params: bool);
@@ -377,10 +369,6 @@ pub trait PrintState<'a>: std::ops::Deref<Target = pp::Printer> + std::ops::Dere
         self.print_either_attributes(attrs, ast::AttrStyle::Inner, false, true)
     }
 
-    fn print_inner_attributes_no_trailing_hardbreak(&mut self, attrs: &[ast::Attribute]) {
-        self.print_either_attributes(attrs, ast::AttrStyle::Inner, false, false)
-    }
-
     fn print_outer_attributes(&mut self, attrs: &[ast::Attribute]) {
         self.print_either_attributes(attrs, ast::AttrStyle::Outer, false, true)
     }
@@ -454,10 +442,11 @@ pub trait PrintState<'a>: std::ops::Deref<Target = pp::Printer> + std::ops::Dere
             ),
             MacArgs::Empty | MacArgs::Eq(..) => {
                 self.print_path(&item.path, false, 0);
-                if let MacArgs::Eq(_, tokens) = &item.args {
+                if let MacArgs::Eq(_, token) = &item.args {
                     self.space();
                     self.word_space("=");
-                    self.print_tts(tokens, true);
+                    let token_str = self.token_to_string_ext(token, true);
+                    self.word(token_str);
                 }
             }
         }
@@ -819,16 +808,12 @@ pub trait PrintState<'a>: std::ops::Deref<Target = pp::Printer> + std::ops::Dere
 
     fn to_string(&self, f: impl FnOnce(&mut State<'_>)) -> String {
         let mut printer = State::new();
-        printer.insert_extra_parens = self.insert_extra_parens();
         f(&mut printer);
         printer.s.eof()
     }
 }
 
 impl<'a> PrintState<'a> for State<'a> {
-    fn insert_extra_parens(&self) -> bool {
-        self.insert_extra_parens
-    }
     fn comments(&mut self) -> &mut Option<Comments<'a>> {
         &mut self.comments
     }
@@ -865,17 +850,7 @@ impl<'a> PrintState<'a> for State<'a> {
 
 impl<'a> State<'a> {
     pub fn new() -> State<'a> {
-        State {
-            s: pp::mk_printer(),
-            comments: None,
-            ann: &NoAnn,
-            is_expanded: false,
-            insert_extra_parens: true,
-        }
-    }
-
-    pub(super) fn without_insert_extra_parens() -> State<'a> {
-        State { insert_extra_parens: false, ..State::new() }
+        State { s: pp::mk_printer(), comments: None, ann: &NoAnn }
     }
 
     // Synthesizes a comment that was not textually present in the original source
@@ -913,13 +888,6 @@ impl<'a> State<'a> {
         self.commasep_cmnt(b, exprs, |s, e| s.print_expr(e), |e| e.span)
     }
 
-    pub fn print_mod(&mut self, _mod: &ast::Mod, attrs: &[ast::Attribute]) {
-        self.print_inner_attributes(attrs);
-        for item in &_mod.items {
-            self.print_item(item);
-        }
-    }
-
     crate fn print_foreign_mod(&mut self, nmod: &ast::ForeignMod, attrs: &[ast::Attribute]) {
         self.print_inner_attributes(attrs);
         for item in &nmod.items {
@@ -936,6 +904,7 @@ impl<'a> State<'a> {
 
     pub fn print_assoc_constraint(&mut self, constraint: &ast::AssocTyConstraint) {
         self.print_ident(constraint.ident);
+        constraint.gen_args.as_ref().map(|args| self.print_generic_args(args, false));
         self.s.space();
         match &constraint.kind {
             ast::AssocTyConstraintKind::Equality { ty } => {
@@ -984,6 +953,14 @@ impl<'a> State<'a> {
                     self.s.word(",");
                 }
                 self.pclose();
+            }
+            ast::TyKind::AnonymousStruct(ref fields, ..) => {
+                self.head("struct");
+                self.print_record_struct_body(&fields, ty.span);
+            }
+            ast::TyKind::AnonymousUnion(ref fields, ..) => {
+                self.head("union");
+                self.print_record_struct_body(&fields, ty.span);
             }
             ast::TyKind::Paren(ref typ) => {
                 self.popen();
@@ -1044,14 +1021,14 @@ impl<'a> State<'a> {
         self.maybe_print_comment(span.lo());
         self.print_outer_attributes(attrs);
         match kind {
-            ast::ForeignItemKind::Fn(def, sig, gen, body) => {
+            ast::ForeignItemKind::Fn(box ast::FnKind(def, sig, gen, body)) => {
                 self.print_fn_full(sig, ident, gen, vis, *def, body.as_deref(), attrs);
             }
             ast::ForeignItemKind::Static(ty, mutbl, body) => {
                 let def = ast::Defaultness::Final;
                 self.print_item_const(ident, Some(*mutbl), ty, body.as_deref(), vis, def);
             }
-            ast::ForeignItemKind::TyAlias(def, generics, bounds, ty) => {
+            ast::ForeignItemKind::TyAlias(box ast::TyAliasKind(def, generics, bounds, ty)) => {
                 self.print_associated_type(ident, generics, bounds, ty.as_deref(), vis, *def);
             }
             ast::ForeignItemKind::MacCall(m) => {
@@ -1156,27 +1133,33 @@ impl<'a> State<'a> {
             ast::ItemKind::Const(def, ref ty, ref body) => {
                 self.print_item_const(item.ident, None, ty, body.as_deref(), &item.vis, def);
             }
-            ast::ItemKind::Fn(def, ref sig, ref gen, ref body) => {
+            ast::ItemKind::Fn(box ast::FnKind(def, ref sig, ref gen, ref body)) => {
                 let body = body.as_deref();
                 self.print_fn_full(sig, item.ident, gen, &item.vis, def, body, &item.attrs);
             }
-            ast::ItemKind::Mod(ref _mod) => {
+            ast::ItemKind::Mod(unsafety, ref mod_kind) => {
                 self.head(self.to_string(|s| {
                     s.print_visibility(&item.vis);
-                    s.print_unsafety(_mod.unsafety);
+                    s.print_unsafety(unsafety);
                     s.word("mod");
                 }));
                 self.print_ident(item.ident);
 
-                if _mod.inline || self.is_expanded {
-                    self.nbsp();
-                    self.bopen();
-                    self.print_mod(_mod, &item.attrs);
-                    self.bclose(item.span);
-                } else {
-                    self.s.word(";");
-                    self.end(); // end inner head-block
-                    self.end(); // end outer head-block
+                match mod_kind {
+                    ModKind::Loaded(items, ..) => {
+                        self.nbsp();
+                        self.bopen();
+                        self.print_inner_attributes(&item.attrs);
+                        for item in items {
+                            self.print_item(item);
+                        }
+                        self.bclose(item.span);
+                    }
+                    ModKind::Unloaded => {
+                        self.s.word(";");
+                        self.end(); // end inner head-block
+                        self.end(); // end outer head-block
+                    }
                 }
             }
             ast::ItemKind::ForeignMod(ref nmod) => {
@@ -1192,12 +1175,12 @@ impl<'a> State<'a> {
                 self.print_foreign_mod(nmod, &item.attrs);
                 self.bclose(item.span);
             }
-            ast::ItemKind::GlobalAsm(ref ga) => {
+            ast::ItemKind::GlobalAsm(ref asm) => {
                 self.head(visibility_qualified(&item.vis, "global_asm!"));
-                self.s.word(ga.asm.to_string());
+                self.print_inline_asm(asm);
                 self.end();
             }
-            ast::ItemKind::TyAlias(def, ref generics, ref bounds, ref ty) => {
+            ast::ItemKind::TyAlias(box ast::TyAliasKind(def, ref generics, ref bounds, ref ty)) => {
                 let ty = ty.as_deref();
                 self.print_associated_type(item.ident, generics, bounds, ty, &item.vis, def);
             }
@@ -1212,7 +1195,7 @@ impl<'a> State<'a> {
                 self.head(visibility_qualified(&item.vis, "union"));
                 self.print_struct(struct_def, generics, item.ident, item.span, true);
             }
-            ast::ItemKind::Impl {
+            ast::ItemKind::Impl(box ast::ImplKind {
                 unsafety,
                 polarity,
                 defaultness,
@@ -1221,7 +1204,7 @@ impl<'a> State<'a> {
                 ref of_trait,
                 ref self_ty,
                 ref items,
-            } => {
+            }) => {
                 self.head("");
                 self.print_visibility(&item.vis);
                 self.print_defaultness(defaultness);
@@ -1255,7 +1238,13 @@ impl<'a> State<'a> {
                 }
                 self.bclose(item.span);
             }
-            ast::ItemKind::Trait(is_auto, unsafety, ref generics, ref bounds, ref trait_items) => {
+            ast::ItemKind::Trait(box ast::TraitKind(
+                is_auto,
+                unsafety,
+                ref generics,
+                ref bounds,
+                ref trait_items,
+            )) => {
                 self.head("");
                 self.print_visibility(&item.vis);
                 self.print_unsafety(unsafety);
@@ -1327,6 +1316,9 @@ impl<'a> State<'a> {
                     true,
                     item.span,
                 );
+                if macro_def.body.need_semicolon() {
+                    self.word(";");
+                }
             }
         }
         self.ann.post(self, AnnNode::Item(item))
@@ -1405,6 +1397,24 @@ impl<'a> State<'a> {
         }
     }
 
+    crate fn print_record_struct_body(&mut self, fields: &[ast::FieldDef], span: rustc_span::Span) {
+        self.bopen();
+        self.hardbreak_if_not_bol();
+
+        for field in fields {
+            self.hardbreak_if_not_bol();
+            self.maybe_print_comment(field.span.lo());
+            self.print_outer_attributes(&field.attrs);
+            self.print_visibility(&field.vis);
+            self.print_ident(field.ident.unwrap());
+            self.word_nbsp(":");
+            self.print_type(&field.ty);
+            self.s.word(",");
+        }
+
+        self.bclose(span)
+    }
+
     crate fn print_struct(
         &mut self,
         struct_def: &ast::VariantData,
@@ -1434,24 +1444,10 @@ impl<'a> State<'a> {
                 self.end();
                 self.end(); // Close the outer-box.
             }
-            ast::VariantData::Struct(..) => {
+            ast::VariantData::Struct(ref fields, ..) => {
                 self.print_where_clause(&generics.where_clause);
                 self.nbsp();
-                self.bopen();
-                self.hardbreak_if_not_bol();
-
-                for field in struct_def.fields() {
-                    self.hardbreak_if_not_bol();
-                    self.maybe_print_comment(field.span.lo());
-                    self.print_outer_attributes(&field.attrs);
-                    self.print_visibility(&field.vis);
-                    self.print_ident(field.ident.unwrap());
-                    self.word_nbsp(":");
-                    self.print_type(&field.ty);
-                    self.s.word(",");
-                }
-
-                self.bclose(span)
+                self.print_record_struct_body(fields, span);
             }
         }
     }
@@ -1475,13 +1471,13 @@ impl<'a> State<'a> {
         self.maybe_print_comment(span.lo());
         self.print_outer_attributes(attrs);
         match kind {
-            ast::AssocItemKind::Fn(def, sig, gen, body) => {
+            ast::AssocItemKind::Fn(box ast::FnKind(def, sig, gen, body)) => {
                 self.print_fn_full(sig, ident, gen, vis, *def, body.as_deref(), attrs);
             }
             ast::AssocItemKind::Const(def, ty, body) => {
                 self.print_item_const(ident, None, ty, body.as_deref(), vis, *def);
             }
-            ast::AssocItemKind::TyAlias(def, generics, bounds, ty) => {
+            ast::AssocItemKind::TyAlias(box ast::TyAliasKind(def, generics, bounds, ty)) => {
                 self.print_associated_type(ident, generics, bounds, ty.as_deref(), vis, *def);
             }
             ast::AssocItemKind::MacCall(m) => {
@@ -1680,8 +1676,7 @@ impl<'a> State<'a> {
     }
 
     /// Prints `expr` or `(expr)` when `needs_par` holds.
-    fn print_expr_cond_paren(&mut self, expr: &ast::Expr, mut needs_par: bool) {
-        needs_par &= self.insert_extra_parens;
+    fn print_expr_cond_paren(&mut self, expr: &ast::Expr, needs_par: bool) {
         if needs_par {
             self.popen();
         }
@@ -1691,32 +1686,24 @@ impl<'a> State<'a> {
         }
     }
 
-    fn print_expr_vec(&mut self, exprs: &[P<ast::Expr>], attrs: &[ast::Attribute]) {
+    fn print_expr_vec(&mut self, exprs: &[P<ast::Expr>]) {
         self.ibox(INDENT_UNIT);
         self.s.word("[");
-        self.print_inner_attributes_inline(attrs);
-        self.commasep_exprs(Inconsistent, &exprs[..]);
+        self.commasep_exprs(Inconsistent, exprs);
         self.s.word("]");
         self.end();
     }
 
-    fn print_expr_anon_const(&mut self, expr: &ast::AnonConst, attrs: &[ast::Attribute]) {
+    fn print_expr_anon_const(&mut self, expr: &ast::AnonConst) {
         self.ibox(INDENT_UNIT);
         self.s.word("const");
-        self.print_inner_attributes_inline(attrs);
         self.print_expr(&expr.value);
         self.end();
     }
 
-    fn print_expr_repeat(
-        &mut self,
-        element: &ast::Expr,
-        count: &ast::AnonConst,
-        attrs: &[ast::Attribute],
-    ) {
+    fn print_expr_repeat(&mut self, element: &ast::Expr, count: &ast::AnonConst) {
         self.ibox(INDENT_UNIT);
         self.s.word("[");
-        self.print_inner_attributes_inline(attrs);
         self.print_expr(element);
         self.word_space(";");
         self.print_expr(&count.value);
@@ -1727,16 +1714,14 @@ impl<'a> State<'a> {
     fn print_expr_struct(
         &mut self,
         path: &ast::Path,
-        fields: &[ast::Field],
+        fields: &[ast::ExprField],
         rest: &ast::StructRest,
-        attrs: &[ast::Attribute],
     ) {
         self.print_path(path, true, 0);
         self.s.word("{");
-        self.print_inner_attributes_inline(attrs);
         self.commasep_cmnt(
             Consistent,
-            &fields[..],
+            fields,
             |s, field| {
                 s.print_outer_attributes(&field.attrs);
                 s.ibox(INDENT_UNIT);
@@ -1768,10 +1753,9 @@ impl<'a> State<'a> {
         self.s.word("}");
     }
 
-    fn print_expr_tup(&mut self, exprs: &[P<ast::Expr>], attrs: &[ast::Attribute]) {
+    fn print_expr_tup(&mut self, exprs: &[P<ast::Expr>]) {
         self.popen();
-        self.print_inner_attributes_inline(attrs);
-        self.commasep_exprs(Inconsistent, &exprs[..]);
+        self.commasep_exprs(Inconsistent, exprs);
         if exprs.len() == 1 {
             self.s.word(",");
         }
@@ -1881,19 +1865,19 @@ impl<'a> State<'a> {
                 self.print_expr_maybe_paren(expr, parser::PREC_PREFIX);
             }
             ast::ExprKind::Array(ref exprs) => {
-                self.print_expr_vec(&exprs[..], attrs);
+                self.print_expr_vec(exprs);
             }
             ast::ExprKind::ConstBlock(ref anon_const) => {
-                self.print_expr_anon_const(anon_const, attrs);
+                self.print_expr_anon_const(anon_const);
             }
             ast::ExprKind::Repeat(ref element, ref count) => {
-                self.print_expr_repeat(element, count, attrs);
+                self.print_expr_repeat(element, count);
             }
-            ast::ExprKind::Struct(ref path, ref fields, ref rest) => {
-                self.print_expr_struct(path, &fields[..], rest, attrs);
+            ast::ExprKind::Struct(ref se) => {
+                self.print_expr_struct(&se.path, &se.fields, &se.rest);
             }
             ast::ExprKind::Tup(ref exprs) => {
-                self.print_expr_tup(&exprs[..], attrs);
+                self.print_expr_tup(exprs);
             }
             ast::ExprKind::Call(ref func, ref args) => {
                 self.print_expr_call(func, &args[..]);
@@ -1971,7 +1955,6 @@ impl<'a> State<'a> {
                 self.print_expr_as_cond(expr);
                 self.s.space();
                 self.bopen();
-                self.print_inner_attributes_no_trailing_hardbreak(attrs);
                 for arm in arms {
                     self.print_arm(arm);
                 }
@@ -2098,117 +2081,8 @@ impl<'a> State<'a> {
                 }
             }
             ast::ExprKind::InlineAsm(ref a) => {
-                enum AsmArg<'a> {
-                    Template(String),
-                    Operand(&'a InlineAsmOperand),
-                    Options(InlineAsmOptions),
-                }
-
-                let mut args = vec![];
-                args.push(AsmArg::Template(InlineAsmTemplatePiece::to_string(&a.template)));
-                args.extend(a.operands.iter().map(|(o, _)| AsmArg::Operand(o)));
-                if !a.options.is_empty() {
-                    args.push(AsmArg::Options(a.options));
-                }
-
                 self.word("asm!");
-                self.popen();
-                self.commasep(Consistent, &args, |s, arg| match arg {
-                    AsmArg::Template(template) => s.print_string(&template, ast::StrStyle::Cooked),
-                    AsmArg::Operand(op) => {
-                        let print_reg_or_class = |s: &mut Self, r: &InlineAsmRegOrRegClass| match r
-                        {
-                            InlineAsmRegOrRegClass::Reg(r) => {
-                                s.print_symbol(*r, ast::StrStyle::Cooked)
-                            }
-                            InlineAsmRegOrRegClass::RegClass(r) => s.word(r.to_string()),
-                        };
-                        match op {
-                            InlineAsmOperand::In { reg, expr } => {
-                                s.word("in");
-                                s.popen();
-                                print_reg_or_class(s, reg);
-                                s.pclose();
-                                s.space();
-                                s.print_expr(expr);
-                            }
-                            InlineAsmOperand::Out { reg, late, expr } => {
-                                s.word(if *late { "lateout" } else { "out" });
-                                s.popen();
-                                print_reg_or_class(s, reg);
-                                s.pclose();
-                                s.space();
-                                match expr {
-                                    Some(expr) => s.print_expr(expr),
-                                    None => s.word("_"),
-                                }
-                            }
-                            InlineAsmOperand::InOut { reg, late, expr } => {
-                                s.word(if *late { "inlateout" } else { "inout" });
-                                s.popen();
-                                print_reg_or_class(s, reg);
-                                s.pclose();
-                                s.space();
-                                s.print_expr(expr);
-                            }
-                            InlineAsmOperand::SplitInOut { reg, late, in_expr, out_expr } => {
-                                s.word(if *late { "inlateout" } else { "inout" });
-                                s.popen();
-                                print_reg_or_class(s, reg);
-                                s.pclose();
-                                s.space();
-                                s.print_expr(in_expr);
-                                s.space();
-                                s.word_space("=>");
-                                match out_expr {
-                                    Some(out_expr) => s.print_expr(out_expr),
-                                    None => s.word("_"),
-                                }
-                            }
-                            InlineAsmOperand::Const { expr } => {
-                                s.word("const");
-                                s.space();
-                                s.print_expr(expr);
-                            }
-                            InlineAsmOperand::Sym { expr } => {
-                                s.word("sym");
-                                s.space();
-                                s.print_expr(expr);
-                            }
-                        }
-                    }
-                    AsmArg::Options(opts) => {
-                        s.word("options");
-                        s.popen();
-                        let mut options = vec![];
-                        if opts.contains(InlineAsmOptions::PURE) {
-                            options.push("pure");
-                        }
-                        if opts.contains(InlineAsmOptions::NOMEM) {
-                            options.push("nomem");
-                        }
-                        if opts.contains(InlineAsmOptions::READONLY) {
-                            options.push("readonly");
-                        }
-                        if opts.contains(InlineAsmOptions::PRESERVES_FLAGS) {
-                            options.push("preserves_flags");
-                        }
-                        if opts.contains(InlineAsmOptions::NORETURN) {
-                            options.push("noreturn");
-                        }
-                        if opts.contains(InlineAsmOptions::NOSTACK) {
-                            options.push("nostack");
-                        }
-                        if opts.contains(InlineAsmOptions::ATT_SYNTAX) {
-                            options.push("att_syntax");
-                        }
-                        s.commasep(Inconsistent, &options, |s, &opt| {
-                            s.word(opt);
-                        });
-                        s.pclose();
-                    }
-                });
-                self.pclose();
+                self.print_inline_asm(a);
             }
             ast::ExprKind::LlvmInlineAsm(ref a) => {
                 self.s.word("llvm_asm!");
@@ -2269,7 +2143,6 @@ impl<'a> State<'a> {
             ast::ExprKind::MacCall(ref m) => self.print_mac(m),
             ast::ExprKind::Paren(ref e) => {
                 self.popen();
-                self.print_inner_attributes_inline(attrs);
                 self.print_expr(e);
                 self.pclose();
             }
@@ -2300,16 +2173,122 @@ impl<'a> State<'a> {
         self.end();
     }
 
+    fn print_inline_asm(&mut self, asm: &ast::InlineAsm) {
+        enum AsmArg<'a> {
+            Template(String),
+            Operand(&'a InlineAsmOperand),
+            Options(InlineAsmOptions),
+        }
+
+        let mut args = vec![];
+        args.push(AsmArg::Template(InlineAsmTemplatePiece::to_string(&asm.template)));
+        args.extend(asm.operands.iter().map(|(o, _)| AsmArg::Operand(o)));
+        if !asm.options.is_empty() {
+            args.push(AsmArg::Options(asm.options));
+        }
+
+        self.popen();
+        self.commasep(Consistent, &args, |s, arg| match arg {
+            AsmArg::Template(template) => s.print_string(&template, ast::StrStyle::Cooked),
+            AsmArg::Operand(op) => {
+                let print_reg_or_class = |s: &mut Self, r: &InlineAsmRegOrRegClass| match r {
+                    InlineAsmRegOrRegClass::Reg(r) => s.print_symbol(*r, ast::StrStyle::Cooked),
+                    InlineAsmRegOrRegClass::RegClass(r) => s.word(r.to_string()),
+                };
+                match op {
+                    InlineAsmOperand::In { reg, expr } => {
+                        s.word("in");
+                        s.popen();
+                        print_reg_or_class(s, reg);
+                        s.pclose();
+                        s.space();
+                        s.print_expr(expr);
+                    }
+                    InlineAsmOperand::Out { reg, late, expr } => {
+                        s.word(if *late { "lateout" } else { "out" });
+                        s.popen();
+                        print_reg_or_class(s, reg);
+                        s.pclose();
+                        s.space();
+                        match expr {
+                            Some(expr) => s.print_expr(expr),
+                            None => s.word("_"),
+                        }
+                    }
+                    InlineAsmOperand::InOut { reg, late, expr } => {
+                        s.word(if *late { "inlateout" } else { "inout" });
+                        s.popen();
+                        print_reg_or_class(s, reg);
+                        s.pclose();
+                        s.space();
+                        s.print_expr(expr);
+                    }
+                    InlineAsmOperand::SplitInOut { reg, late, in_expr, out_expr } => {
+                        s.word(if *late { "inlateout" } else { "inout" });
+                        s.popen();
+                        print_reg_or_class(s, reg);
+                        s.pclose();
+                        s.space();
+                        s.print_expr(in_expr);
+                        s.space();
+                        s.word_space("=>");
+                        match out_expr {
+                            Some(out_expr) => s.print_expr(out_expr),
+                            None => s.word("_"),
+                        }
+                    }
+                    InlineAsmOperand::Const { anon_const } => {
+                        s.word("const");
+                        s.space();
+                        s.print_expr(&anon_const.value);
+                    }
+                    InlineAsmOperand::Sym { expr } => {
+                        s.word("sym");
+                        s.space();
+                        s.print_expr(expr);
+                    }
+                }
+            }
+            AsmArg::Options(opts) => {
+                s.word("options");
+                s.popen();
+                let mut options = vec![];
+                if opts.contains(InlineAsmOptions::PURE) {
+                    options.push("pure");
+                }
+                if opts.contains(InlineAsmOptions::NOMEM) {
+                    options.push("nomem");
+                }
+                if opts.contains(InlineAsmOptions::READONLY) {
+                    options.push("readonly");
+                }
+                if opts.contains(InlineAsmOptions::PRESERVES_FLAGS) {
+                    options.push("preserves_flags");
+                }
+                if opts.contains(InlineAsmOptions::NORETURN) {
+                    options.push("noreturn");
+                }
+                if opts.contains(InlineAsmOptions::NOSTACK) {
+                    options.push("nostack");
+                }
+                if opts.contains(InlineAsmOptions::ATT_SYNTAX) {
+                    options.push("att_syntax");
+                }
+                s.commasep(Inconsistent, &options, |s, &opt| {
+                    s.word(opt);
+                });
+                s.pclose();
+            }
+        });
+        self.pclose();
+    }
+
     crate fn print_local_decl(&mut self, loc: &ast::Local) {
         self.print_pat(&loc.pat);
         if let Some(ref ty) = loc.ty {
             self.word_space(":");
             self.print_type(ty);
         }
-    }
-
-    pub fn print_usize(&mut self, i: usize) {
-        self.s.word(i.to_string())
     }
 
     crate fn print_name(&mut self, name: Symbol) {
@@ -2420,7 +2399,15 @@ impl<'a> State<'a> {
                 if mutbl == ast::Mutability::Mut {
                     self.s.word("mut ");
                 }
-                self.print_pat(inner);
+                if let PatKind::Ident(ast::BindingMode::ByValue(ast::Mutability::Mut), ..) =
+                    inner.kind
+                {
+                    self.popen();
+                    self.print_pat(inner);
+                    self.pclose();
+                } else {
+                    self.print_pat(inner);
+                }
             }
             PatKind::Lit(ref e) => self.print_expr(&**e),
             PatKind::Range(ref begin, ref end, Spanned { node: ref end_kind, .. }) => {
@@ -2660,13 +2647,18 @@ impl<'a> State<'a> {
                         s.print_type(default)
                     }
                 }
-                ast::GenericParamKind::Const { ref ty, kw_span: _ } => {
+                ast::GenericParamKind::Const { ref ty, kw_span: _, ref default } => {
                     s.word_space("const");
                     s.print_ident(param.ident);
                     s.s.space();
                     s.word_space(":");
                     s.print_type(ty);
-                    s.print_type_bounds(":", &param.bounds)
+                    s.print_type_bounds(":", &param.bounds);
+                    if let Some(ref default) = default {
+                        s.s.space();
+                        s.word_space("=");
+                        s.print_expr(&default.value);
+                    }
                 }
             }
         });
@@ -2779,7 +2771,7 @@ impl<'a> State<'a> {
                     self.print_explicit_self(&eself);
                 } else {
                     let invalid = if let PatKind::Ident(_, ident, _) = input.pat.kind {
-                        ident.name == kw::Invalid
+                        ident.name == kw::Empty
                     } else {
                         false
                     };

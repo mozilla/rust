@@ -11,5 +11,5 @@ impl<T, A> Vec<T, A> {
 
 fn main() {
     Vec::<isize, Heap, bool>::new();
-    //~^ ERROR wrong number of type arguments
+    //~^ ERROR this struct takes at most 2 generic arguments but 3 generic arguments were supplied
 }

@@ -302,7 +302,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
             .find_map(|p| self.is_upvar_field_projection(p));
 
         let deref_base = match deref_target_place.projection.as_ref() {
-            &[ref proj_base @ .., ProjectionElem::Deref] => {
+            [proj_base @ .., ProjectionElem::Deref] => {
                 PlaceRef { local: deref_target_place.local, projection: &proj_base }
             }
             _ => bug!("deref_target_place is not a deref projection"),
@@ -345,8 +345,8 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
                 };
 
                 let upvar = &self.upvars[upvar_field.unwrap().index()];
-                let upvar_hir_id = upvar.var_hir_id;
-                let upvar_name = upvar.name;
+                let upvar_hir_id = upvar.place.get_root_variable();
+                let upvar_name = upvar.place.to_string(self.infcx.tcx);
                 let upvar_span = self.infcx.tcx.hir().span(upvar_hir_id);
 
                 let place_name = self.describe_any_place(move_place.as_ref());
@@ -476,8 +476,11 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
                 self.note_type_does_not_implement_copy(err, &place_desc, place_ty, Some(span), "");
 
                 use_spans.args_span_label(err, format!("move out of {} occurs here", place_desc));
-                use_spans
-                    .var_span_label(err, format!("move occurs due to use{}", use_spans.describe()));
+                use_spans.var_span_label(
+                    err,
+                    format!("move occurs due to use{}", use_spans.describe()),
+                    "moved",
+                );
             }
         }
     }

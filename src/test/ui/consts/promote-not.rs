@@ -1,7 +1,7 @@
 // ignore-tidy-linelength
 // Test various things that we do not want to promote.
 #![allow(unconditional_panic, const_err)]
-#![feature(const_fn, const_fn_union)]
+#![feature(const_fn_union)]
 
 use std::cell::Cell;
 
@@ -44,4 +44,11 @@ fn main() {
     // We must not promote things with interior mutability. Not even if we "project it away".
     let _val: &'static _ = &(Cell::new(1), 2).0; //~ ERROR temporary value dropped while borrowed
     let _val: &'static _ = &(Cell::new(1), 2).1; //~ ERROR temporary value dropped while borrowed
+
+    // No promotion of fallible operations.
+    let _val: &'static _ = &(1/0); //~ ERROR temporary value dropped while borrowed
+    let _val: &'static _ = &(1/(1-1)); //~ ERROR temporary value dropped while borrowed
+    let _val: &'static _ = &(1%0); //~ ERROR temporary value dropped while borrowed
+    let _val: &'static _ = &(1%(1-1)); //~ ERROR temporary value dropped while borrowed
+    let _val: &'static _ = &([1,2,3][4]+1); //~ ERROR temporary value dropped while borrowed
 }

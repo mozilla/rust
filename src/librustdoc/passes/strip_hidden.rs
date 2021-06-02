@@ -1,22 +1,21 @@
-use rustc_hir::def_id::DefIdSet;
 use rustc_span::symbol::sym;
 use std::mem;
 
-use crate::clean::Item;
-use crate::clean::{self, AttributesExt, NestedAttributesExt};
+use crate::clean;
+use crate::clean::{FakeDefIdSet, Item, NestedAttributesExt};
 use crate::core::DocContext;
-use crate::fold::{DocFolder, StripItem};
+use crate::fold::{strip_item, DocFolder};
 use crate::passes::{ImplStripper, Pass};
 
 crate const STRIP_HIDDEN: Pass = Pass {
     name: "strip-hidden",
     run: strip_hidden,
-    description: "strips all doc(hidden) items from the output",
+    description: "strips all `#[doc(hidden)]` items from the output",
 };
 
 /// Strip items marked `#[doc(hidden)]`
-crate fn strip_hidden(krate: clean::Crate, _: &DocContext<'_>) -> clean::Crate {
-    let mut retained = DefIdSet::default();
+crate fn strip_hidden(krate: clean::Crate, _: &mut DocContext<'_>) -> clean::Crate {
+    let mut retained = FakeDefIdSet::default();
 
     // strip all #[doc(hidden)] items
     let krate = {
@@ -26,13 +25,11 @@ crate fn strip_hidden(krate: clean::Crate, _: &DocContext<'_>) -> clean::Crate {
 
     // strip all impls referencing stripped items
     let mut stripper = ImplStripper { retained: &retained };
-    let krate = stripper.fold_crate(krate);
-
-    krate
+    stripper.fold_crate(krate)
 }
 
 struct Stripper<'a> {
-    retained: &'a mut DefIdSet,
+    retained: &'a mut FakeDefIdSet,
     update_retained: bool,
 }
 
@@ -41,15 +38,15 @@ impl<'a> DocFolder for Stripper<'a> {
         if i.attrs.lists(sym::doc).has_word(sym::hidden) {
             debug!("strip_hidden: stripping {:?} {:?}", i.type_(), i.name);
             // use a dedicated hidden item for given item type if any
-            match i.kind {
+            match *i.kind {
                 clean::StructFieldItem(..) | clean::ModuleItem(..) => {
                     // We need to recurse into stripped modules to
                     // strip things like impl methods but when doing so
                     // we must not add any items to the `retained` set.
                     let old = mem::replace(&mut self.update_retained, false);
-                    let ret = StripItem(self.fold_item_recur(i)).strip();
+                    let ret = strip_item(self.fold_item_recur(i));
                     self.update_retained = old;
-                    return ret;
+                    return Some(ret);
                 }
                 _ => return None,
             }

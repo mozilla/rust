@@ -1,4 +1,4 @@
-//! Memory allocation APIs
+//! Memory allocation APIs.
 //!
 //! In a given program, the standard library has one “global” memory allocator
 //! that is used for example by `Box<T>` and `Vec<T>`.
@@ -62,8 +62,6 @@ use core::intrinsics;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicPtr, Ordering};
 use core::{mem, ptr};
-
-use crate::sys_common::util::dumb_print;
 
 #[stable(feature = "alloc_module", since = "1.28.0")]
 #[doc(inline)]
@@ -166,8 +164,9 @@ impl System {
         match old_layout.size() {
             0 => self.alloc_impl(new_layout, zeroed),
 
-            // SAFETY: `new_size` is non-zero as `old_size` is greater than or equal to `new_size`
-            // as required by safety conditions. Other conditions must be upheld by the caller
+            // SAFETY: `new_size` is non-zero as `new_size` is greater than or equal to `old_size`
+            // as required by safety conditions and the `old_size == 0` case was handled in the
+            // previous match arm. Other conditions must be upheld by the caller
             old_size if old_layout.align() == new_layout.align() => unsafe {
                 let new_size = new_layout.size();
 
@@ -316,7 +315,7 @@ pub fn take_alloc_error_hook() -> fn(Layout) {
 }
 
 fn default_alloc_error_hook(layout: Layout) {
-    dumb_print(format_args!("memory allocation of {} bytes failed\n", layout.size()));
+    rtprintpanic!("memory allocation of {} bytes failed\n", layout.size());
 }
 
 #[cfg(not(test))]

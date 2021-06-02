@@ -5,6 +5,7 @@ mod tests;
 
 use crate::borrow::Borrow;
 use crate::collections::BTreeMap;
+use crate::convert::{TryFrom, TryInto};
 use crate::env;
 use crate::env::split_paths;
 use crate::ffi::{OsStr, OsString};
@@ -12,16 +13,18 @@ use crate::fmt;
 use crate::fs;
 use crate::io::{self, Error, ErrorKind};
 use crate::mem;
+use crate::num::NonZeroI32;
 use crate::os::windows::ffi::OsStrExt;
 use crate::path::Path;
 use crate::ptr;
 use crate::sys::c;
+use crate::sys::c::NonZeroDWORD;
 use crate::sys::cvt;
 use crate::sys::fs::{File, OpenOptions};
 use crate::sys::handle::Handle;
-use crate::sys::mutex::Mutex;
 use crate::sys::pipe::{self, AnonPipe};
 use crate::sys::stdio;
+use crate::sys_common::mutex::StaticMutex;
 use crate::sys_common::process::{CommandEnv, CommandEnvs};
 use crate::sys_common::AsInner;
 
@@ -62,7 +65,7 @@ impl AsRef<OsStr> for EnvKey {
 
 fn ensure_no_nuls<T: AsRef<OsStr>>(str: T) -> io::Result<T> {
     if str.as_ref().encode_wide().any(|b| b == 0) {
-        Err(io::Error::new(ErrorKind::InvalidInput, "nul byte found in provided data"))
+        Err(io::Error::new_const(ErrorKind::InvalidInput, &"nul byte found in provided data"))
     } else {
         Ok(str)
     }
@@ -78,6 +81,7 @@ pub struct Command {
     stdin: Option<Stdio>,
     stdout: Option<Stdio>,
     stderr: Option<Stdio>,
+    force_quotes_enabled: bool,
 }
 
 pub enum Stdio {
@@ -93,10 +97,6 @@ pub struct StdioPipes {
     pub stderr: Option<AnonPipe>,
 }
 
-struct DropGuard<'a> {
-    lock: &'a Mutex,
-}
-
 impl Command {
     pub fn new(program: &OsStr) -> Command {
         Command {
@@ -109,6 +109,7 @@ impl Command {
             stdin: None,
             stdout: None,
             stderr: None,
+            force_quotes_enabled: false,
         }
     }
 
@@ -132,6 +133,10 @@ impl Command {
     }
     pub fn creation_flags(&mut self, flags: u32) {
         self.flags = flags;
+    }
+
+    pub fn force_quotes(&mut self, enabled: bool) {
+        self.force_quotes_enabled = enabled;
     }
 
     pub fn get_program(&self) -> &OsStr {
@@ -181,7 +186,7 @@ impl Command {
         si.dwFlags = c::STARTF_USESTDHANDLES;
 
         let program = program.as_ref().unwrap_or(&self.program);
-        let mut cmd_str = make_command_line(program, &self.args)?;
+        let mut cmd_str = make_command_line(program, &self.args, self.force_quotes_enabled)?;
         cmd_str.push(0); // add null terminator
 
         // stolen from the libuv code.
@@ -203,8 +208,9 @@ impl Command {
         //
         // For more information, msdn also has an article about this race:
         // http://support.microsoft.com/kb/315939
-        static CREATE_PROCESS_LOCK: Mutex = Mutex::new();
-        let _guard = DropGuard::new(&CREATE_PROCESS_LOCK);
+        static CREATE_PROCESS_LOCK: StaticMutex = StaticMutex::new();
+
+        let _guard = unsafe { CREATE_PROCESS_LOCK.lock() };
 
         let mut pipes = StdioPipes { stdin: None, stdout: None, stderr: None };
         let null = Stdio::Null;
@@ -250,23 +256,6 @@ impl fmt::Debug for Command {
             write!(f, " {:?}", arg)?;
         }
         Ok(())
-    }
-}
-
-impl<'a> DropGuard<'a> {
-    fn new(lock: &'a Mutex) -> DropGuard<'a> {
-        unsafe {
-            lock.lock();
-            DropGuard { lock }
-        }
-    }
-}
-
-impl<'a> Drop for DropGuard<'a> {
-    fn drop(&mut self) {
-        unsafe {
-            self.lock.unlock();
-        }
     }
 }
 
@@ -390,8 +379,11 @@ impl Process {
 pub struct ExitStatus(c::DWORD);
 
 impl ExitStatus {
-    pub fn success(&self) -> bool {
-        self.0 == 0
+    pub fn exit_ok(&self) -> Result<(), ExitStatusError> {
+        match NonZeroDWORD::try_from(self.0) {
+            /* was nonzero */ Ok(failure) => Err(ExitStatusError(failure)),
+            /* was zero, couldn't convert */ Err(_) => Ok(()),
+        }
     }
     pub fn code(&self) -> Option<i32> {
         Some(self.0 as i32)
@@ -417,6 +409,21 @@ impl fmt::Display for ExitStatus {
         } else {
             write!(f, "exit code: {}", self.0)
         }
+    }
+}
+
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub struct ExitStatusError(c::NonZeroDWORD);
+
+impl Into<ExitStatus> for ExitStatusError {
+    fn into(self) -> ExitStatus {
+        ExitStatus(self.0.into())
+    }
+}
+
+impl ExitStatusError {
+    pub fn code(self) -> Option<NonZeroI32> {
+        Some((u32::from(self.0) as i32).try_into().unwrap())
     }
 }
 
@@ -467,7 +474,7 @@ fn zeroed_process_information() -> c::PROCESS_INFORMATION {
 
 // Produces a wide string *without terminating null*; returns an error if
 // `prog` or any of the `args` contain a nul.
-fn make_command_line(prog: &OsStr, args: &[OsString]) -> io::Result<Vec<u16>> {
+fn make_command_line(prog: &OsStr, args: &[OsString], force_quotes: bool) -> io::Result<Vec<u16>> {
     // Encode the command and arguments in a command line string such
     // that the spawned process may recover them using CommandLineToArgvW.
     let mut cmd: Vec<u16> = Vec::new();
@@ -476,7 +483,7 @@ fn make_command_line(prog: &OsStr, args: &[OsString]) -> io::Result<Vec<u16>> {
     append_arg(&mut cmd, prog, true)?;
     for arg in args {
         cmd.push(' ' as u16);
-        append_arg(&mut cmd, arg, false)?;
+        append_arg(&mut cmd, arg, force_quotes)?;
     }
     return Ok(cmd);
 

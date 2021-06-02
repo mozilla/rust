@@ -93,7 +93,8 @@ pub fn check(build: &mut Build) {
                     .unwrap_or(true)
             })
             .any(|build_llvm_ourselves| build_llvm_ourselves);
-    if building_llvm || build.config.any_sanitizers_enabled() {
+    let need_cmake = building_llvm || build.config.any_sanitizers_enabled();
+    if need_cmake {
         cmd_finder.must_have("cmake");
     }
 
@@ -112,6 +113,13 @@ pub fn check(build: &mut Build) {
         .map(|p| cmd_finder.must_have(p))
         .or_else(|| cmd_finder.maybe_have("node"))
         .or_else(|| cmd_finder.maybe_have("nodejs"));
+
+    build.config.npm = build
+        .config
+        .npm
+        .take()
+        .map(|p| cmd_finder.must_have(p))
+        .or_else(|| cmd_finder.maybe_have("npm"));
 
     build.config.gdb = build
         .config
@@ -163,7 +171,11 @@ pub fn check(build: &mut Build) {
             panic!("the iOS target is only supported on macOS");
         }
 
-        build.config.target_config.entry(*target).or_insert(Target::from_triple(&target.triple));
+        build
+            .config
+            .target_config
+            .entry(*target)
+            .or_insert_with(|| Target::from_triple(&target.triple));
 
         if target.contains("-none-") || target.contains("nvptx") {
             if build.no_std(*target) == Some(false) {
@@ -193,7 +205,7 @@ pub fn check(build: &mut Build) {
             }
         }
 
-        if target.contains("msvc") {
+        if need_cmake && target.contains("msvc") {
             // There are three builds of cmake on windows: MSVC, MinGW, and
             // Cygwin. The Cygwin build does not have generators for Visual
             // Studio, so detect that here and error.

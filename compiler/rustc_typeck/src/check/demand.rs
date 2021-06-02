@@ -32,10 +32,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         if self.suggest_calling_boxed_future_when_appropriate(err, expr, expected, expr_ty) {
             return;
         }
+        self.suggest_no_capture_closure(err, expected, expr_ty);
         self.suggest_boxing_when_appropriate(err, expr, expected, expr_ty);
         self.suggest_missing_parentheses(err, expr);
         self.note_need_for_fn_pointer(err, expected, expr_ty);
         self.note_internal_mutation_in_method(err, expr, expected, expr_ty);
+        self.report_closure_infered_return_type(err, expected)
     }
 
     // Requires that the two types unify, and prints an error message if
@@ -199,7 +201,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     if self.can_coerce(expr_ty, sole_field_ty) {
                         let variant_path = self.tcx.def_path_str(variant.def_id);
                         // FIXME #56861: DRYer prelude filtering
-                        Some(variant_path.trim_start_matches("std::prelude::v1::").to_string())
+                        if let Some(path) = variant_path.strip_prefix("std::prelude::") {
+                            if let Some((_, path)) = path.split_once("::") {
+                                return Some(path.to_string());
+                            }
+                        }
+                        Some(variant_path)
                     } else {
                         None
                     }
@@ -360,8 +367,27 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         false
     }
 
-    fn replace_prefix(&self, s: &str, old: &str, new: &str) -> Option<String> {
-        s.strip_prefix(old).map(|stripped| new.to_string() + stripped)
+    /// If the given `HirId` corresponds to a block with a trailing expression, return that expression
+    crate fn maybe_get_block_expr(&self, hir_id: hir::HirId) -> Option<&'tcx hir::Expr<'tcx>> {
+        match self.tcx.hir().find(hir_id)? {
+            Node::Expr(hir::Expr { kind: hir::ExprKind::Block(block, ..), .. }) => block.expr,
+            _ => None,
+        }
+    }
+
+    /// Returns whether the given expression is an `else if`.
+    crate fn is_else_if_block(&self, expr: &hir::Expr<'_>) -> bool {
+        if let hir::ExprKind::If(..) = expr.kind {
+            let parent_id = self.tcx.hir().get_parent_node(expr.hir_id);
+            if let Some(Node::Expr(hir::Expr {
+                kind: hir::ExprKind::If(_, _, Some(else_expr)),
+                ..
+            })) = self.tcx.hir().find(parent_id)
+            {
+                return else_expr.hir_id == expr.hir_id;
+            }
+        }
+        false
     }
 
     /// This function is used to determine potential "simple" improvements or users' errors and
@@ -394,6 +420,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             return None;
         }
 
+        let replace_prefix = |s: &str, old: &str, new: &str| {
+            s.strip_prefix(old).map(|stripped| new.to_string() + stripped)
+        };
+
         let is_struct_pat_shorthand_field =
             self.is_hir_id_from_struct_pattern_shorthand_field(expr.hir_id, sp);
 
@@ -409,7 +439,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 (&ty::Str, &ty::Array(arr, _) | &ty::Slice(arr)) if arr == self.tcx.types.u8 => {
                     if let hir::ExprKind::Lit(_) = expr.kind {
                         if let Ok(src) = sm.span_to_snippet(sp) {
-                            if let Some(src) = self.replace_prefix(&src, "b\"", "\"") {
+                            if let Some(src) = replace_prefix(&src, "b\"", "\"") {
                                 return Some((
                                     sp,
                                     "consider removing the leading `b`",
@@ -423,7 +453,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 (&ty::Array(arr, _) | &ty::Slice(arr), &ty::Str) if arr == self.tcx.types.u8 => {
                     if let hir::ExprKind::Lit(_) = expr.kind {
                         if let Ok(src) = sm.span_to_snippet(sp) {
-                            if let Some(src) = self.replace_prefix(&src, "\"", "b\"") {
+                            if let Some(src) = replace_prefix(&src, "\"", "b\"") {
                                 return Some((
                                     sp,
                                     "consider adding a leading `b`",
@@ -583,23 +613,27 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                 hir::Mutability::Mut => {
                                     let new_prefix = "&mut ".to_owned() + derefs;
                                     match mutbl_a {
-                                        hir::Mutability::Mut => self
-                                            .replace_prefix(&src, "&mut ", &new_prefix)
-                                            .map(|s| (s, Applicability::MachineApplicable)),
-                                        hir::Mutability::Not => self
-                                            .replace_prefix(&src, "&", &new_prefix)
-                                            .map(|s| (s, Applicability::Unspecified)),
+                                        hir::Mutability::Mut => {
+                                            replace_prefix(&src, "&mut ", &new_prefix)
+                                                .map(|s| (s, Applicability::MachineApplicable))
+                                        }
+                                        hir::Mutability::Not => {
+                                            replace_prefix(&src, "&", &new_prefix)
+                                                .map(|s| (s, Applicability::Unspecified))
+                                        }
                                     }
                                 }
                                 hir::Mutability::Not => {
                                     let new_prefix = "&".to_owned() + derefs;
                                     match mutbl_a {
-                                        hir::Mutability::Mut => self
-                                            .replace_prefix(&src, "&mut ", &new_prefix)
-                                            .map(|s| (s, Applicability::MachineApplicable)),
-                                        hir::Mutability::Not => self
-                                            .replace_prefix(&src, "&", &new_prefix)
-                                            .map(|s| (s, Applicability::MachineApplicable)),
+                                        hir::Mutability::Mut => {
+                                            replace_prefix(&src, "&mut ", &new_prefix)
+                                                .map(|s| (s, Applicability::MachineApplicable))
+                                        }
+                                        hir::Mutability::Not => {
+                                            replace_prefix(&src, "&", &new_prefix)
+                                                .map(|s| (s, Applicability::MachineApplicable))
+                                        }
                                     }
                                 }
                             } {
@@ -611,10 +645,30 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             }
             _ if sp == expr.span && !is_macro => {
                 if let Some(steps) = self.deref_steps(checked_ty, expected) {
+                    let expr = expr.peel_blocks();
+
                     if steps == 1 {
-                        // For a suggestion to make sense, the type would need to be `Copy`.
-                        if self.infcx.type_is_copy_modulo_regions(self.param_env, expected, sp) {
-                            if let Ok(code) = sm.span_to_snippet(sp) {
+                        if let hir::ExprKind::AddrOf(_, mutbl, inner) = expr.kind {
+                            // If the expression has `&`, removing it would fix the error
+                            let prefix_span = expr.span.with_hi(inner.span.lo());
+                            let message = match mutbl {
+                                hir::Mutability::Not => "consider removing the `&`",
+                                hir::Mutability::Mut => "consider removing the `&mut`",
+                            };
+                            let suggestion = String::new();
+                            return Some((
+                                prefix_span,
+                                message,
+                                suggestion,
+                                Applicability::MachineApplicable,
+                            ));
+                        } else if self.infcx.type_is_copy_modulo_regions(
+                            self.param_env,
+                            expected,
+                            sp,
+                        ) {
+                            // For this suggestion to make sense, the type would need to be `Copy`.
+                            if let Ok(code) = sm.span_to_snippet(expr.span) {
                                 let message = if checked_ty.is_region_ptr() {
                                     "consider dereferencing the borrow"
                                 } else {
@@ -622,11 +676,16 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                 };
                                 let suggestion = if is_struct_pat_shorthand_field {
                                     format!("{}: *{}", code, code)
+                                } else if self.is_else_if_block(expr) {
+                                    // Don't suggest nonsense like `else *if`
+                                    return None;
+                                } else if let Some(expr) = self.maybe_get_block_expr(expr.hir_id) {
+                                    format!("*{}", sm.span_to_snippet(expr.span).unwrap_or(code))
                                 } else {
                                     format!("*{}", code)
                                 };
                                 return Some((
-                                    sp,
+                                    expr.span,
                                     message,
                                     suggestion,
                                     Applicability::MachineApplicable,
@@ -768,7 +827,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             if let hir::ExprKind::Lit(lit) = &expr.kind { lit.node.is_suffixed() } else { false }
         };
         let is_negative_int =
-            |expr: &hir::Expr<'_>| matches!(expr.kind, hir::ExprKind::Unary(hir::UnOp::UnNeg, ..));
+            |expr: &hir::Expr<'_>| matches!(expr.kind, hir::ExprKind::Unary(hir::UnOp::Neg, ..));
         let is_uint = |ty: Ty<'_>| matches!(ty.kind(), ty::Uint(..));
 
         let in_const_context = self.tcx.hir().is_inside_const_context(expr.hir_id);
@@ -811,6 +870,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             |err: &mut DiagnosticBuilder<'_>,
              found_to_exp_is_fallible: bool,
              exp_to_found_is_fallible: bool| {
+                let exp_is_lhs =
+                    expected_ty_expr.map(|e| self.tcx.hir().is_lhs(e.hir_id)).unwrap_or(false);
+
+                if exp_is_lhs {
+                    return;
+                }
+
                 let always_fallible = found_to_exp_is_fallible
                     && (exp_to_found_is_fallible || expected_ty_expr.is_none());
                 let msg = if literal_is_ty_suffixed(expr) {
@@ -994,6 +1060,34 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 true
             }
             _ => false,
+        }
+    }
+
+    // Report the type inferred by the return statement.
+    fn report_closure_infered_return_type(
+        &self,
+        err: &mut DiagnosticBuilder<'_>,
+        expected: Ty<'tcx>,
+    ) {
+        if let Some(sp) = self.ret_coercion_span.get() {
+            // If the closure has an explicit return type annotation,
+            // then a type error may occur at the first return expression we
+            // see in the closure (if it conflicts with the declared
+            // return type). Skip adding a note in this case, since it
+            // would be incorrect.
+            if !err.span.primary_spans().iter().any(|&span| span == sp) {
+                let hir = self.tcx.hir();
+                let body_owner = hir.body_owned_by(hir.enclosing_body_owner(self.body_id));
+                if self.tcx.is_closure(hir.body_owner_def_id(body_owner).to_def_id()) {
+                    err.span_note(
+                        sp,
+                        &format!(
+                            "return type inferred to be `{}` here",
+                            self.resolve_vars_if_possible(expected)
+                        ),
+                    );
+                }
+            }
         }
     }
 }

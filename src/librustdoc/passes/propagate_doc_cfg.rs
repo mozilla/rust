@@ -12,7 +12,7 @@ crate const PROPAGATE_DOC_CFG: Pass = Pass {
     description: "propagates `#[doc(cfg(...))]` to child items",
 };
 
-crate fn propagate_doc_cfg(cr: Crate, _: &DocContext<'_>) -> Crate {
+crate fn propagate_doc_cfg(cr: Crate, _: &mut DocContext<'_>) -> Crate {
     CfgPropagator { parent_cfg: None }.fold_crate(cr)
 }
 
@@ -24,7 +24,7 @@ impl DocFolder for CfgPropagator {
     fn fold_item(&mut self, mut item: Item) -> Option<Item> {
         let old_parent_cfg = self.parent_cfg.clone();
 
-        let new_cfg = match (self.parent_cfg.take(), item.attrs.cfg.take()) {
+        let new_cfg = match (self.parent_cfg.take(), item.cfg.take()) {
             (None, None) => None,
             (Some(rc), None) | (None, Some(rc)) => Some(rc),
             (Some(mut a), Some(b)) => {
@@ -34,7 +34,7 @@ impl DocFolder for CfgPropagator {
             }
         };
         self.parent_cfg = new_cfg.clone();
-        item.attrs.cfg = new_cfg;
+        item.cfg = new_cfg;
 
         let result = self.fold_item_recur(item);
         self.parent_cfg = old_parent_cfg;

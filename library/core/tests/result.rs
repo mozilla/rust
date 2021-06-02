@@ -96,6 +96,15 @@ fn test_unwrap_or() {
 }
 
 #[test]
+fn test_ok_or_err() {
+    let ok: Result<isize, isize> = Ok(100);
+    let err: Result<isize, isize> = Err(200);
+
+    assert_eq!(ok.into_ok_or_err(), 100);
+    assert_eq!(err.into_ok_or_err(), 200);
+}
+
+#[test]
 fn test_unwrap_or_else() {
     fn handler(msg: &'static str) -> isize {
         if msg == "I got this." { 50 } else { panic!("BadBad") }
@@ -117,6 +126,18 @@ pub fn test_unwrap_or_else_panic() {
 
     let bad_err: Result<isize, &'static str> = Err("Unrecoverable mess.");
     let _: isize = bad_err.unwrap_or_else(handler);
+}
+
+#[test]
+fn test_unwrap_unchecked() {
+    let ok: Result<isize, &'static str> = Ok(100);
+    assert_eq!(unsafe { ok.unwrap_unchecked() }, 100);
+}
+
+#[test]
+fn test_unwrap_err_unchecked() {
+    let ok_err: Result<isize, &'static str> = Err("Err");
+    assert_eq!(unsafe { ok_err.unwrap_err_unchecked() }, "Err");
 }
 
 #[test]
@@ -205,27 +226,37 @@ pub fn test_into_ok() {
 }
 
 #[test]
+pub fn test_into_err() {
+    fn until_error_op() -> Result<!, isize> {
+        Err(666)
+    }
+
+    assert_eq!(until_error_op().into_err(), 666);
+
+    enum MyNeverToken {}
+    impl From<MyNeverToken> for ! {
+        fn from(never: MyNeverToken) -> ! {
+            match never {}
+        }
+    }
+
+    fn until_error_op2() -> Result<MyNeverToken, isize> {
+        Err(667)
+    }
+
+    assert_eq!(until_error_op2().into_err(), 667);
+}
+
+#[test]
 fn test_try() {
-    fn try_result_some() -> Option<u8> {
-        let val = Ok(1)?;
-        Some(val)
-    }
-    assert_eq!(try_result_some(), Some(1));
-
-    fn try_result_none() -> Option<u8> {
-        let val = Err(NoneError)?;
-        Some(val)
-    }
-    assert_eq!(try_result_none(), None);
-
-    fn try_result_ok() -> Result<u8, u8> {
+    fn try_result_ok() -> Result<u8, u32> {
         let result: Result<u8, u8> = Ok(1);
         let val = result?;
         Ok(val)
     }
     assert_eq!(try_result_ok(), Ok(1));
 
-    fn try_result_err() -> Result<u8, u8> {
+    fn try_result_err() -> Result<u8, u32> {
         let result: Result<u8, u8> = Err(1);
         let val = result?;
         Ok(val)
@@ -357,4 +388,18 @@ fn result_opt_conversions() {
         .collect();
 
     assert_eq!(res, Err(BadNumErr))
+}
+
+#[test]
+#[cfg(not(bootstrap))] // Needs the V2 trait
+fn result_try_trait_v2_branch() {
+    use core::num::NonZeroU32;
+    use core::ops::{ControlFlow::*, Try};
+    assert_eq!(Ok::<i32, i32>(4).branch(), Continue(4));
+    assert_eq!(Err::<i32, i32>(4).branch(), Break(Err(4)));
+    let one = NonZeroU32::new(1).unwrap();
+    assert_eq!(Ok::<(), NonZeroU32>(()).branch(), Continue(()));
+    assert_eq!(Err::<(), NonZeroU32>(one).branch(), Break(Err(one)));
+    assert_eq!(Ok::<NonZeroU32, ()>(one).branch(), Continue(one));
+    assert_eq!(Err::<NonZeroU32, ()>(()).branch(), Break(Err(())));
 }

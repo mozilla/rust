@@ -1,4 +1,3 @@
-use rustc_ast::{FloatTy, IntTy, UintTy};
 use rustc_data_structures::base_n;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_hir as hir;
@@ -6,7 +5,7 @@ use rustc_hir::def_id::{CrateNum, DefId};
 use rustc_hir::definitions::{DefPathData, DisambiguatedDefPathData};
 use rustc_middle::ty::print::{Print, Printer};
 use rustc_middle::ty::subst::{GenericArg, GenericArgKind, Subst};
-use rustc_middle::ty::{self, Instance, Ty, TyCtxt, TypeFoldable};
+use rustc_middle::ty::{self, FloatTy, Instance, IntTy, Ty, TyCtxt, TypeFoldable, UintTy};
 use rustc_target::spec::abi::Abi;
 
 use std::fmt::Write;
@@ -182,7 +181,7 @@ impl SymbolMangler<'tcx> {
 
     fn in_binder<T>(
         mut self,
-        value: &ty::Binder<T>,
+        value: &ty::Binder<'tcx, T>,
         print_value: impl FnOnce(Self, &T) -> Result<Self, !>,
     ) -> Result<Self, !>
     where
@@ -319,7 +318,7 @@ impl Printer<'tcx> for SymbolMangler<'tcx> {
 
             // Late-bound lifetimes use indices starting at 1,
             // see `BinderLevel` for more details.
-            ty::ReLateBound(debruijn, ty::BrAnon(i)) => {
+            ty::ReLateBound(debruijn, ty::BoundRegion { kind: ty::BrAnon(i), .. }) => {
                 let binder = &self.binders[self.binders.len() - 1 - debruijn.index()];
                 let depth = binder.lifetime_depths.start + i;
 
@@ -441,7 +440,7 @@ impl Printer<'tcx> for SymbolMangler<'tcx> {
                     }
                     match sig.abi {
                         Abi::Rust => {}
-                        Abi::C => cx.push("KC"),
+                        Abi::C { unwind: false } => cx.push("KC"),
                         abi => {
                             cx.push("K");
                             let name = abi.name();
@@ -465,9 +464,7 @@ impl Printer<'tcx> for SymbolMangler<'tcx> {
 
             ty::Dynamic(predicates, r) => {
                 self.push("D");
-                self = self.in_binder(&predicates, |cx, predicates| {
-                    cx.print_dyn_existential(predicates)
-                })?;
+                self = self.print_dyn_existential(predicates)?;
                 self = r.print(self)?;
             }
 
@@ -486,27 +483,61 @@ impl Printer<'tcx> for SymbolMangler<'tcx> {
 
     fn print_dyn_existential(
         mut self,
-        predicates: &'tcx ty::List<ty::ExistentialPredicate<'tcx>>,
+        predicates: &'tcx ty::List<ty::Binder<'tcx, ty::ExistentialPredicate<'tcx>>>,
     ) -> Result<Self::DynExistential, Self::Error> {
-        for predicate in predicates {
-            match predicate {
-                ty::ExistentialPredicate::Trait(trait_ref) => {
-                    // Use a type that can't appear in defaults of type parameters.
-                    let dummy_self = self.tcx.mk_ty_infer(ty::FreshTy(0));
-                    let trait_ref = trait_ref.with_self_ty(self.tcx, dummy_self);
-                    self = self.print_def_path(trait_ref.def_id, trait_ref.substs)?;
-                }
-                ty::ExistentialPredicate::Projection(projection) => {
-                    let name = self.tcx.associated_item(projection.item_def_id).ident;
-                    self.push("p");
-                    self.push_ident(&name.as_str());
-                    self = projection.ty.print(self)?;
-                }
-                ty::ExistentialPredicate::AutoTrait(def_id) => {
-                    self = self.print_def_path(def_id, &[])?;
+        // Okay, so this is a bit tricky. Imagine we have a trait object like
+        // `dyn for<'a> Foo<'a, Bar = &'a ()>`. When we mangle this, the
+        // output looks really close to the syntax, where the `Bar = &'a ()` bit
+        // is under the same binders (`['a]`) as the `Foo<'a>` bit. However, we
+        // actually desugar these into two separate `ExistentialPredicate`s. We
+        // can't enter/exit the "binder scope" twice though, because then we
+        // would mangle the binders twice. (Also, side note, we merging these
+        // two is kind of difficult, because of potential HRTBs in the Projection
+        // predicate.)
+        //
+        // Also worth mentioning: imagine that we instead had
+        // `dyn for<'a> Foo<'a, Bar = &'a ()> + Send`. In this case, `Send` is
+        // under the same binders as `Foo`. Currently, this doesn't matter,
+        // because only *auto traits* are allowed other than the principal trait
+        // and all auto traits don't have any generics. Two things could
+        // make this not an "okay" mangling:
+        // 1) Instead of mangling only *used*
+        // bound vars, we want to mangle *all* bound vars (`for<'b> Send` is a
+        // valid trait predicate);
+        // 2) We allow multiple "principal" traits in the future, or at least
+        // allow in any form another trait predicate that can take generics.
+        //
+        // Here we assume that predicates have the following structure:
+        // [<Trait> [{<Projection>}]] [{<Auto>}]
+        // Since any predicates after the first one shouldn't change the binders,
+        // just put them all in the binders of the first.
+        self = self.in_binder(&predicates[0], |mut cx, _| {
+            for predicate in predicates.iter() {
+                // It would be nice to be able to validate bound vars here, but
+                // projections can actually include bound vars from super traits
+                // because of HRTBs (only in the `Self` type). Also, auto traits
+                // could have different bound vars *anyways*.
+                match predicate.as_ref().skip_binder() {
+                    ty::ExistentialPredicate::Trait(trait_ref) => {
+                        // Use a type that can't appear in defaults of type parameters.
+                        let dummy_self = cx.tcx.mk_ty_infer(ty::FreshTy(0));
+                        let trait_ref = trait_ref.with_self_ty(cx.tcx, dummy_self);
+                        cx = cx.print_def_path(trait_ref.def_id, trait_ref.substs)?;
+                    }
+                    ty::ExistentialPredicate::Projection(projection) => {
+                        let name = cx.tcx.associated_item(projection.item_def_id).ident;
+                        cx.push("p");
+                        cx.push_ident(&name.as_str());
+                        cx = projection.ty.print(cx)?;
+                    }
+                    ty::ExistentialPredicate::AutoTrait(def_id) => {
+                        cx = cx.print_def_path(*def_id, &[])?;
+                    }
                 }
             }
-        }
+            Ok(cx)
+        })?;
+
         self.push("E");
         Ok(self)
     }
@@ -530,7 +561,7 @@ impl Printer<'tcx> for SymbolMangler<'tcx> {
                     if val < 0 {
                         neg = true;
                     }
-                    Some(val.wrapping_abs() as u128)
+                    Some(val.unsigned_abs())
                 })
             }
             _ => {
@@ -561,8 +592,8 @@ impl Printer<'tcx> for SymbolMangler<'tcx> {
 
     fn path_crate(mut self, cnum: CrateNum) -> Result<Self::Path, Self::Error> {
         self.push("C");
-        let fingerprint = self.tcx.crate_disambiguator(cnum).to_fingerprint();
-        self.push_disambiguator(fingerprint.to_smaller_hash());
+        let stable_crate_id = self.tcx.def_path_hash(cnum.as_def_id()).stable_crate_id();
+        self.push_disambiguator(stable_crate_id.to_u64());
         let name = self.tcx.original_crate_name(cnum).as_str();
         self.push_ident(&name);
         Ok(self)

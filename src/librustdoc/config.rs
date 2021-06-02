@@ -1,22 +1,20 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::ffi::OsStr;
 use std::fmt;
 use std::path::PathBuf;
+use std::str::FromStr;
 
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
-use rustc_hir::def_id::DefId;
-use rustc_middle::middle::privacy::AccessLevels;
-use rustc_session::config::{self, parse_crate_types_from_list, parse_externs, CrateType};
+use rustc_data_structures::fx::FxHashMap;
 use rustc_session::config::{
-    build_codegen_options, build_debugging_options, get_cmd_lint_options, host_triple,
-    nightly_options,
+    self, parse_crate_types_from_list, parse_externs, parse_target_triple, CrateType,
 };
+use rustc_session::config::{get_cmd_lint_options, nightly_options};
 use rustc_session::config::{CodegenOptions, DebuggingOptions, ErrorOutputType, Externs};
 use rustc_session::getopts;
 use rustc_session::lint::Level;
 use rustc_session::search_paths::SearchPath;
-use rustc_span::edition::{Edition, DEFAULT_EDITION};
+use rustc_span::edition::Edition;
 use rustc_target::spec::TargetTriple;
 
 use crate::core::new_handler;
@@ -35,12 +33,15 @@ crate enum OutputFormat {
     Html,
 }
 
+impl Default for OutputFormat {
+    fn default() -> OutputFormat {
+        OutputFormat::Html
+    }
+}
+
 impl OutputFormat {
     crate fn is_json(&self) -> bool {
-        match self {
-            OutputFormat::Json => true,
-            _ => false,
-        }
+        matches!(self, OutputFormat::Json)
     }
 }
 
@@ -95,8 +96,7 @@ crate struct Options {
     crate maybe_sysroot: Option<PathBuf>,
     /// Lint information passed over the command-line.
     crate lint_opts: Vec<(String, Level)>,
-    /// Whether to ask rustc to describe the lints it knows. Practically speaking, this will not be
-    /// used, since we abort if we have no input file, but it's included for completeness.
+    /// Whether to ask rustc to describe the lints it knows.
     crate describe_lints: bool,
     /// What level to cap lints at.
     crate lint_cap: Option<Level>,
@@ -106,6 +106,8 @@ crate struct Options {
     crate should_test: bool,
     /// List of arguments to pass to the test harness, if running tests.
     crate test_args: Vec<String>,
+    /// The working directory in which to run tests.
+    crate test_run_directory: Option<PathBuf>,
     /// Optional path to persist the doctest executables to, defaults to a
     /// temporary directory if not set.
     crate persist_doctests: Option<PathBuf>,
@@ -117,9 +119,11 @@ crate struct Options {
     /// For example, using ignore-foo to ignore running the doctest on any target that
     /// contains "foo" as a substring
     crate enable_per_target_ignores: bool,
+    /// Do not run doctests, compile them if should_test is active.
+    crate no_run: bool,
 
     /// The path to a rustc-like binary to build tests with. If not set, we
-    /// default to loading from $sysroot/bin/rustc.
+    /// default to loading from `$sysroot/bin/rustc`.
     crate test_builder: Option<PathBuf>,
 
     // Options that affect the documentation process
@@ -143,11 +147,15 @@ crate struct Options {
     crate crate_version: Option<String>,
     /// Collected options specific to outputting final pages.
     crate render_options: RenderOptions,
-    /// Output format rendering (used only for "show-coverage" option for the moment)
-    crate output_format: Option<OutputFormat>,
+    /// The format that we output when rendering.
+    ///
+    /// Currently used only for the `--show-coverage` option.
+    crate output_format: OutputFormat,
     /// If this option is set to `true`, rustdoc will only run checks and not generate
     /// documentation.
     crate run_check: bool,
+    /// Whether doctests should emit unused externs
+    crate json_unused_externs: bool,
 }
 
 impl fmt::Debug for Options {
@@ -178,6 +186,7 @@ impl fmt::Debug for Options {
             .field("lint_cap", &self.lint_cap)
             .field("should_test", &self.should_test)
             .field("test_args", &self.test_args)
+            .field("test_run_directory", &self.test_run_directory)
             .field("persist_doctests", &self.persist_doctests)
             .field("default_passes", &self.default_passes)
             .field("manual_passes", &self.manual_passes)
@@ -189,6 +198,7 @@ impl fmt::Debug for Options {
             .field("runtool_args", &self.runtool_args)
             .field("enable-per-target-ignores", &self.enable_per_target_ignores)
             .field("run_check", &self.run_check)
+            .field("no_run", &self.no_run)
             .finish()
     }
 }
@@ -222,7 +232,7 @@ crate struct RenderOptions {
     crate extern_html_root_urls: BTreeMap<String, String>,
     /// A map of the default settings (values are as for DOM storage API). Keys should lack the
     /// `rustdoc-` prefix.
-    crate default_settings: HashMap<String, String>,
+    crate default_settings: FxHashMap<String, String>,
     /// If present, suffix added to CSS/JavaScript files when referencing them in generated pages.
     crate resource_suffix: String,
     /// Whether to run the static CSS/JavaScript through a minifier when outputting them. `true` by
@@ -257,21 +267,39 @@ crate struct RenderOptions {
     crate document_private: bool,
     /// Document items that have `doc(hidden)`.
     crate document_hidden: bool,
+    /// If `true`, generate a JSON file in the crate folder instead of HTML redirection files.
+    crate generate_redirect_map: bool,
+    /// Show the memory layout of types in the docs.
+    crate show_type_layout: bool,
     crate unstable_features: rustc_feature::UnstableFeatures,
+    crate emit: Vec<EmitType>,
 }
 
-/// Temporary storage for data obtained during `RustdocVisitor::clean()`.
-/// Later on moved into `CACHE_KEY`.
-#[derive(Default, Clone)]
-crate struct RenderInfo {
-    crate inlined: FxHashSet<DefId>,
-    crate external_paths: crate::core::ExternalPaths,
-    crate exact_paths: FxHashMap<DefId, Vec<String>>,
-    crate access_levels: AccessLevels<DefId>,
-    crate deref_trait_did: Option<DefId>,
-    crate deref_mut_trait_did: Option<DefId>,
-    crate owned_box_did: Option<DefId>,
-    crate output_format: Option<OutputFormat>,
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+crate enum EmitType {
+    Unversioned,
+    Toolchain,
+    InvocationSpecific,
+}
+
+impl FromStr for EmitType {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        use EmitType::*;
+        match s {
+            "unversioned-shared-resources" => Ok(Unversioned),
+            "toolchain-shared-resources" => Ok(Toolchain),
+            "invocation-specific" => Ok(InvocationSpecific),
+            _ => Err(()),
+        }
+    }
+}
+
+impl RenderOptions {
+    crate fn should_emit_crate(&self) -> bool {
+        self.emit.is_empty() || self.emit.contains(&EmitType::InvocationSpecific)
+    }
 }
 
 impl Options {
@@ -322,16 +350,41 @@ impl Options {
         }
 
         let color = config::parse_color(&matches);
-        let (json_rendered, _artifacts) = config::parse_json(&matches);
+        let config::JsonConfig { json_rendered, json_unused_externs, .. } =
+            config::parse_json(&matches);
         let error_format = config::parse_error_format(&matches, color, json_rendered);
 
-        let codegen_options = build_codegen_options(matches, error_format);
-        let debugging_opts = build_debugging_options(matches, error_format);
+        let codegen_options = CodegenOptions::build(matches, error_format);
+        let debugging_opts = DebuggingOptions::build(matches, error_format);
 
         let diag = new_handler(error_format, None, &debugging_opts);
 
         // check for deprecated options
         check_deprecated_options(&matches, &diag);
+
+        let mut emit = Vec::new();
+        for list in matches.opt_strs("emit") {
+            for kind in list.split(',') {
+                match kind.parse() {
+                    Ok(kind) => emit.push(kind),
+                    Err(()) => {
+                        diag.err(&format!("unrecognized emission type: {}", kind));
+                        return Err(1);
+                    }
+                }
+            }
+        }
+
+        // check for `--output-format=json`
+        if !matches!(matches.opt_str("output-format").as_deref(), None | Some("html"))
+            && !matches.opt_present("show-coverage")
+            && !nightly_options::is_unstable_enabled(matches)
+        {
+            rustc_session::early_error(
+                error_format,
+                "the -Z unstable-options flag must be passed to enable --output-format for documentation generation (see https://github.com/rust-lang/rust/issues/76578)",
+            );
+        }
 
         let to_check = matches.opt_strs("check-theme");
         if !to_check.is_empty() {
@@ -410,6 +463,12 @@ impl Options {
             test_args.iter().flat_map(|s| s.split_whitespace()).map(|s| s.to_string()).collect();
 
         let should_test = matches.opt_present("test");
+        let no_run = matches.opt_present("no-run");
+
+        if !should_test && no_run {
+            diag.err("the `--test` flag must be passed to enable `--no-run`");
+            return Err(1);
+        }
 
         let output =
             matches.opt_str("o").map(|s| PathBuf::from(&s)).unwrap_or_else(|| PathBuf::from("doc"));
@@ -438,7 +497,9 @@ impl Options {
                     return Err(1);
                 }
                 if theme_file.extension() != Some(OsStr::new("css")) {
-                    diag.struct_err(&format!("invalid argument: \"{}\"", theme_s)).emit();
+                    diag.struct_err(&format!("invalid argument: \"{}\"", theme_s))
+                        .help("arguments to --theme must have a .css extension")
+                        .emit();
                     return Err(1);
                 }
                 let (success, ret) = theme::test_theme_against(&theme_file, &paths, &diag);
@@ -461,20 +522,9 @@ impl Options {
             }
         }
 
-        let edition = if let Some(e) = matches.opt_str("edition") {
-            match e.parse() {
-                Ok(e) => e,
-                Err(_) => {
-                    diag.struct_err("could not parse edition").emit();
-                    return Err(1);
-                }
-            }
-        } else {
-            DEFAULT_EDITION
-        };
+        let edition = config::parse_crate_edition(&matches);
 
         let mut id_map = html::markdown::IdMap::new();
-        id_map.populate(html::render::initial_ids());
         let external_html = match ExternalHtml::load(
             &matches.opt_strs("html-in-header"),
             &matches.opt_strs("html-before-content"),
@@ -507,14 +557,7 @@ impl Options {
             }
         }
 
-        let target =
-            matches.opt_str("target").map_or(TargetTriple::from_triple(host_triple()), |target| {
-                if target.ends_with(".json") {
-                    TargetTriple::TargetPath(PathBuf::from(target))
-                } else {
-                    TargetTriple::TargetTriple(target)
-                }
-            });
+        let target = parse_target_triple(matches, error_format);
 
         let show_coverage = matches.opt_present("show-coverage");
 
@@ -537,28 +580,22 @@ impl Options {
 
         let output_format = match matches.opt_str("output-format") {
             Some(s) => match OutputFormat::try_from(s.as_str()) {
-                Ok(o) => {
-                    if o.is_json()
-                        && !(show_coverage || nightly_options::match_is_nightly_build(matches))
-                    {
-                        diag.struct_err("json output format isn't supported for doc generation")
-                            .emit();
-                        return Err(1);
-                    } else if !o.is_json() && show_coverage {
+                Ok(out_fmt) => {
+                    if !out_fmt.is_json() && show_coverage {
                         diag.struct_err(
                             "html output format isn't supported for the --show-coverage option",
                         )
                         .emit();
                         return Err(1);
                     }
-                    Some(o)
+                    out_fmt
                 }
                 Err(e) => {
                     diag.struct_err(&e).emit();
                     return Err(1);
                 }
             },
-            None => None,
+            None => OutputFormat::default(),
         };
         let crate_name = matches.opt_str("crate-name");
         let proc_macro_crate = crate_types.contains(&CrateType::ProcMacro);
@@ -575,6 +612,7 @@ impl Options {
         let enable_index_page = matches.opt_present("enable-index-page") || index_page.is_some();
         let static_root_path = matches.opt_str("static-root-path");
         let generate_search_filter = !matches.opt_present("disable-per-crate-search");
+        let test_run_directory = matches.opt_str("test-run-directory").map(PathBuf::from);
         let persist_doctests = matches.opt_str("persist-doctests").map(PathBuf::from);
         let test_builder = matches.opt_str("test-builder").map(PathBuf::from);
         let codegen_options_strs = matches.opt_strs("C");
@@ -587,6 +625,8 @@ impl Options {
         let document_private = matches.opt_present("document-private-items");
         let document_hidden = matches.opt_present("document-hidden-items");
         let run_check = matches.opt_present("check");
+        let generate_redirect_map = matches.opt_present("generate-redirect-map");
+        let show_type_layout = matches.opt_present("show-type-layout");
 
         let (lint_opts, describe_lints, lint_cap) = get_cmd_lint_options(matches, error_format);
 
@@ -616,12 +656,14 @@ impl Options {
             display_warnings,
             show_coverage,
             crate_version,
+            test_run_directory,
             persist_doctests,
             runtool,
             runtool_args,
             enable_per_target_ignores,
             test_builder,
             run_check,
+            no_run,
             render_options: RenderOptions {
                 output,
                 external_html,
@@ -643,12 +685,16 @@ impl Options {
                 generate_search_filter,
                 document_private,
                 document_hidden,
+                generate_redirect_map,
+                show_type_layout,
                 unstable_features: rustc_feature::UnstableFeatures::from_environment(
                     crate_name.as_deref(),
                 ),
+                emit,
             },
             crate_name,
             output_format,
+            json_unused_externs,
         })
     }
 
@@ -660,19 +706,12 @@ impl Options {
 
 /// Prints deprecation warnings for deprecated options
 fn check_deprecated_options(matches: &getopts::Matches, diag: &rustc_errors::Handler) {
-    let deprecated_flags = ["input-format", "output-format", "no-defaults", "passes"];
+    let deprecated_flags = ["input-format", "no-defaults", "passes"];
 
     for flag in deprecated_flags.iter() {
         if matches.opt_present(flag) {
-            if *flag == "output-format"
-                && (matches.opt_present("show-coverage")
-                    || nightly_options::match_is_nightly_build(matches))
-            {
-                continue;
-            }
-            let mut err =
-                diag.struct_warn(&format!("the '{}' flag is considered deprecated", flag));
-            err.warn(
+            let mut err = diag.struct_warn(&format!("the `{}` flag is deprecated", flag));
+            err.note(
                 "see issue #44136 <https://github.com/rust-lang/rust/issues/44136> \
                  for more information",
             );

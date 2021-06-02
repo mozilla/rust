@@ -116,11 +116,12 @@ use crate::util::pretty;
 use crate::util::spanview::{self, SpanViewable};
 
 use rustc_data_structures::fx::FxHashMap;
-use rustc_index::vec::Idx;
 use rustc_middle::mir::coverage::*;
 use rustc_middle::mir::{self, BasicBlock, TerminatorKind};
 use rustc_middle::ty::TyCtxt;
+use rustc_span::Span;
 
+use std::iter;
 use std::lazy::SyncOnceCell;
 
 pub const NESTED_INDENT: &str = "    ";
@@ -130,7 +131,7 @@ const RUSTC_COVERAGE_DEBUG_OPTIONS: &str = "RUSTC_COVERAGE_DEBUG_OPTIONS";
 pub(super) fn debug_options<'a>() -> &'a DebugOptions {
     static DEBUG_OPTIONS: SyncOnceCell<DebugOptions> = SyncOnceCell::new();
 
-    &DEBUG_OPTIONS.get_or_init(|| DebugOptions::from_env())
+    &DEBUG_OPTIONS.get_or_init(DebugOptions::from_env)
 }
 
 /// Parses and maintains coverage-specific debug options captured from the environment variable
@@ -285,10 +286,8 @@ impl DebugCounters {
                 ),
             };
             counters
-                .insert(id, DebugCounter::new(counter_kind.clone(), some_block_label))
-                .expect_none(
-                    "attempt to add the same counter_kind to DebugCounters more than once",
-                );
+                .try_insert(id, DebugCounter::new(counter_kind.clone(), some_block_label))
+                .expect("attempt to add the same counter_kind to DebugCounters more than once");
         }
     }
 
@@ -430,7 +429,7 @@ impl GraphvizData {
         {
             bcb_to_coverage_spans_with_counters
                 .entry(bcb)
-                .or_insert_with(|| Vec::new())
+                .or_insert_with(Vec::new)
                 .push((coverage_span.clone(), counter_kind.clone()));
         }
     }
@@ -456,7 +455,7 @@ impl GraphvizData {
         if let Some(bcb_to_dependency_counters) = self.some_bcb_to_dependency_counters.as_mut() {
             bcb_to_dependency_counters
                 .entry(bcb)
-                .or_insert_with(|| Vec::new())
+                .or_insert_with(Vec::new)
                 .push(counter_kind.clone());
         }
     }
@@ -479,9 +478,9 @@ impl GraphvizData {
         counter_kind: &CoverageKind,
     ) {
         if let Some(edge_to_counter) = self.some_edge_to_counter.as_mut() {
-            edge_to_counter.insert((from_bcb, to_bb), counter_kind.clone()).expect_none(
-                "invalid attempt to insert more than one edge counter for the same edge",
-            );
+            edge_to_counter
+                .try_insert((from_bcb, to_bb), counter_kind.clone())
+                .expect("invalid attempt to insert more than one edge counter for the same edge");
         }
     }
 
@@ -527,8 +526,8 @@ impl UsedExpressions {
     pub fn add_expression_operands(&mut self, expression: &CoverageKind) {
         if let Some(used_expression_operands) = self.some_used_expression_operands.as_mut() {
             if let CoverageKind::Expression { id, lhs, rhs, .. } = *expression {
-                used_expression_operands.entry(lhs).or_insert_with(|| Vec::new()).push(id);
-                used_expression_operands.entry(rhs).or_insert_with(|| Vec::new()).push(id);
+                used_expression_operands.entry(lhs).or_insert_with(Vec::new).push(id);
+                used_expression_operands.entry(rhs).or_insert_with(Vec::new).push(id);
             }
         }
     }
@@ -637,6 +636,7 @@ pub(super) fn dump_coverage_spanview(
     mir_body: &mir::Body<'tcx>,
     basic_coverage_blocks: &CoverageGraph,
     pass_name: &str,
+    body_span: Span,
     coverage_spans: &Vec<CoverageSpan>,
 ) {
     let mir_source = mir_body.source;
@@ -648,7 +648,7 @@ pub(super) fn dump_coverage_spanview(
     let crate_name = tcx.crate_name(def_id.krate);
     let item_name = tcx.def_path(def_id).to_filename_friendly_no_crate();
     let title = format!("{}.{} - Coverage Spans", crate_name, item_name);
-    spanview::write_document(tcx, def_id, span_viewables, &title, &mut file)
+    spanview::write_document(tcx, body_span, span_viewables, &title, &mut file)
         .expect("Unexpected IO error dumping coverage spans as HTML");
 }
 
@@ -705,9 +705,7 @@ pub(super) fn dump_coverage_graphviz(
         let edge_counters = from_terminator
             .successors()
             .map(|&successor_bb| graphviz_data.get_edge_counter(from_bcb, successor_bb));
-        edge_labels
-            .iter()
-            .zip(edge_counters)
+        iter::zip(&edge_labels, edge_counters)
             .map(|(label, some_counter)| {
                 if let Some(counter) = some_counter {
                     format!("{}\n{}", label, debug_counters.format_counter(counter))
@@ -819,7 +817,7 @@ fn bcb_to_string_sections(
     sections
 }
 
-/// Returns a simple string representation of a `TerminatorKind` variant, indenpendent of any
+/// Returns a simple string representation of a `TerminatorKind` variant, independent of any
 /// values it might hold.
 pub(super) fn term_type(kind: &TerminatorKind<'tcx>) -> &'static str {
     match kind {

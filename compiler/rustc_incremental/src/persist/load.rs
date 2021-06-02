@@ -1,12 +1,11 @@
 //! Code to save/load the dep-graph from files.
 
 use rustc_data_structures::fx::FxHashMap;
-use rustc_hir::definitions::Definitions;
-use rustc_middle::dep_graph::{PreviousDepGraph, SerializedDepGraph, WorkProduct, WorkProductId};
+use rustc_hir::definitions::DefPathTable;
+use rustc_middle::dep_graph::{SerializedDepGraph, WorkProduct, WorkProductId};
 use rustc_middle::ty::query::OnDiskCache;
-use rustc_middle::ty::TyCtxt;
 use rustc_serialize::opaque::Decoder;
-use rustc_serialize::Decodable as RustcDecodable;
+use rustc_serialize::Decodable;
 use rustc_session::Session;
 use std::path::Path;
 
@@ -14,14 +13,6 @@ use super::data::*;
 use super::file_format;
 use super::fs::*;
 use super::work_product;
-
-pub fn dep_graph_tcx_init(tcx: TyCtxt<'_>) {
-    if !tcx.dep_graph.is_fully_enabled() {
-        return;
-    }
-
-    tcx.allocate_metadata_dep_nodes();
-}
 
 type WorkProductMap = FxHashMap<WorkProductId, WorkProduct>;
 
@@ -31,8 +22,8 @@ pub enum LoadResult<T> {
     Error { message: String },
 }
 
-impl LoadResult<(PreviousDepGraph, WorkProductMap)> {
-    pub fn open(self, sess: &Session) -> (PreviousDepGraph, WorkProductMap) {
+impl LoadResult<(SerializedDepGraph, WorkProductMap)> {
+    pub fn open(self, sess: &Session) -> (SerializedDepGraph, WorkProductMap) {
         match self {
             LoadResult::Error { message } => {
                 sess.warn(&message);
@@ -93,7 +84,7 @@ impl<T> MaybeAsync<T> {
     }
 }
 
-pub type DepGraphFuture = MaybeAsync<LoadResult<(PreviousDepGraph, WorkProductMap)>>;
+pub type DepGraphFuture = MaybeAsync<LoadResult<(SerializedDepGraph, WorkProductMap)>>;
 
 /// Launch a thread and load the dependency graph in the background.
 pub fn load_dep_graph(sess: &Session) -> DepGraphFuture {
@@ -113,7 +104,7 @@ pub fn load_dep_graph(sess: &Session) -> DepGraphFuture {
     // Fortunately, we just checked that this isn't the case.
     let path = dep_graph_path_from(&sess.incr_comp_session_dir());
     let report_incremental_info = sess.opts.debugging_opts.incremental_info;
-    let expected_hash = sess.opts.dep_tracking_hash();
+    let expected_hash = sess.opts.dep_tracking_hash(false);
 
     let mut prev_work_products = FxHashMap::default();
     let nightly_build = sess.is_nightly_build();
@@ -129,7 +120,7 @@ pub fn load_dep_graph(sess: &Session) -> DepGraphFuture {
             // Decode the list of work_products
             let mut work_product_decoder = Decoder::new(&work_products_data[..], start_pos);
             let work_products: Vec<SerializedWorkProduct> =
-                RustcDecodable::decode(&mut work_product_decoder).unwrap_or_else(|e| {
+                Decodable::decode(&mut work_product_decoder).unwrap_or_else(|e| {
                     let msg = format!(
                         "Error decoding `work-products` from incremental \
                                     compilation session directory: {}",
@@ -179,7 +170,7 @@ pub fn load_dep_graph(sess: &Session) -> DepGraphFuture {
 
                 if prev_commandline_args_hash != expected_hash {
                     if report_incremental_info {
-                        println!(
+                        eprintln!(
                             "[incremental] completely ignoring cache because of \
                                     differing commandline arguments"
                         );
@@ -194,7 +185,7 @@ pub fn load_dep_graph(sess: &Session) -> DepGraphFuture {
                 let dep_graph = SerializedDepGraph::decode(&mut decoder)
                     .expect("Error reading cached dep-graph");
 
-                LoadResult::Ok { data: (PreviousDepGraph::new(dep_graph), prev_work_products) }
+                LoadResult::Ok { data: (dep_graph, prev_work_products) }
             }
         }
     }))
@@ -207,7 +198,7 @@ pub fn load_dep_graph(sess: &Session) -> DepGraphFuture {
 /// creating an empty cache if it could not be loaded.
 pub fn load_query_result_cache<'a>(
     sess: &'a Session,
-    definitions: &Definitions,
+    def_path_table: &DefPathTable,
 ) -> Option<OnDiskCache<'a>> {
     if sess.opts.incremental.is_none() {
         return None;
@@ -221,7 +212,7 @@ pub fn load_query_result_cache<'a>(
         sess.is_nightly_build(),
     ) {
         LoadResult::Ok { data: (bytes, start_pos) } => {
-            Some(OnDiskCache::new(sess, bytes, start_pos, definitions))
+            Some(OnDiskCache::new(sess, bytes, start_pos, def_path_table))
         }
         _ => Some(OnDiskCache::new_empty(sess.source_map())),
     }
