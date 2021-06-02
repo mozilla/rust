@@ -10,7 +10,8 @@
 #![feature(bool_to_option)]
 #![feature(iter_zip)]
 #![feature(once_cell)]
-#![cfg_attr(bootstrap, feature(or_patterns))]
+#![feature(min_specialization)]
+#![feature(trusted_step)]
 #![recursion_limit = "256"]
 
 #[macro_use]
@@ -19,6 +20,7 @@ extern crate tracing;
 extern crate rustc_middle;
 
 mod build;
+mod check_unsafety;
 mod lints;
 pub mod thir;
 
@@ -28,4 +30,7 @@ pub fn provide(providers: &mut Providers) {
     providers.check_match = thir::pattern::check_match;
     providers.lit_to_const = thir::constant::lit_to_const;
     providers.mir_built = build::mir_built;
+    providers.thir_check_unsafety = check_unsafety::thir_check_unsafety;
+    providers.thir_check_unsafety_for_const_arg = check_unsafety::thir_check_unsafety_for_const_arg;
+    providers.thir_body = thir::cx::thir_body;
 }

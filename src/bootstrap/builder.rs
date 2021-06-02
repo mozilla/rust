@@ -369,7 +369,8 @@ impl<'a> Builder<'a> {
                 tool::Rustfmt,
                 tool::Miri,
                 tool::CargoMiri,
-                native::Lld
+                native::Lld,
+                native::CrtBeginEnd
             ),
             Kind::Check | Kind::Clippy { .. } | Kind::Fix | Kind::Format => describe!(
                 check::Std,
@@ -377,6 +378,9 @@ impl<'a> Builder<'a> {
                 check::Rustdoc,
                 check::CodegenBackend,
                 check::Clippy,
+                check::Miri,
+                check::Rls,
+                check::Rustfmt,
                 check::Bootstrap
             ),
             Kind::Test => describe!(

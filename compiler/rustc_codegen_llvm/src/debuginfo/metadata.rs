@@ -760,12 +760,12 @@ fn hex_encode(data: &[u8]) -> String {
 }
 
 pub fn file_metadata(cx: &CodegenCx<'ll, '_>, source_file: &SourceFile) -> &'ll DIFile {
-    debug!("file_metadata: file_name: {}", source_file.name);
+    debug!("file_metadata: file_name: {:?}", source_file.name);
 
     let hash = Some(&source_file.src_hash);
-    let file_name = Some(source_file.name.to_string());
+    let file_name = Some(source_file.name.prefer_remapped().to_string());
     let directory = if source_file.is_real_file() && !source_file.is_imported() {
-        Some(cx.sess().working_dir.0.to_string_lossy().to_string())
+        Some(cx.sess().working_dir.to_string_lossy(false).to_string())
     } else {
         // If the path comes from an upstream crate we assume it has been made
         // independent of the compiler's working directory one way or another.
@@ -993,11 +993,12 @@ pub fn compile_unit_metadata(
     let producer = format!("clang LLVM ({})", rustc_producer);
 
     let name_in_debuginfo = name_in_debuginfo.to_string_lossy();
-    let work_dir = tcx.sess.working_dir.0.to_string_lossy();
+    let work_dir = tcx.sess.working_dir.to_string_lossy(false);
     let flags = "\0";
-    let out_dir = &tcx.output_filenames(LOCAL_CRATE).out_directory;
+    let output_filenames = tcx.output_filenames(());
+    let out_dir = &output_filenames.out_directory;
     let split_name = if tcx.sess.target_can_use_split_dwarf() {
-        tcx.output_filenames(LOCAL_CRATE)
+        output_filenames
             .split_dwarf_path(tcx.sess.split_debuginfo(), Some(codegen_unit_name))
             .map(|f| out_dir.join(f))
     } else {
@@ -1058,15 +1059,12 @@ pub fn compile_unit_metadata(
         if tcx.sess.opts.debugging_opts.profile {
             let cu_desc_metadata =
                 llvm::LLVMRustMetadataAsValue(debug_context.llcontext, unit_metadata);
-            let default_gcda_path = &tcx.output_filenames(LOCAL_CRATE).with_extension("gcda");
+            let default_gcda_path = &output_filenames.with_extension("gcda");
             let gcda_path =
                 tcx.sess.opts.debugging_opts.profile_emit.as_ref().unwrap_or(default_gcda_path);
 
             let gcov_cu_info = [
-                path_to_mdstring(
-                    debug_context.llcontext,
-                    &tcx.output_filenames(LOCAL_CRATE).with_extension("gcno"),
-                ),
+                path_to_mdstring(debug_context.llcontext, &output_filenames.with_extension("gcno")),
                 path_to_mdstring(debug_context.llcontext, &gcda_path),
                 cu_desc_metadata,
             ];

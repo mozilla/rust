@@ -31,7 +31,6 @@
 //! in the HIR, especially for multiple identifiers.
 
 #![feature(crate_visibility_modifier)]
-#![cfg_attr(bootstrap, feature(or_patterns))]
 #![feature(box_patterns)]
 #![feature(iter_zip)]
 #![recursion_limit = "256"]
@@ -44,7 +43,7 @@ use rustc_ast::walk_list;
 use rustc_ast::{self as ast, *};
 use rustc_ast_pretty::pprust;
 use rustc_data_structures::captures::Captures;
-use rustc_data_structures::fx::FxHashSet;
+use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::sync::Lrc;
 use rustc_errors::{struct_span_err, Applicability};
 use rustc_hir as hir;
@@ -62,7 +61,7 @@ use rustc_span::edition::Edition;
 use rustc_span::hygiene::ExpnId;
 use rustc_span::source_map::{respan, DesugaringKind};
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
-use rustc_span::Span;
+use rustc_span::{Span, DUMMY_SP};
 use rustc_target::spec::abi::Abi;
 
 use smallvec::{smallvec, SmallVec};
@@ -77,6 +76,7 @@ macro_rules! arena_vec {
     });
 }
 
+mod asm;
 mod expr;
 mod item;
 mod pat;
@@ -198,7 +198,7 @@ pub trait ResolverAstLowering {
 
     fn next_node_id(&mut self) -> NodeId;
 
-    fn trait_map(&self) -> &NodeMap<Vec<hir::TraitCandidate>>;
+    fn take_trait_map(&mut self) -> NodeMap<Vec<hir::TraitCandidate>>;
 
     fn opt_local_def_id(&self, node: NodeId) -> Option<LocalDefId>;
 
@@ -331,7 +331,7 @@ pub fn lower_crate<'a, 'hir>(
         lifetimes_to_define: Vec::new(),
         is_collecting_in_band_lifetimes: false,
         in_scope_lifetimes: Vec::new(),
-        allow_try_trait: Some([sym::try_trait][..].into()),
+        allow_try_trait: Some([sym::control_flow_enum, sym::try_trait_v2][..].into()),
         allow_gen_future: Some([sym::gen_future][..].into()),
     }
     .lower_crate(krate)
@@ -501,14 +501,13 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         let proc_macros =
             c.proc_macros.iter().map(|id| self.node_id_to_hir_id[*id].unwrap()).collect();
 
-        let trait_map = self
-            .resolver
-            .trait_map()
-            .iter()
-            .filter_map(|(&k, v)| {
-                self.node_id_to_hir_id.get(k).and_then(|id| id.as_ref()).map(|id| (*id, v.clone()))
-            })
-            .collect();
+        let mut trait_map: FxHashMap<_, FxHashMap<_, _>> = FxHashMap::default();
+        for (k, v) in self.resolver.take_trait_map().into_iter() {
+            if let Some(Some(hir_id)) = self.node_id_to_hir_id.get(k) {
+                let map = trait_map.entry(hir_id.owner).or_default();
+                map.insert(hir_id.local_id, v.into_boxed_slice());
+            }
+        }
 
         let mut def_id_to_hir_id = IndexVec::default();
 
@@ -1266,6 +1265,15 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         let kind = match t.kind {
             TyKind::Infer => hir::TyKind::Infer,
             TyKind::Err => hir::TyKind::Err,
+            // FIXME(unnamed_fields): IMPLEMENTATION IN PROGRESS
+            TyKind::AnonymousStruct(ref _fields, _recovered) => {
+                self.sess.struct_span_err(t.span, "anonymous structs are unimplemented").emit();
+                hir::TyKind::Err
+            }
+            TyKind::AnonymousUnion(ref _fields, _recovered) => {
+                self.sess.struct_span_err(t.span, "anonymous unions are unimplemented").emit();
+                hir::TyKind::Err
+            }
             TyKind::Slice(ref ty) => hir::TyKind::Slice(self.lower_ty(ty, itctx)),
             TyKind::Ptr(ref mt) => hir::TyKind::Ptr(self.lower_mt(mt, itctx)),
             TyKind::Rptr(ref region, ref mt) => {
@@ -2084,6 +2092,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             args: &[],
             bindings: arena_vec![self; self.output_ty_binding(span, output_ty)],
             parenthesized: false,
+            span_ext: DUMMY_SP,
         });
 
         hir::GenericBound::LangItemTrait(
@@ -2479,14 +2488,14 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         self.pat(span, hir::PatKind::Lit(expr))
     }
 
-    fn pat_ok(&mut self, span: Span, pat: &'hir hir::Pat<'hir>) -> &'hir hir::Pat<'hir> {
+    fn pat_cf_continue(&mut self, span: Span, pat: &'hir hir::Pat<'hir>) -> &'hir hir::Pat<'hir> {
         let field = self.single_pat_field(span, pat);
-        self.pat_lang_item_variant(span, hir::LangItem::ResultOk, field)
+        self.pat_lang_item_variant(span, hir::LangItem::ControlFlowContinue, field)
     }
 
-    fn pat_err(&mut self, span: Span, pat: &'hir hir::Pat<'hir>) -> &'hir hir::Pat<'hir> {
+    fn pat_cf_break(&mut self, span: Span, pat: &'hir hir::Pat<'hir>) -> &'hir hir::Pat<'hir> {
         let field = self.single_pat_field(span, pat);
-        self.pat_lang_item_variant(span, hir::LangItem::ResultErr, field)
+        self.pat_lang_item_variant(span, hir::LangItem::ControlFlowBreak, field)
     }
 
     fn pat_some(&mut self, span: Span, pat: &'hir hir::Pat<'hir>) -> &'hir hir::Pat<'hir> {
@@ -2788,6 +2797,7 @@ struct GenericArgsCtor<'hir> {
     args: SmallVec<[hir::GenericArg<'hir>; 4]>,
     bindings: &'hir [hir::TypeBinding<'hir>],
     parenthesized: bool,
+    span: Span,
 }
 
 impl<'hir> GenericArgsCtor<'hir> {
@@ -2800,6 +2810,7 @@ impl<'hir> GenericArgsCtor<'hir> {
             args: arena.alloc_from_iter(self.args),
             bindings: self.bindings,
             parenthesized: self.parenthesized,
+            span_ext: self.span,
         }
     }
 }

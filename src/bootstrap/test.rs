@@ -319,15 +319,9 @@ impl Step for Rustfmt {
         let host = self.host;
         let compiler = builder.compiler(stage, host);
 
-        let build_result = builder.ensure(tool::Rustfmt {
-            compiler,
-            target: self.host,
-            extra_features: Vec::new(),
-        });
-        if build_result.is_none() {
-            eprintln!("failed to test rustfmt: could not build");
-            return;
-        }
+        builder
+            .ensure(tool::Rustfmt { compiler, target: self.host, extra_features: Vec::new() })
+            .expect("in-tree tool");
 
         let mut cargo = tool::prepare_tool_cargo(
             builder,
@@ -346,9 +340,7 @@ impl Step for Rustfmt {
 
         cargo.add_rustc_lib_path(builder, compiler);
 
-        if try_run(builder, &mut cargo.into()) {
-            builder.save_toolstate("rustfmt", ToolState::TestPass);
-        }
+        builder.run(&mut cargo.into());
     }
 }
 
@@ -782,6 +774,24 @@ impl Step for RustdocJSNotStd {
     }
 }
 
+fn check_if_browser_ui_test_is_installed_global(npm: &Path, global: bool) -> bool {
+    let mut command = Command::new(&npm);
+    command.arg("list").arg("--depth=0");
+    if global {
+        command.arg("--global");
+    }
+    let lines = command
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        .unwrap_or(String::new());
+    lines.contains(&" browser-ui-test@")
+}
+
+fn check_if_browser_ui_test_is_installed(npm: &Path) -> bool {
+    check_if_browser_ui_test_is_installed_global(npm, false)
+        || check_if_browser_ui_test_is_installed_global(npm, true)
+}
+
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct RustdocGUI {
     pub target: TargetSelection,
@@ -794,7 +804,17 @@ impl Step for RustdocGUI {
     const ONLY_HOSTS: bool = true;
 
     fn should_run(run: ShouldRun<'_>) -> ShouldRun<'_> {
-        run.path("src/test/rustdoc-gui")
+        let builder = run.builder;
+        let run = run.path("src/test/rustdoc-gui");
+        run.default_condition(
+            builder.config.nodejs.is_some()
+                && builder
+                    .config
+                    .npm
+                    .as_ref()
+                    .map(|p| check_if_browser_ui_test_is_installed(p))
+                    .unwrap_or(false),
+        )
     }
 
     fn make_run(run: RunConfig<'_>) {
@@ -803,45 +823,54 @@ impl Step for RustdocGUI {
     }
 
     fn run(self, builder: &Builder<'_>) {
-        if let (Some(nodejs), Some(npm)) = (&builder.config.nodejs, &builder.config.npm) {
-            builder.ensure(compile::Std { compiler: self.compiler, target: self.target });
+        let nodejs = builder.config.nodejs.as_ref().expect("nodejs isn't available");
+        let npm = builder.config.npm.as_ref().expect("npm isn't available");
 
-            // The goal here is to check if the necessary packages are installed, and if not, we
-            // display a warning and move on.
-            let mut command = Command::new(&npm);
-            command.arg("list").arg("--depth=0");
-            let lines = command
-                .output()
-                .map(|output| String::from_utf8_lossy(&output.stdout).to_string())
-                .unwrap_or(String::new());
-            if !lines.contains(&" browser-ui-test@") {
-                println!(
-                    "warning: rustdoc-gui test suite cannot be run because npm `browser-ui-test` \
-                     dependency is missing",
-                );
-                println!(
-                    "If you want to install the `{0}` dependency, run `npm install {0}`",
-                    "browser-ui-test",
-                );
-                return;
-            }
+        builder.ensure(compile::Std { compiler: self.compiler, target: self.target });
 
-            let out_dir = builder.test_out(self.target).join("rustdoc-gui");
-            let mut command = builder.rustdoc_cmd(self.compiler);
-            command.arg("src/test/rustdoc-gui/lib.rs").arg("-o").arg(&out_dir);
-            builder.run(&mut command);
-
-            let mut command = Command::new(&nodejs);
-            command
-                .arg("src/tools/rustdoc-gui/tester.js")
-                .arg("--doc-folder")
-                .arg(out_dir.join("test_docs"))
-                .arg("--tests-folder")
-                .arg("src/test/rustdoc-gui");
-            builder.run(&mut command);
-        } else {
-            builder.info("No nodejs found, skipping \"src/test/rustdoc-gui\" tests");
+        // The goal here is to check if the necessary packages are installed, and if not, we
+        // panic.
+        if !check_if_browser_ui_test_is_installed(&npm) {
+            eprintln!(
+                "error: rustdoc-gui test suite cannot be run because npm `browser-ui-test` \
+                 dependency is missing",
+            );
+            eprintln!(
+                "If you want to install the `{0}` dependency, run `npm install {0}`",
+                "browser-ui-test",
+            );
+            panic!("Cannot run rustdoc-gui tests");
         }
+
+        let out_dir = builder.test_out(self.target).join("rustdoc-gui");
+
+        // We remove existing folder to be sure there won't be artifacts remaining.
+        let _ = fs::remove_dir_all(&out_dir);
+
+        let mut nb_generated = 0;
+        // We generate docs for the libraries present in the rustdoc-gui's src folder.
+        let libs_dir = builder.build.src.join("src/test/rustdoc-gui/src");
+        for entry in libs_dir.read_dir().expect("read_dir call failed") {
+            let entry = entry.expect("invalid entry");
+            let path = entry.path();
+            if path.extension().map(|e| e == "rs").unwrap_or(false) {
+                let mut command = builder.rustdoc_cmd(self.compiler);
+                command.arg(path).arg("-o").arg(&out_dir);
+                builder.run(&mut command);
+                nb_generated += 1;
+            }
+        }
+        assert!(nb_generated > 0, "no documentation was generated...");
+
+        // We now run GUI tests.
+        let mut command = Command::new(&nodejs);
+        command
+            .arg(builder.build.src.join("src/tools/rustdoc-gui/tester.js"))
+            .arg("--doc-folder")
+            .arg(out_dir)
+            .arg("--tests-folder")
+            .arg(builder.build.src.join("src/test/rustdoc-gui"));
+        builder.run(&mut command);
     }
 }
 
@@ -889,7 +918,7 @@ help: to skip test's attempt to check tidiness, pass `--exclude src/tools/tidy` 
                 );
                 std::process::exit(1);
             }
-            crate::format::format(&builder.build, !builder.config.cmd.bless());
+            crate::format::format(&builder.build, !builder.config.cmd.bless(), &[]);
         }
     }
 

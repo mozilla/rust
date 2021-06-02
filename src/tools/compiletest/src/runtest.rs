@@ -2327,7 +2327,11 @@ impl<'test> TestCx<'test> {
         // For now, though…
         if let Some(rev) = self.revision {
             let prefixes = format!("CHECK,{}", rev);
-            filecheck.args(&["--check-prefixes", &prefixes]);
+            if self.config.llvm_version.unwrap_or(0) >= 130000 {
+                filecheck.args(&["--allow-unused-prefixes", "--check-prefixes", &prefixes]);
+            } else {
+                filecheck.args(&["--check-prefixes", &prefixes]);
+            }
         }
         self.compose_and_run(filecheck, "", None, None)
     }
@@ -3649,6 +3653,12 @@ impl<'test> TestCx<'test> {
             .unwrap()
             .join("library");
         normalize_path(&src_dir, "$SRC_DIR");
+
+        if let Some(virtual_rust_source_base_dir) =
+            option_env!("CFG_VIRTUAL_RUST_SOURCE_BASE_DIR").map(PathBuf::from)
+        {
+            normalize_path(&virtual_rust_source_base_dir.join("library"), "$SRC_DIR");
+        }
 
         // Paths into the build directory
         let test_build_dir = &self.config.build_base;

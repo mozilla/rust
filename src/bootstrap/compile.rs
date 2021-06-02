@@ -199,8 +199,9 @@ fn copy_self_contained_objects(
                 DependencyType::TargetSelfContained,
             );
         }
+        let crt_path = builder.ensure(native::CrtBeginEnd { target });
         for &obj in &["crtbegin.o", "crtbeginS.o", "crtend.o", "crtendS.o"] {
-            let src = compiler_file(builder, builder.cc(target), target, obj);
+            let src = crt_path.join(obj);
             let target = libdir_self_contained.join(obj);
             builder.copy(&src, &target);
             target_deps.push((target, DependencyType::TargetSelfContained));
@@ -648,6 +649,7 @@ pub fn rustc_cargo_env(builder: &Builder<'_>, cargo: &mut Cargo, target: TargetS
     }
     if builder.config.rustc_parallel {
         cargo.rustflag("--cfg=parallel_compiler");
+        cargo.rustdocflag("--cfg=parallel_compiler");
     }
     if builder.config.rust_verify_llvm_ir {
         cargo.env("RUSTC_VERIFY_LLVM_IR", "1");

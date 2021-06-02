@@ -1066,8 +1066,12 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                 self.future_proof_import(use_tree);
             }
 
-            ItemKind::ExternCrate(..) | ItemKind::MacroDef(..) | ItemKind::GlobalAsm(..) => {
+            ItemKind::ExternCrate(..) | ItemKind::MacroDef(..) => {
                 // do nothing, these are just around to be encoded
+            }
+
+            ItemKind::GlobalAsm(_) => {
+                visit::walk_item(self, item);
             }
 
             ItemKind::MacCall(_) => panic!("unexpanded macro in resolve!"),
@@ -1759,13 +1763,33 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                 // to something unusable as a pattern (e.g., constructor function),
                 // but we still conservatively report an error, see
                 // issues/33118#issuecomment-233962221 for one reason why.
+                let binding = binding.expect("no binding for a ctor or static");
                 self.report_error(
                     ident.span,
-                    ResolutionError::BindingShadowsSomethingUnacceptable(
-                        pat_src.descr(),
-                        ident.name,
-                        binding.expect("no binding for a ctor or static"),
-                    ),
+                    ResolutionError::BindingShadowsSomethingUnacceptable {
+                        shadowing_binding_descr: pat_src.descr(),
+                        name: ident.name,
+                        participle: if binding.is_import() { "imported" } else { "defined" },
+                        article: binding.res().article(),
+                        shadowed_binding_descr: binding.res().descr(),
+                        shadowed_binding_span: binding.span,
+                    },
+                );
+                None
+            }
+            Res::Def(DefKind::ConstParam, def_id) => {
+                // Same as for DefKind::Const above, but here, `binding` is `None`, so we
+                // have to construct the error differently
+                self.report_error(
+                    ident.span,
+                    ResolutionError::BindingShadowsSomethingUnacceptable {
+                        shadowing_binding_descr: pat_src.descr(),
+                        name: ident.name,
+                        participle: "defined",
+                        article: res.article(),
+                        shadowed_binding_descr: res.descr(),
+                        shadowed_binding_span: self.r.opt_span(def_id).expect("const parameter defined outside of local crate"),
+                    }
                 );
                 None
             }
@@ -1935,7 +1959,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                 if ns == ValueNS {
                     let item_name = path.last().unwrap().ident;
                     let traits = self.traits_in_scope(item_name, ns);
-                    self.r.trait_map.insert(id, traits);
+                    self.r.trait_map.as_mut().unwrap().insert(id, traits);
                 }
 
                 if PrimTy::from_name(path[0].ident.name).is_some() {
@@ -2411,12 +2435,12 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                 // the field name so that we can do some nice error reporting
                 // later on in typeck.
                 let traits = self.traits_in_scope(ident, ValueNS);
-                self.r.trait_map.insert(expr.id, traits);
+                self.r.trait_map.as_mut().unwrap().insert(expr.id, traits);
             }
             ExprKind::MethodCall(ref segment, ..) => {
                 debug!("(recording candidate traits for expr) recording traits for {}", expr.id);
                 let traits = self.traits_in_scope(segment.ident, ValueNS);
-                self.r.trait_map.insert(expr.id, traits);
+                self.r.trait_map.as_mut().unwrap().insert(expr.id, traits);
             }
             _ => {
                 // Nothing to do.

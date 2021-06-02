@@ -368,7 +368,7 @@ mod desc {
     pub const parse_target_feature: &str = parse_string;
     pub const parse_wasi_exec_model: &str = "either `command` or `reactor`";
     pub const parse_split_debuginfo: &str =
-        "one of supported split-debuginfo modes (`off` or `dsymutil`)";
+        "one of supported split-debuginfo modes (`off`, `packed`, or `unpacked`)";
 }
 
 mod parse {
@@ -621,9 +621,9 @@ mod parse {
         true
     }
 
-    crate fn parse_linker_flavor(slote: &mut Option<LinkerFlavor>, v: Option<&str>) -> bool {
+    crate fn parse_linker_flavor(slot: &mut Option<LinkerFlavor>, v: Option<&str>) -> bool {
         match v.and_then(LinkerFlavor::from_str) {
-            Some(lf) => *slote = Some(lf),
+            Some(lf) => *slot = Some(lf),
             _ => return false,
         }
         true
@@ -1201,6 +1201,9 @@ options! {
         "whether ELF relocations can be relaxed"),
     relro_level: Option<RelroLevel> = (None, parse_relro_level, [TRACKED],
         "choose which RELRO level to use"),
+    simulate_remapped_rust_src_base: Option<PathBuf> = (None, parse_opt_pathbuf, [TRACKED],
+        "simulate the effect of remap-debuginfo = true at bootstrapping by remapping path \
+        to rust's source base directory. only meant for testing purposes"),
     report_delayed_bugs: bool = (false, parse_bool, [TRACKED],
         "immediately print bugs registered with `delay_span_bug` (default: no)"),
     sanitizer: SanitizerSet = (SanitizerSet::empty(), parse_sanitizers, [TRACKED],
@@ -1251,6 +1254,8 @@ options! {
         "select processor to schedule for (`rustc --print target-cpus` for details)"),
     thinlto: Option<bool> = (None, parse_opt_bool, [TRACKED],
         "enable ThinLTO when possible"),
+    thir_unsafeck: bool = (false, parse_bool, [TRACKED],
+        "use the work-in-progress THIR unsafety checker. NOTE: this is unsound (default: no)"),
     /// We default to 1 here since we want to behave like
     /// a sequential compiler for now. This'll likely be adjusted
     /// in the future. Note that -Zthreads=0 is the way to get

@@ -16,7 +16,6 @@
 #![feature(format_args_capture)]
 #![feature(iter_zip)]
 #![feature(nll)]
-#![cfg_attr(bootstrap, feature(or_patterns))]
 #![recursion_limit = "256"]
 #![allow(rustdoc::private_intra_doc_links)]
 
@@ -234,7 +233,14 @@ enum ResolutionError<'a> {
         /* current */ &'static str,
     ),
     /// Error E0530: `X` bindings cannot shadow `Y`s.
-    BindingShadowsSomethingUnacceptable(&'static str, Symbol, &'a NameBinding<'a>),
+    BindingShadowsSomethingUnacceptable {
+        shadowing_binding_descr: &'static str,
+        name: Symbol,
+        participle: &'static str,
+        article: &'static str,
+        shadowed_binding_descr: &'static str,
+        shadowed_binding_span: Span,
+    },
     /// Error E0128: generic parameters with a default cannot use forward-declared identifiers.
     ForwardDeclaredTyParam, // FIXME(const_generics_defaults)
     /// ERROR E0770: the type of const parameters must not depend on other generic parameters.
@@ -903,7 +909,7 @@ pub struct Resolver<'a> {
     /// `CrateNum` resolutions of `extern crate` items.
     extern_crate_map: FxHashMap<LocalDefId, CrateNum>,
     export_map: ExportMap<LocalDefId>,
-    trait_map: NodeMap<Vec<TraitCandidate>>,
+    trait_map: Option<NodeMap<Vec<TraitCandidate>>>,
 
     /// A map from nodes to anonymous modules.
     /// Anonymous modules are pseudo-modules that are implicitly created around items
@@ -1132,8 +1138,8 @@ impl ResolverAstLowering for Resolver<'_> {
         self.next_node_id()
     }
 
-    fn trait_map(&self) -> &NodeMap<Vec<TraitCandidate>> {
-        &self.trait_map
+    fn take_trait_map(&mut self) -> NodeMap<Vec<TraitCandidate>> {
+        std::mem::replace(&mut self.trait_map, None).unwrap()
     }
 
     fn opt_local_def_id(&self, node: NodeId) -> Option<LocalDefId> {
@@ -1216,7 +1222,7 @@ impl<'a> Resolver<'a> {
         let mut module_map = FxHashMap::default();
         module_map.insert(root_local_def_id, graph_root);
 
-        let definitions = Definitions::new(crate_name, session.local_crate_disambiguator());
+        let definitions = Definitions::new(session.local_stable_crate_id());
         let root = definitions.get_root_def();
 
         let mut visibilities = FxHashMap::default();
@@ -1280,7 +1286,7 @@ impl<'a> Resolver<'a> {
             label_res_map: Default::default(),
             extern_crate_map: Default::default(),
             export_map: FxHashMap::default(),
-            trait_map: Default::default(),
+            trait_map: Some(NodeMap::default()),
             underscore_disambiguator: 0,
             empty_module,
             module_map,
@@ -1770,9 +1776,11 @@ impl<'a> Resolver<'a> {
                     let expn_data = expn_id.expn_data();
                     match expn_data.kind {
                         ExpnKind::Root
-                        | ExpnKind::Macro(MacroKind::Bang | MacroKind::Derive, _) => {
-                            Scope::DeriveHelpersCompat
-                        }
+                        | ExpnKind::Macro {
+                            kind: MacroKind::Bang | MacroKind::Derive,
+                            name: _,
+                            proc_macro: _,
+                        } => Scope::DeriveHelpersCompat,
                         _ => Scope::DeriveHelpers(expn_data.parent),
                     }
                 }

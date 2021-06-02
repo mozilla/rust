@@ -252,7 +252,8 @@ fn test_lints_tracking_hash_different_construction_order() {
         (String::from("d"), Level::Forbid),
     ];
 
-    assert_same_hash(&v1, &v2);
+    // The hash should be order-dependent
+    assert_different_hash(&v1, &v2);
 }
 
 #[test]
@@ -491,9 +492,10 @@ fn test_native_libs_tracking_hash_different_order() {
         },
     ];
 
-    assert_same_hash(&v1, &v2);
-    assert_same_hash(&v1, &v3);
-    assert_same_hash(&v2, &v3);
+    // The hash should be order-dependent
+    assert_different_hash(&v1, &v2);
+    assert_different_hash(&v1, &v3);
+    assert_different_hash(&v2, &v3);
 }
 
 #[test]
@@ -724,6 +726,7 @@ fn test_debugging_options_tracking_hash() {
     tracked!(profile_emit, Some(PathBuf::from("abc")));
     tracked!(relax_elf_relocations, Some(true));
     tracked!(relro_level, Some(RelroLevel::Full));
+    tracked!(simulate_remapped_rust_src_base, Some(PathBuf::from("/rustc/abc")));
     tracked!(report_delayed_bugs, true);
     tracked!(sanitizer, SanitizerSet::ADDRESS);
     tracked!(sanitizer_memory_track_origins, 2);
@@ -735,6 +738,7 @@ fn test_debugging_options_tracking_hash() {
     tracked!(symbol_mangling_version, Some(SymbolManglingVersion::V0));
     tracked!(teach, true);
     tracked!(thinlto, Some(true));
+    tracked!(thir_unsafeck, true);
     tracked!(tune_cpu, Some(String::from("abc")));
     tracked!(tls_model, Some(TlsModel::GeneralDynamic));
     tracked!(trap_unreachable, Some(false));

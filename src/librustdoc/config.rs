@@ -6,8 +6,10 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use rustc_data_structures::fx::FxHashMap;
-use rustc_session::config::{self, parse_crate_types_from_list, parse_externs, CrateType};
-use rustc_session::config::{get_cmd_lint_options, host_triple, nightly_options};
+use rustc_session::config::{
+    self, parse_crate_types_from_list, parse_externs, parse_target_triple, CrateType,
+};
+use rustc_session::config::{get_cmd_lint_options, nightly_options};
 use rustc_session::config::{CodegenOptions, DebuggingOptions, ErrorOutputType, Externs};
 use rustc_session::getopts;
 use rustc_session::lint::Level;
@@ -267,6 +269,8 @@ crate struct RenderOptions {
     crate document_hidden: bool,
     /// If `true`, generate a JSON file in the crate folder instead of HTML redirection files.
     crate generate_redirect_map: bool,
+    /// Show the memory layout of types in the docs.
+    crate show_type_layout: bool,
     crate unstable_features: rustc_feature::UnstableFeatures,
     crate emit: Vec<EmitType>,
 }
@@ -342,13 +346,6 @@ impl Options {
                 }
             }
 
-            return Err(0);
-        }
-
-        if matches.opt_strs("print").iter().any(|opt| opt == "unversioned-files") {
-            for file in crate::html::render::FILES_UNVERSIONED.keys() {
-                println!("{}", file);
-            }
             return Err(0);
         }
 
@@ -560,14 +557,7 @@ impl Options {
             }
         }
 
-        let target =
-            matches.opt_str("target").map_or(TargetTriple::from_triple(host_triple()), |target| {
-                if target.ends_with(".json") {
-                    TargetTriple::TargetPath(PathBuf::from(target))
-                } else {
-                    TargetTriple::TargetTriple(target)
-                }
-            });
+        let target = parse_target_triple(matches, error_format);
 
         let show_coverage = matches.opt_present("show-coverage");
 
@@ -636,6 +626,7 @@ impl Options {
         let document_hidden = matches.opt_present("document-hidden-items");
         let run_check = matches.opt_present("check");
         let generate_redirect_map = matches.opt_present("generate-redirect-map");
+        let show_type_layout = matches.opt_present("show-type-layout");
 
         let (lint_opts, describe_lints, lint_cap) = get_cmd_lint_options(matches, error_format);
 
@@ -695,6 +686,7 @@ impl Options {
                 document_private,
                 document_hidden,
                 generate_redirect_map,
+                show_type_layout,
                 unstable_features: rustc_feature::UnstableFeatures::from_environment(
                     crate_name.as_deref(),
                 ),

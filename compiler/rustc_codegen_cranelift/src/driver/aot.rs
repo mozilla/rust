@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 
+use rustc_ast::{InlineAsmOptions, InlineAsmTemplatePiece};
 use rustc_codegen_ssa::back::linker::LinkerInfo;
 use rustc_codegen_ssa::{CodegenResults, CompiledModule, CrateInfo, ModuleKind};
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
@@ -41,7 +42,7 @@ fn emit_module(
 
     unwind_context.emit(&mut product);
 
-    let tmp_file = tcx.output_filenames(LOCAL_CRATE).temp_path(OutputType::Object, Some(&name));
+    let tmp_file = tcx.output_filenames(()).temp_path(OutputType::Object, Some(&name));
     let obj = product.object.write().unwrap();
     if let Err(err) = std::fs::write(&tmp_file, obj) {
         tcx.sess.fatal(&format!("error writing object file: {}", err));
@@ -72,9 +73,8 @@ fn reuse_workproduct_for_cgu(
     let mut object = None;
     let work_product = cgu.work_product(tcx);
     if let Some(saved_file) = &work_product.saved_file {
-        let obj_out = tcx
-            .output_filenames(LOCAL_CRATE)
-            .temp_path(OutputType::Object, Some(&cgu.name().as_str()));
+        let obj_out =
+            tcx.output_filenames(()).temp_path(OutputType::Object, Some(&cgu.name().as_str()));
         object = Some(obj_out.clone());
         let source_file = rustc_incremental::in_incr_comp_dir(&incr_comp_session_dir, &saved_file);
         if let Err(err) = rustc_fs_util::link_or_copy(&source_file, &obj_out) {
@@ -125,16 +125,32 @@ fn module_codegen(
             MonoItem::Static(def_id) => crate::constant::codegen_static(tcx, &mut module, def_id),
             MonoItem::GlobalAsm(item_id) => {
                 let item = cx.tcx.hir().item(item_id);
-                if let rustc_hir::ItemKind::GlobalAsm(rustc_hir::GlobalAsm { asm }) = item.kind {
-                    cx.global_asm.push_str(&*asm.as_str());
-                    cx.global_asm.push_str("\n\n");
+                if let rustc_hir::ItemKind::GlobalAsm(asm) = item.kind {
+                    if !asm.options.contains(InlineAsmOptions::ATT_SYNTAX) {
+                        cx.global_asm.push_str("\n.intel_syntax noprefix\n");
+                    } else {
+                        cx.global_asm.push_str("\n.att_syntax\n");
+                    }
+                    for piece in asm.template {
+                        match *piece {
+                            InlineAsmTemplatePiece::String(ref s) => cx.global_asm.push_str(s),
+                            InlineAsmTemplatePiece::Placeholder { .. } => todo!(),
+                        }
+                    }
+                    cx.global_asm.push_str("\n.att_syntax\n\n");
                 } else {
                     bug!("Expected GlobalAsm found {:?}", item);
                 }
             }
         }
     }
-    crate::main_shim::maybe_create_entry_wrapper(tcx, &mut module, &mut cx.unwind_context, false);
+    crate::main_shim::maybe_create_entry_wrapper(
+        tcx,
+        &mut module,
+        &mut cx.unwind_context,
+        false,
+        cgu.is_primary(),
+    );
 
     let debug_context = cx.debug_context;
     let unwind_context = cx.unwind_context;
@@ -179,7 +195,7 @@ pub(crate) fn run_aot(
     let mut work_products = FxHashMap::default();
 
     let cgus = if tcx.sess.opts.output_types.should_codegen() {
-        tcx.collect_and_partition_mono_items(LOCAL_CRATE).1
+        tcx.collect_and_partition_mono_items(()).1
     } else {
         // If only `--emit metadata` is used, we shouldn't perform any codegen.
         // Also `tcx.collect_and_partition_mono_items` may panic in that case.
@@ -264,9 +280,8 @@ pub(crate) fn run_aot(
                 .as_str()
                 .to_string();
 
-            let tmp_file = tcx
-                .output_filenames(LOCAL_CRATE)
-                .temp_path(OutputType::Metadata, Some(&metadata_cgu_name));
+            let tmp_file =
+                tcx.output_filenames(()).temp_path(OutputType::Metadata, Some(&metadata_cgu_name));
 
             let obj = crate::backend::with_object(tcx.sess, &metadata_cgu_name, |object| {
                 crate::metadata::write_metadata(tcx, object);
@@ -298,7 +313,7 @@ pub(crate) fn run_aot(
             metadata_module,
             metadata,
             windows_subsystem,
-            linker_info: LinkerInfo::new(tcx),
+            linker_info: LinkerInfo::new(tcx, crate::target_triple(tcx.sess).to_string()),
             crate_info: CrateInfo::new(tcx),
         },
         work_products,
@@ -341,8 +356,7 @@ fn codegen_global_asm(tcx: TyCtxt<'_>, cgu_name: &str, global_asm: &str) {
         .collect::<Vec<_>>()
         .join("\n");
 
-    let output_object_file =
-        tcx.output_filenames(LOCAL_CRATE).temp_path(OutputType::Object, Some(cgu_name));
+    let output_object_file = tcx.output_filenames(()).temp_path(OutputType::Object, Some(cgu_name));
 
     // Assemble `global_asm`
     let global_asm_object_file = add_file_stem_postfix(output_object_file.clone(), ".asm");

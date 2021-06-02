@@ -419,6 +419,7 @@ fn need_pre_lto_bitcode_for_incr_comp(sess: &Session) -> bool {
 pub fn start_async_codegen<B: ExtraBackendMethods>(
     backend: B,
     tcx: TyCtxt<'_>,
+    target_cpu: String,
     metadata: EncodedMetadata,
     total_cgus: usize,
 ) -> OngoingCodegen<B> {
@@ -441,7 +442,7 @@ pub fn start_async_codegen<B: ExtraBackendMethods>(
         subsystem.to_string()
     });
 
-    let linker_info = LinkerInfo::new(tcx);
+    let linker_info = LinkerInfo::new(tcx, target_cpu);
     let crate_info = CrateInfo::new(tcx);
 
     let regular_config =
@@ -481,7 +482,7 @@ pub fn start_async_codegen<B: ExtraBackendMethods>(
         codegen_worker_receive,
         shared_emitter_main,
         future: coordinator_thread,
-        output_filenames: tcx.output_filenames(LOCAL_CRATE),
+        output_filenames: tcx.output_filenames(()),
     }
 }
 
@@ -1041,7 +1042,7 @@ fn start_executing_work<B: ExtraBackendMethods>(
         // If we know that we won’t be doing codegen, create target machines without optimisation.
         config::OptLevel::No
     } else {
-        tcx.backend_optimization_level(LOCAL_CRATE)
+        tcx.backend_optimization_level(())
     };
     let cgcx = CodegenContext::<B> {
         backend: backend.clone(),
@@ -1060,7 +1061,7 @@ fn start_executing_work<B: ExtraBackendMethods>(
         cgu_reuse_tracker: sess.cgu_reuse_tracker.clone(),
         coordinator_send,
         diag_emitter: shared_emitter.clone(),
-        output_filenames: tcx.output_filenames(LOCAL_CRATE),
+        output_filenames: tcx.output_filenames(()),
         regular_module_config: regular_config,
         metadata_module_config: metadata_config,
         allocator_module_config: allocator_config,

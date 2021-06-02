@@ -1236,7 +1236,7 @@ impl<'a> Parser<'a> {
         Ok((class_name, ItemKind::Union(vdata, generics)))
     }
 
-    fn parse_record_struct_body(
+    pub(super) fn parse_record_struct_body(
         &mut self,
         adt_ty: &str,
     ) -> PResult<'a, (Vec<FieldDef>, /* recovered */ bool)> {
@@ -1399,6 +1399,37 @@ impl<'a> Parser<'a> {
         Ok(a_var)
     }
 
+    fn expect_field_ty_separator(&mut self) -> PResult<'a, ()> {
+        if let Err(mut err) = self.expect(&token::Colon) {
+            let sm = self.sess.source_map();
+            let eq_typo = self.token.kind == token::Eq && self.look_ahead(1, |t| t.is_path_start());
+            let semi_typo = self.token.kind == token::Semi
+                && self.look_ahead(1, |t| {
+                    t.is_path_start()
+                    // We check that we are in a situation like `foo; bar` to avoid bad suggestions
+                    // when there's no type and `;` was used instead of a comma.
+                    && match (sm.lookup_line(self.token.span.hi()), sm.lookup_line(t.span.lo())) {
+                        (Ok(l), Ok(r)) => l.line == r.line,
+                        _ => true,
+                    }
+                });
+            if eq_typo || semi_typo {
+                self.bump();
+                // Gracefully handle small typos.
+                err.span_suggestion_short(
+                    self.prev_token.span,
+                    "field names and their types are separated with `:`",
+                    ":".to_string(),
+                    Applicability::MachineApplicable,
+                );
+                err.emit();
+            } else {
+                return Err(err);
+            }
+        }
+        Ok(())
+    }
+
     /// Parses a structure field.
     fn parse_name_and_ty(
         &mut self,
@@ -1408,8 +1439,21 @@ impl<'a> Parser<'a> {
         attrs: Vec<Attribute>,
     ) -> PResult<'a, FieldDef> {
         let name = self.parse_field_ident(adt_ty, lo)?;
-        self.expect(&token::Colon)?;
+        self.expect_field_ty_separator()?;
         let ty = self.parse_ty()?;
+        if self.token.kind == token::Eq {
+            self.bump();
+            let const_expr = self.parse_anon_const_expr()?;
+            let sp = ty.span.shrink_to_hi().to(const_expr.value.span);
+            self.struct_span_err(sp, "default values on `struct` fields aren't supported")
+                .span_suggestion(
+                    sp,
+                    "remove this unsupported default value",
+                    String::new(),
+                    Applicability::MachineApplicable,
+                )
+                .emit();
+        }
         Ok(FieldDef {
             span: lo.to(self.prev_token.span),
             ident: Some(name),
@@ -1426,19 +1470,28 @@ impl<'a> Parser<'a> {
     fn parse_field_ident(&mut self, adt_ty: &str, lo: Span) -> PResult<'a, Ident> {
         let (ident, is_raw) = self.ident_or_err()?;
         if !is_raw && ident.is_reserved() {
-            let err = if self.check_fn_front_matter(false) {
-                let _ = self.parse_fn(&mut Vec::new(), |_| true, lo);
-                let mut err = self.struct_span_err(
-                    lo.to(self.prev_token.span),
-                    &format!("functions are not allowed in {} definitions", adt_ty),
-                );
-                err.help("unlike in C++, Java, and C#, functions are declared in `impl` blocks");
-                err.help("see https://doc.rust-lang.org/book/ch05-03-method-syntax.html for more information");
-                err
+            if ident.name == kw::Underscore {
+                self.sess.gated_spans.gate(sym::unnamed_fields, lo);
             } else {
-                self.expected_ident_found()
-            };
-            return Err(err);
+                let err = if self.check_fn_front_matter(false) {
+                    // We use `parse_fn` to get a span for the function
+                    if let Err(mut db) = self.parse_fn(&mut Vec::new(), |_| true, lo) {
+                        db.delay_as_bug();
+                    }
+                    let mut err = self.struct_span_err(
+                        lo.to(self.prev_token.span),
+                        &format!("functions are not allowed in {} definitions", adt_ty),
+                    );
+                    err.help(
+                        "unlike in C++, Java, and C#, functions are declared in `impl` blocks",
+                    );
+                    err.help("see https://doc.rust-lang.org/book/ch05-03-method-syntax.html for more information");
+                    err
+                } else {
+                    self.expected_ident_found()
+                };
+                return Err(err);
+            }
         }
         self.bump();
         Ok(ident)

@@ -1522,7 +1522,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             let ty = tcx.type_of(impl_def_id);
 
             let impl_ty = self.instantiate_type_scheme(span, &substs, ty);
-            match self.at(&self.misc(span), self.param_env).sup(impl_ty, self_ty) {
+            match self.at(&self.misc(span), self.param_env).eq(impl_ty, self_ty) {
                 Ok(ok) => self.register_infer_ok_obligations(ok),
                 Err(_) => {
                     self.tcx.sess.delay_span_bug(
@@ -1536,8 +1536,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 }
             }
         }
-
-        self.check_rustc_args_require_const(def_id, hir_id, span);
 
         debug!("instantiate_value_path: type of {:?} is {:?}", hir_id, ty_substituted);
         self.write_substs(hir_id, substs);

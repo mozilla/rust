@@ -1,5 +1,5 @@
 pub use self::process_common::{Arg, Command, CommandArgs, ExitCode, Problem, Stdio, StdioPipes};
-pub use self::process_inner::{ExitStatus, Process};
+pub use self::process_inner::{ExitStatus, ExitStatusError, Process};
 pub use crate::ffi::OsString as EnvKey;
 pub use crate::sys_common::process::CommandEnvs;
 

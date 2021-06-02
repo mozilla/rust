@@ -1733,6 +1733,19 @@ impl<T: ?Sized> fmt::Pointer for Rc<T> {
 
 #[stable(feature = "from_for_ptrs", since = "1.6.0")]
 impl<T> From<T> for Rc<T> {
+    /// Converts a generic type `T` into a `Rc<T>`
+    ///
+    /// The conversion allocates on the heap and moves `t`
+    /// from the stack into it.
+    ///
+    /// # Example
+    /// ```rust
+    /// # use std::rc::Rc;
+    /// let x = 5;
+    /// let rc = Rc::new(5);
+    ///
+    /// assert_eq!(Rc::from(x), rc);
+    /// ```
     fn from(t: T) -> Self {
         Rc::new(t)
     }
@@ -1846,6 +1859,18 @@ where
     B: ToOwned + ?Sized,
     Rc<B>: From<&'a B> + From<B::Owned>,
 {
+    /// Create a reference-counted pointer from
+    /// a clone-on-write pointer by copying its content.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # use std::rc::Rc;
+    /// # use std::borrow::Cow;
+    /// let cow: Cow<str> = Cow::Borrowed("eggplant");
+    /// let shared: Rc<str> = Rc::from(cow);
+    /// assert_eq!("eggplant", &shared[..]);
+    /// ```
     #[inline]
     fn from(cow: Cow<'a, B>) -> Rc<B> {
         match cow {
@@ -2290,7 +2315,7 @@ impl<T: ?Sized> Weak<T> {
 }
 
 #[stable(feature = "rc_weak", since = "1.4.0")]
-impl<T: ?Sized> Drop for Weak<T> {
+unsafe impl<#[may_dangle] T: ?Sized> Drop for Weak<T> {
     /// Drops the `Weak` pointer.
     ///
     /// # Examples

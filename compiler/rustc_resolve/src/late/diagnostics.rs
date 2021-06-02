@@ -6,7 +6,10 @@ use crate::{CrateLint, Module, ModuleKind, ModuleOrUniformRoot};
 use crate::{PathResult, PathSource, Segment};
 
 use rustc_ast::visit::FnKind;
-use rustc_ast::{self as ast, Expr, ExprKind, Item, ItemKind, NodeId, Path, Ty, TyKind};
+use rustc_ast::{
+    self as ast, Expr, ExprKind, GenericParam, GenericParamKind, Item, ItemKind, NodeId, Path, Ty,
+    TyKind,
+};
 use rustc_ast_pretty::pprust::path_segment_to_string;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{pluralize, struct_span_err, Applicability, DiagnosticBuilder, SuggestionStyle};
@@ -1600,8 +1603,8 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
         if !self.diagnostic_metadata.currently_processing_generics && !single_uppercase_char {
             return None;
         }
-        match (self.diagnostic_metadata.current_item, single_uppercase_char) {
-            (Some(Item { kind: ItemKind::Fn(..), ident, .. }), _) if ident.name == sym::main => {
+        match (self.diagnostic_metadata.current_item, single_uppercase_char, self.diagnostic_metadata.currently_processing_generics) {
+            (Some(Item { kind: ItemKind::Fn(..), ident, .. }), _, _) if ident.name == sym::main => {
                 // Ignore `fn main()` as we don't want to suggest `fn main<T>()`
             }
             (
@@ -1613,9 +1616,11 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                         | kind @ ItemKind::Union(..),
                     ..
                 }),
-                true,
+                true, _
             )
-            | (Some(Item { kind, .. }), false) => {
+            // Without the 2nd `true`, we'd suggest `impl <T>` for `impl T` when a type `T` isn't found
+            | (Some(Item { kind: kind @ ItemKind::Impl(..), .. }), true, true)
+            | (Some(Item { kind, .. }), false, _) => {
                 // Likely missing type parameter.
                 if let Some(generics) = kind.generics() {
                     if span.overlaps(generics.span) {
@@ -1633,6 +1638,10 @@ impl<'a: 'ast, 'ast> LateResolutionVisitor<'a, '_, 'ast> {
                     let (span, sugg) = if let [.., param] = &generics.params[..] {
                         let span = if let [.., bound] = &param.bounds[..] {
                             bound.span()
+                        } else if let GenericParam {
+                            kind: GenericParamKind::Const { ty, kw_span: _, default  }, ..
+                        } = param {
+                            default.as_ref().map(|def| def.value.span).unwrap_or(ty.span)
                         } else {
                             param.ident.span
                         };
@@ -1821,7 +1830,7 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
     crate fn add_missing_lifetime_specifiers_label(
         &self,
         err: &mut DiagnosticBuilder<'_>,
-        spans_with_counts: Vec<(Span, usize)>,
+        mut spans_with_counts: Vec<(Span, usize)>,
         lifetime_names: &FxHashSet<Symbol>,
         lifetime_spans: Vec<Span>,
         params: &[ElisionFailureInfo],
@@ -1831,13 +1840,21 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
             .map(|(span, _)| self.tcx.sess.source_map().span_to_snippet(*span).ok())
             .collect();
 
-        for (span, count) in &spans_with_counts {
+        // Empty generics are marked with a span of "<", but since from now on
+        // that information is in the snippets it can be removed from the spans.
+        for ((span, _), snippet) in spans_with_counts.iter_mut().zip(&snippets) {
+            if snippet.as_deref() == Some("<") {
+                *span = span.shrink_to_hi();
+            }
+        }
+
+        for &(span, count) in &spans_with_counts {
             err.span_label(
-                *span,
+                span,
                 format!(
                     "expected {} lifetime parameter{}",
-                    if *count == 1 { "named".to_string() } else { count.to_string() },
-                    pluralize!(*count),
+                    if count == 1 { "named".to_string() } else { count.to_string() },
+                    pluralize!(count),
                 ),
             );
         }
@@ -1982,6 +1999,14 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
                                                 .collect::<Vec<_>>()
                                                 .join(", "),
                                         )
+                                    } else if snippet == "<" || snippet == "(" {
+                                        (
+                                            span.shrink_to_hi(),
+                                            std::iter::repeat("'static")
+                                                .take(count)
+                                                .collect::<Vec<_>>()
+                                                .join(", "),
+                                        )
                                     } else {
                                         (
                                             span.shrink_to_hi(),
@@ -1990,7 +2015,7 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
                                                 std::iter::repeat("'static")
                                                     .take(count)
                                                     .collect::<Vec<_>>()
-                                                    .join(", ")
+                                                    .join(", "),
                                             ),
                                         )
                                     }
@@ -2045,6 +2070,9 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
                         Some("&") => Some(Box::new(|name| format!("&{} ", name))),
                         Some("'_") => Some(Box::new(|n| n.to_string())),
                         Some("") => Some(Box::new(move |n| format!("{}, ", n).repeat(count))),
+                        Some("<") => Some(Box::new(move |n| {
+                            std::iter::repeat(n).take(count).collect::<Vec<_>>().join(", ")
+                        })),
                         Some(snippet) if !snippet.ends_with('>') => Some(Box::new(move |name| {
                             format!(
                                 "{}<{}>",
@@ -2070,6 +2098,9 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
                         Some("'_") => Some("'a".to_string()),
                         Some("") => {
                             Some(std::iter::repeat("'a, ").take(count).collect::<Vec<_>>().join(""))
+                        }
+                        Some("<") => {
+                            Some(std::iter::repeat("'a").take(count).collect::<Vec<_>>().join(", "))
                         }
                         Some(snippet) => Some(format!(
                             "{}<{}>",

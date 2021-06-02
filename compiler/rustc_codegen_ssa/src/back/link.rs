@@ -50,7 +50,6 @@ pub fn link_binary<'a, B: ArchiveBuilder<'a>>(
     codegen_results: &CodegenResults,
     outputs: &OutputFilenames,
     crate_name: &str,
-    target_cpu: &str,
 ) {
     let _timer = sess.timer("link_binary");
     let output_metadata = sess.opts.output_types.contains_key(&OutputType::Metadata);
@@ -100,7 +99,6 @@ pub fn link_binary<'a, B: ArchiveBuilder<'a>>(
                         &out_filename,
                         codegen_results,
                         path.as_ref(),
-                        target_cpu,
                     );
                 }
             }
@@ -532,7 +530,6 @@ fn link_natively<'a, B: ArchiveBuilder<'a>>(
     out_filename: &Path,
     codegen_results: &CodegenResults,
     tmpdir: &Path,
-    target_cpu: &str,
 ) {
     info!("preparing {:?} to {:?}", crate_type, out_filename);
     let (linker_path, flavor) = linker_and_flavor(sess);
@@ -544,7 +541,6 @@ fn link_natively<'a, B: ArchiveBuilder<'a>>(
         tmpdir,
         out_filename,
         codegen_results,
-        target_cpu,
     );
 
     linker::disable_localization(&mut cmd);
@@ -1609,14 +1605,13 @@ fn linker_with_args<'a, B: ArchiveBuilder<'a>>(
     tmpdir: &Path,
     out_filename: &Path,
     codegen_results: &CodegenResults,
-    target_cpu: &str,
 ) -> Command {
     let crt_objects_fallback = crt_objects_fallback(sess, crate_type);
     let base_cmd = get_linker(sess, path, flavor, crt_objects_fallback);
     // FIXME: Move `/LIBPATH` addition for uwp targets from the linker construction
     // to the linker args construction.
     assert!(base_cmd.get_args().is_empty() || sess.target.vendor == "uwp");
-    let cmd = &mut *codegen_results.linker_info.to_linker(base_cmd, &sess, flavor, target_cpu);
+    let cmd = &mut *codegen_results.linker_info.to_linker(base_cmd, &sess, flavor);
     let link_output_kind = link_output_kind(sess, crate_type);
 
     // NO-OPT-OUT, OBJECT-FILES-MAYBE, CUSTOMIZATION-POINT
@@ -1810,13 +1805,14 @@ fn add_local_native_libraries(
     let search_path = archive_search_paths(sess);
     let mut last = (NativeLibKind::Unspecified, None);
     for lib in relevant_libs {
-        // Skip if this library is the same as the last.
-        last = if (lib.kind, lib.name) == last { continue } else { (lib.kind, lib.name) };
-
         let name = match lib.name {
             Some(l) => l,
             None => continue,
         };
+
+        // Skip if this library is the same as the last.
+        last = if (lib.kind, lib.name) == last { continue } else { (lib.kind, lib.name) };
+
         let verbatim = lib.verbatim.unwrap_or(false);
         match lib.kind {
             NativeLibKind::Dylib { as_needed } => {
@@ -2149,9 +2145,6 @@ fn add_upstream_native_libraries(
     let mut last = (NativeLibKind::Unspecified, None);
     for &(cnum, _) in crates {
         for lib in codegen_results.crate_info.native_libraries[&cnum].iter() {
-            // Skip if this library is the same as the last.
-            last = if (lib.kind, lib.name) == last { continue } else { (lib.kind, lib.name) };
-
             let name = match lib.name {
                 Some(l) => l,
                 None => continue,
@@ -2159,6 +2152,10 @@ fn add_upstream_native_libraries(
             if !relevant_lib(sess, &lib) {
                 continue;
             }
+
+            // Skip if this library is the same as the last.
+            last = if (lib.kind, lib.name) == last { continue } else { (lib.kind, lib.name) };
+
             let verbatim = lib.verbatim.unwrap_or(false);
             match lib.kind {
                 NativeLibKind::Dylib { as_needed } => {

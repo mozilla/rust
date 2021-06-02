@@ -14,9 +14,8 @@ use rustc_span::Pos;
 
 use rustdoc_json_types::*;
 
-use crate::clean;
 use crate::clean::utils::print_const_expr;
-use crate::clean::FakeDefId;
+use crate::clean::{self, FakeDefId};
 use crate::formats::item_type::ItemType;
 use crate::json::JsonRenderer;
 use std::collections::HashSet;
@@ -31,7 +30,7 @@ impl JsonRenderer<'_> {
             .into_iter()
             .flatten()
             .filter_map(|clean::ItemLink { link, did, .. }| {
-                did.map(|did| (link.clone(), from_def_id(did)))
+                did.map(|did| (link.clone(), from_def_id(did.into())))
             })
             .collect();
         let docs = item.attrs.collapsed_doc_value();
@@ -64,18 +63,17 @@ impl JsonRenderer<'_> {
     fn convert_span(&self, span: clean::Span) -> Option<Span> {
         match span.filename(self.sess()) {
             rustc_span::FileName::Real(name) => {
-                let hi = span.hi(self.sess());
-                let lo = span.lo(self.sess());
-                Some(Span {
-                    filename: match name {
-                        rustc_span::RealFileName::Named(path) => path,
-                        rustc_span::RealFileName::Devirtualized { local_path, virtual_name: _ } => {
-                            local_path
-                        }
-                    },
-                    begin: (lo.line, lo.col.to_usize()),
-                    end: (hi.line, hi.col.to_usize()),
-                })
+                if let Some(local_path) = name.into_local_path() {
+                    let hi = span.hi(self.sess());
+                    let lo = span.lo(self.sess());
+                    Some(Span {
+                        filename: local_path,
+                        begin: (lo.line, lo.col.to_usize()),
+                        end: (hi.line, hi.col.to_usize()),
+                    })
+                } else {
+                    None
+                }
             }
             _ => None,
         }
@@ -398,7 +396,7 @@ impl FromWithTcx<clean::Type> for Type {
                 mutable: mutability == ast::Mutability::Mut,
                 type_: Box::new((*type_).into_tcx(tcx)),
             },
-            QPath { name, self_type, trait_ } => Type::QualifiedPath {
+            QPath { name, self_type, trait_, .. } => Type::QualifiedPath {
                 name: name.to_string(),
                 self_type: Box::new((*self_type).into_tcx(tcx)),
                 trait_: Box::new((*trait_).into_tcx(tcx)),
@@ -483,7 +481,7 @@ impl FromWithTcx<clean::Impl> for Impl {
             items: ids(items),
             negative: negative_polarity,
             synthetic,
-            blanket_impl: blanket_impl.map(|x| x.into_tcx(tcx)),
+            blanket_impl: blanket_impl.map(|x| (*x).into_tcx(tcx)),
         }
     }
 }
