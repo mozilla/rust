@@ -1,6 +1,7 @@
 pub use Integer::*;
 pub use Primitive::*;
 
+use crate::json::{Json, ToJson};
 use crate::spec::Target;
 
 use std::convert::{TryFrom, TryInto};
@@ -11,7 +12,6 @@ use std::str::FromStr;
 
 use rustc_index::vec::{Idx, IndexVec};
 use rustc_macros::HashStable_Generic;
-use rustc_serialize::json::{Json, ToJson};
 use rustc_span::Span;
 
 pub mod call;
@@ -164,7 +164,8 @@ impl TargetDataLayout {
             ));
         }
 
-        if dl.pointer_size.bits() != target.pointer_width.into() {
+        let target_pointer_width: u64 = target.pointer_width.into();
+        if dl.pointer_size.bits() != target_pointer_width {
             return Err(format!(
                 "inconsistent target specification: \"data-layout\" claims \
                  pointers are {}-bit, while \"target-pointer-width\" is `{}`",

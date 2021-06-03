@@ -28,7 +28,7 @@ use rustc_metadata::locator;
 use rustc_middle::middle::cstore::MetadataLoader;
 use rustc_save_analysis as save;
 use rustc_save_analysis::DumpHandler;
-use rustc_serialize::json::{self, ToJson};
+use rustc_serialize::json;
 use rustc_session::config::nightly_options;
 use rustc_session::config::{ErrorOutputType, Input, OutputType, PrintRequest, TrimmedDefPaths};
 use rustc_session::getopts;
@@ -37,6 +37,7 @@ use rustc_session::{config, DiagnosticOutput, Session};
 use rustc_session::{early_error, early_error_no_abort, early_warn};
 use rustc_span::source_map::{FileLoader, FileName};
 use rustc_span::symbol::sym;
+use rustc_target::json::ToJson;
 
 use std::borrow::Cow;
 use std::cmp::max;
@@ -684,7 +685,9 @@ impl RustcDefaultCalls {
                     "{}",
                     sess.target_tlib_path.as_ref().unwrap_or(&sess.host_tlib_path).dir.display()
                 ),
-                TargetSpec => println!("{}", sess.target.to_json().pretty()),
+                TargetSpec => {
+                    println!("{}", serde_json::to_string_pretty(&sess.target.to_json()).unwrap());
+                }
                 FileNames | CrateName => {
                     let input = input.unwrap_or_else(|| {
                         early_error(ErrorOutputType::default(), "no input file provided")
