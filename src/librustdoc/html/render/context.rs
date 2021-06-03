@@ -19,6 +19,7 @@ use super::write_shared::write_shared;
 use super::{print_sidebar, settings, AllTypes, NameDoc, StylePath, BASIC_KEYWORDS};
 
 use crate::clean;
+use crate::clean::types::Span;
 use crate::clean::ExternalCrate;
 use crate::config::RenderOptions;
 use crate::docfs::{DocFS, PathError};
@@ -124,7 +125,6 @@ crate struct SharedContext<'tcx> {
     /// to `Some(...)`, it'll store redirections and then generate a JSON file at the top level of
     /// the crate.
     redirections: Option<RefCell<FxHashMap<String, String>>>,
-    pub(super) repository_url: Option<String>,
 }
 
 impl SharedContext<'_> {
@@ -141,7 +141,11 @@ impl SharedContext<'_> {
     /// Returns the `collapsed_doc_value` of the given item if this is the main crate, otherwise
     /// returns the `doc_value`.
     crate fn maybe_collapsed_doc_value<'a>(&self, item: &'a clean::Item) -> Option<String> {
-        if self.collapsed { item.collapsed_doc_value() } else { item.doc_value() }
+        if self.collapsed {
+            item.collapsed_doc_value()
+        } else {
+            item.doc_value()
+        }
     }
 
     crate fn edition(&self) -> Edition {
@@ -291,16 +295,16 @@ impl<'tcx> Context<'tcx> {
     /// If `None` is returned, then a source link couldn't be generated. This
     /// may happen, for example, with externally inlined items where the source
     /// of their crate documentation isn't known.
-    pub(super) fn src_href(&self, item: &clean::Item) -> Option<String> {
-        if item.span(self.tcx()).is_dummy() {
+    pub(crate) fn src_href(&self, span: Span, link_lines: bool) -> Option<String> {
+        if span.is_dummy() {
             return None;
         }
         let mut root = self.root_path();
         let mut path = String::new();
-        let cnum = item.span(self.tcx()).cnum(self.sess());
+        let cnum = span.cnum(self.sess());
 
         // We can safely ignore synthetic `SourceFile`s.
-        let file = match item.span(self.tcx()).filename(self.sess()) {
+        let file = match span.filename(self.sess()) {
             FileName::Real(ref path) => path.local_path_if_available().to_path_buf(),
             _ => return None,
         };
@@ -338,16 +342,25 @@ impl<'tcx> Context<'tcx> {
             (&*symbol, &path)
         };
 
-        let loline = item.span(self.tcx()).lo(self.sess()).line;
-        let hiline = item.span(self.tcx()).hi(self.sess()).line;
-        let lines =
-            if loline == hiline { loline.to_string() } else { format!("{}-{}", loline, hiline) };
+        let anchor = if link_lines {
+            let loline = span.lo(self.sess()).line;
+            let hiline = span.hi(self.sess()).line;
+            let lines = if loline == hiline {
+                loline.to_string()
+            } else {
+                format!("{}-{}", loline, hiline)
+            };
+            format!("#{}", lines)
+        } else {
+            "".into()
+        };
+
         Some(format!(
-            "{root}src/{krate}/{path}#{lines}",
+            "{root}src/{krate}/{path}{anchor}",
             root = Escape(&root),
             krate = krate,
             path = path,
-            lines = lines
+            anchor = anchor
         ))
     }
 }
@@ -384,7 +397,6 @@ impl<'tcx> FormatRenderer<'tcx> for Context<'tcx> {
             unstable_features,
             generate_redirect_map,
             show_type_layout,
-            repository_url,
             ..
         } = options;
 
@@ -459,7 +471,6 @@ impl<'tcx> FormatRenderer<'tcx> for Context<'tcx> {
             errors: receiver,
             redirections: if generate_redirect_map { Some(Default::default()) } else { None },
             show_type_layout,
-            repository_url,
         };
 
         // Add the default themes to the `Vec` of stylepaths

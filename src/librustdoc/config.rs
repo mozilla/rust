@@ -159,12 +159,9 @@ crate struct Options {
     /// Whether doctests should emit unused externs
     crate json_unused_externs: bool,
 
-    // Options for scraping call sites from examples/ directory
     /// Path to output file to write JSON of call sites. If this option is Some(..) then
     /// the compiler will scrape examples and not generate documentation.
     crate scrape_examples: Option<PathBuf>,
-    /// Path to the root of the workspace, used to generate workspace-relative file paths.
-    crate workspace_root: Option<PathBuf>,
 }
 
 impl fmt::Debug for Options {
@@ -283,7 +280,6 @@ crate struct RenderOptions {
     crate unstable_features: rustc_feature::UnstableFeatures,
     crate emit: Vec<EmitType>,
     crate call_locations: Option<AllCallLocations>,
-    crate repository_url: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -639,9 +635,7 @@ impl Options {
         let generate_redirect_map = matches.opt_present("generate-redirect-map");
         let show_type_layout = matches.opt_present("show-type-layout");
 
-        let repository_url = matches.opt_str("repository-url");
         let scrape_examples = matches.opt_str("scrape-examples").map(PathBuf::from);
-        let workspace_root = matches.opt_str("workspace-root").map(PathBuf::from);
         let with_examples = matches.opt_strs("with-examples");
         let each_call_locations = with_examples
             .into_iter()
@@ -732,13 +726,11 @@ impl Options {
                 ),
                 emit,
                 call_locations,
-                repository_url,
             },
             crate_name,
             output_format,
             json_unused_externs,
             scrape_examples,
-            workspace_root,
         })
     }
 

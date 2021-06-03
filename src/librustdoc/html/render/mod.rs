@@ -67,7 +67,7 @@ use crate::html::format::{
 };
 use crate::html::markdown::{Markdown, MarkdownHtml, MarkdownSummaryLine};
 use crate::html::sources;
-use crate::scrape_examples::FnCallLocations;
+use crate::scrape_examples::{CallData, FnCallLocations};
 
 /// A pair of name and its optional document.
 crate type NameDoc = (String, Option<String>);
@@ -211,7 +211,7 @@ crate struct StylePath {
 }
 
 fn write_srclink(cx: &Context<'_>, item: &clean::Item, buf: &mut Buffer) {
-    if let Some(l) = cx.src_href(item) {
+    if let Some(l) = cx.src_href(item.span(cx.tcx()), true) {
         write!(buf, "<a class=\"srclink\" href=\"{}\" title=\"goto source code\">[src]</a>", l)
     }
 }
@@ -2444,28 +2444,7 @@ fn render_call_locations(
         }
     };
 
-    let filtered_locations: Vec<_> = call_locations
-        .iter()
-        .filter_map(|(file, locs)| {
-            // FIXME(wcrichto): file I/O should be cached
-            let mut contents = match fs::read_to_string(&file) {
-                Ok(contents) => contents,
-                Err(e) => {
-                    eprintln!("Failed to read file {}", e);
-                    return None;
-                }
-            };
-
-            // Remove the utf-8 BOM if any
-            if contents.starts_with('\u{feff}') {
-                contents.drain(..3);
-            }
-
-            Some((file, contents, locs))
-        })
-        .collect();
-
-    let n_examples = filtered_locations.len();
+    let n_examples = call_locations.len();
     if n_examples == 0 {
         return;
     }
@@ -2480,23 +2459,29 @@ fn render_call_locations(
         id
     );
 
-    let write_example = |w: &mut Buffer, (file, contents, locs): (&String, String, _)| {
-        let ex_title = match cx.shared.repository_url.as_ref() {
-            Some(url) => format!(
-                r#"<a href="{url}/{file}" target="_blank">{file}</a>"#,
-                file = file,
-                url = url
-            ),
-            None => file.clone(),
-        };
+    let write_example = |w: &mut Buffer, (path, call_data): (&PathBuf, &CallData)| {
+        let mut contents =
+            fs::read_to_string(&path).expect(&format!("Failed to read file: {}", path.display()));
+
+        // Remove the utf-8 BOM if any
+        if contents.starts_with('\u{feff}') {
+            contents.drain(..3);
+        }
+
+        let ex_title = format!(
+            r#"<a href="{root}{url}" target="_blank">{name}</a>"#,
+            root = cx.root_path(),
+            url = call_data.url,
+            name = path.file_name().unwrap().to_string_lossy()
+        );
         let edition = cx.shared.edition();
         write!(
             w,
             r#"<div class="scraped-example" data-code="{code}" data-locs="{locations}">
-           <strong>{title}</strong>
-           <div class="code-wrapper">"#,
+                <strong>{title}</strong>
+                 <div class="code-wrapper">"#,
             code = contents.replace("\"", "&quot;"),
-            locations = serde_json::to_string(&locs).unwrap(),
+            locations = serde_json::to_string(&call_data.locations).unwrap(),
             title = ex_title,
         );
         write!(w, r#"<span class="prev">&pr;</span> <span class="next">&sc;</span>"#);
@@ -2505,7 +2490,7 @@ fn render_call_locations(
         write!(w, "</div></div>");
     };
 
-    let mut it = filtered_locations.into_iter();
+    let mut it = call_locations.into_iter();
     write_example(w, it.next().unwrap());
 
     if n_examples > 1 {
