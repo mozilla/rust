@@ -4,10 +4,11 @@ extern crate rustc_macros;
 pub use self::Level::*;
 use rustc_ast::node_id::{NodeId, NodeMap};
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher, ToStableHashKey};
-use rustc_serialize::json::Json;
 use rustc_span::edition::Edition;
 use rustc_span::{sym, symbol::Ident, MultiSpan, Span, Symbol};
 use rustc_target::spec::abi::Abi;
+
+use serde::{Serialize, Deserialize};
 
 pub mod builtin;
 
@@ -23,7 +24,7 @@ macro_rules! pluralize {
 /// All suggestions are marked with an `Applicability`. Tools use the applicability of a suggestion
 /// to determine whether it should be automatically applied or if the user should be consulted
 /// before applying the suggestion.
-#[derive(Copy, Clone, Debug, PartialEq, Hash, Encodable, Decodable)]
+#[derive(Copy, Clone, Debug, PartialEq, Hash, Encodable, Decodable, Serialize, Deserialize)]
 pub enum Applicability {
     /// The suggestion is definitely what the user intended. This suggestion should be
     /// automatically applied.
@@ -243,7 +244,7 @@ impl<HCX> ToStableHashKey<HCX> for LintId {
 // Duplicated from rustc_session::config::ExternDepSpec to avoid cyclic dependency
 #[derive(PartialEq)]
 pub enum ExternDepSpec {
-    Json(Json),
+    Json(serde_json::Value),
     Raw(String),
 }
 

@@ -5,17 +5,18 @@ use rustc_span::source_map::{FilePathMapping, SourceMap};
 
 use crate::emitter::{ColorConfig, HumanReadableErrorType};
 use crate::Handler;
-use rustc_serialize::json::decode;
 use rustc_span::{BytePos, Span};
 
 use std::str;
 
-#[derive(Decodable, Debug, PartialEq, Eq)]
+use serde::Deserialize;
+
+#[derive(Deserialize, Debug, PartialEq, Eq)]
 struct TestData {
     spans: Vec<SpanTestData>,
 }
 
-#[derive(Decodable, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Debug, PartialEq, Eq)]
 struct SpanTestData {
     pub byte_start: u32,
     pub byte_end: u32,
@@ -69,7 +70,7 @@ fn test_positions(code: &str, span: (u32, u32), expected_output: SpanTestData) {
 
         let bytes = output.lock().unwrap();
         let actual_output = str::from_utf8(&bytes).unwrap();
-        let actual_output: TestData = decode(actual_output).unwrap();
+        let actual_output: TestData = serde_json::from_str(actual_output).unwrap();
 
         assert_eq!(expected_output, actual_output)
     })

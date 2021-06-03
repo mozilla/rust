@@ -14,8 +14,6 @@ use rustc_data_structures::impl_stable_hash_via_hash;
 use rustc_target::abi::{Align, TargetDataLayout};
 use rustc_target::spec::{SplitDebuginfo, Target, TargetTriple};
 
-use rustc_serialize::json;
-
 use crate::parse::CrateConfig;
 use rustc_feature::UnstableFeatures;
 use rustc_span::edition::{Edition, DEFAULT_EDITION, EDITION_NAME_LIST, LATEST_STABLE_EDITION};
@@ -433,7 +431,7 @@ pub enum ExternDepSpec {
     /// Raw string
     Raw(String),
     /// Raw data in json format
-    Json(json::Json),
+    Json(serde_json::Value),
 }
 
 impl<'a> From<&'a ExternDepSpec> for rustc_lint_defs::ExternDepSpec {
@@ -491,7 +489,7 @@ impl fmt::Display for ExternDepSpec {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ExternDepSpec::Raw(raw) => fmt.write_str(raw),
-            ExternDepSpec::Json(json) => json::as_json(json).fmt(fmt),
+            ExternDepSpec::Json(json) => fmt.write_str(&serde_json::to_string(json).unwrap()),
         }
     }
 }
@@ -1874,7 +1872,7 @@ fn parse_extern_dep_specs(
                 let raw = loc.splitn(2, ':').nth(1).unwrap_or_else(|| {
                     early_error(error_format, "`--extern-location`: missing `json` location")
                 });
-                let json = json::from_str(raw).unwrap_or_else(|_| {
+                let json = serde_json::from_str(raw).unwrap_or_else(|_| {
                     early_error(
                         error_format,
                         &format!("`--extern-location`: malformed json location `{}`", raw),

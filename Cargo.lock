@@ -3777,6 +3777,7 @@ dependencies = [
  "rustc_span",
  "rustc_target",
  "rustc_typeck",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
  "tracing-tree",
@@ -3798,6 +3799,8 @@ dependencies = [
  "rustc_macros",
  "rustc_serialize",
  "rustc_span",
+ "serde",
+ "serde_json",
  "termcolor",
  "termize",
  "tracing",
@@ -3991,6 +3994,7 @@ dependencies = [
  "rustc_span",
  "rustc_target",
  "rustc_trait_selection",
+ "serde_json",
  "tracing",
  "unicode-security",
 ]
@@ -4005,6 +4009,8 @@ dependencies = [
  "rustc_serialize",
  "rustc_span",
  "rustc_target",
+ "serde",
+ "serde_json",
  "tracing",
 ]
 
@@ -4047,6 +4053,7 @@ dependencies = [
  "rustc_session",
  "rustc_span",
  "rustc_target",
+ "serde_json",
  "smallvec",
  "snap",
  "stable_deref_trait",
@@ -4324,6 +4331,7 @@ dependencies = [
  "rustc_serialize",
  "rustc_span",
  "rustc_target",
+ "serde_json",
  "tracing",
 ]
 
@@ -4371,6 +4379,7 @@ dependencies = [
  "rustc_macros",
  "rustc_serialize",
  "rustc_span",
+ "serde_json",
  "tracing",
 ]
 

@@ -34,7 +34,6 @@ use rustc_middle::middle::stability;
 use rustc_middle::ty::layout::{LayoutError, TyAndLayout};
 use rustc_middle::ty::print::with_no_trimmed_paths;
 use rustc_middle::ty::{self, print::Printer, subst::GenericArg, Ty, TyCtxt};
-use rustc_serialize::json::Json;
 use rustc_session::lint::{BuiltinLintDiagnostics, ExternDepSpec};
 use rustc_session::lint::{FutureIncompatibleInfo, Level, Lint, LintBuffer, LintId};
 use rustc_session::Session;
@@ -697,7 +696,7 @@ pub trait LintContext: Sized {
                                 Applicability::Unspecified,
                                 SuggestionStyle::CompletelyHidden,
                             );
-                            Json::String(raw)
+                            serde_json::Value::String(raw)
                         }
                     };
                     db.tool_only_suggestion_with_metadata(

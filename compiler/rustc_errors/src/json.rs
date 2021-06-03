@@ -26,8 +26,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::vec;
 
-use rustc_serialize::json::{as_json, as_pretty_json};
-use rustc_serialize::{Encodable, Encoder};
+use serde::Serialize;
 
 #[cfg(test)]
 mod tests;
@@ -111,9 +110,9 @@ impl Emitter for JsonEmitter {
     fn emit_diagnostic(&mut self, diag: &crate::Diagnostic) {
         let data = Diagnostic::from_errors_diagnostic(diag, self);
         let result = if self.pretty {
-            writeln!(&mut self.dst, "{}", as_pretty_json(&data))
+            writeln!(&mut self.dst, "{}", serde_json::to_string_pretty(&data).unwrap())
         } else {
-            writeln!(&mut self.dst, "{}", as_json(&data))
+            writeln!(&mut self.dst, "{}", serde_json::to_string(&data).unwrap())
         }
         .and_then(|_| self.dst.flush());
         if let Err(e) = result {
@@ -124,9 +123,9 @@ impl Emitter for JsonEmitter {
     fn emit_artifact_notification(&mut self, path: &Path, artifact_type: &str) {
         let data = ArtifactNotification { artifact: path, emit: artifact_type };
         let result = if self.pretty {
-            writeln!(&mut self.dst, "{}", as_pretty_json(&data))
+            writeln!(&mut self.dst, "{}", serde_json::to_string_pretty(&data).unwrap())
         } else {
-            writeln!(&mut self.dst, "{}", as_json(&data))
+            writeln!(&mut self.dst, "{}", serde_json::to_string(&data).unwrap())
         }
         .and_then(|_| self.dst.flush());
         if let Err(e) = result {
@@ -149,9 +148,9 @@ impl Emitter for JsonEmitter {
             .collect();
         let report = FutureIncompatReport { future_incompat_report: data };
         let result = if self.pretty {
-            writeln!(&mut self.dst, "{}", as_pretty_json(&report))
+            writeln!(&mut self.dst, "{}", serde_json::to_string_pretty(&report).unwrap())
         } else {
-            writeln!(&mut self.dst, "{}", as_json(&report))
+            writeln!(&mut self.dst, "{}", serde_json::to_string(&report).unwrap())
         }
         .and_then(|_| self.dst.flush());
         if let Err(e) = result {
@@ -162,9 +161,9 @@ impl Emitter for JsonEmitter {
     fn emit_unused_externs(&mut self, lint_level: &str, unused_externs: &[&str]) {
         let data = UnusedExterns { lint_level, unused_extern_names: unused_externs };
         let result = if self.pretty {
-            writeln!(&mut self.dst, "{}", as_pretty_json(&data))
+            writeln!(&mut self.dst, "{}", serde_json::to_string_pretty(&data).unwrap())
         } else {
-            writeln!(&mut self.dst, "{}", as_json(&data))
+            writeln!(&mut self.dst, "{}", serde_json::to_string(&data).unwrap())
         }
         .and_then(|_| self.dst.flush());
         if let Err(e) = result {
@@ -183,8 +182,7 @@ impl Emitter for JsonEmitter {
 
 // The following data types are provided just for serialisation.
 
-// NOTE: this has a manual implementation of Encodable which needs to be updated in
-// parallel.
+#[derive(Serialize)]
 struct Diagnostic {
     /// The primary error message.
     message: String,
@@ -197,67 +195,11 @@ struct Diagnostic {
     /// The message as rustc would render it.
     rendered: Option<String>,
     /// Extra tool metadata
+    #[serde(skip_serializing_if = "ToolMetadata::is_not_set")]
     tool_metadata: ToolMetadata,
 }
 
-macro_rules! encode_fields {
-    (
-        $enc:expr,                  // encoder
-        $idx:expr,                  // starting field index
-        $struct:expr,               // struct we're serializing
-        $struct_name:ident,         // struct name
-        [ $($name:ident),+$(,)? ],  // fields to encode
-        [ $($ignore:ident),+$(,)? ] // fields we're skipping
-    ) => {
-        {
-            // Pattern match to make sure all fields are accounted for
-            let $struct_name { $($name,)+ $($ignore: _,)+ } = $struct;
-            let mut idx = $idx;
-            $(
-                $enc.emit_struct_field(
-                    stringify!($name),
-                    idx == 0,
-                    |enc| $name.encode(enc),
-                )?;
-                idx += 1;
-            )+
-            idx
-        }
-    };
-}
-
-// Special-case encoder to skip tool_metadata if not set
-impl<E: Encoder> Encodable<E> for Diagnostic {
-    fn encode(&self, s: &mut E) -> Result<(), E::Error> {
-        s.emit_struct(false, |s| {
-            let mut idx = 0;
-
-            idx = encode_fields!(
-                s,
-                idx,
-                self,
-                Self,
-                [message, code, level, spans, children, rendered],
-                [tool_metadata]
-            );
-            if self.tool_metadata.is_set() {
-                idx = encode_fields!(
-                    s,
-                    idx,
-                    self,
-                    Self,
-                    [tool_metadata],
-                    [message, code, level, spans, children, rendered]
-                );
-            }
-
-            let _ = idx;
-            Ok(())
-        })
-    }
-}
-
-#[derive(Encodable)]
+#[derive(Serialize)]
 struct DiagnosticSpan {
     file_name: String,
     byte_start: u32,
@@ -284,7 +226,7 @@ struct DiagnosticSpan {
     expansion: Option<Box<DiagnosticSpanMacroExpansion>>,
 }
 
-#[derive(Encodable)]
+#[derive(Serialize)]
 struct DiagnosticSpanLine {
     text: String,
 
@@ -294,7 +236,7 @@ struct DiagnosticSpanLine {
     highlight_end: usize,
 }
 
-#[derive(Encodable)]
+#[derive(Serialize)]
 struct DiagnosticSpanMacroExpansion {
     /// span where macro was applied to generate this code; note that
     /// this may itself derive from a macro (if
@@ -308,7 +250,7 @@ struct DiagnosticSpanMacroExpansion {
     def_site_span: DiagnosticSpan,
 }
 
-#[derive(Encodable)]
+#[derive(Serialize)]
 struct DiagnosticCode {
     /// The code itself.
     code: String,
@@ -316,7 +258,7 @@ struct DiagnosticCode {
     explanation: Option<&'static str>,
 }
 
-#[derive(Encodable)]
+#[derive(Serialize)]
 struct ArtifactNotification<'a> {
     /// The path of the artifact.
     artifact: &'a Path,
@@ -324,13 +266,13 @@ struct ArtifactNotification<'a> {
     emit: &'a str,
 }
 
-#[derive(Encodable)]
+#[derive(Serialize)]
 struct FutureBreakageItem {
     future_breakage_date: Option<&'static str>,
     diagnostic: Diagnostic,
 }
 
-#[derive(Encodable)]
+#[derive(Serialize)]
 struct FutureIncompatReport {
     future_incompat_report: Vec<FutureBreakageItem>,
 }
@@ -339,7 +281,7 @@ struct FutureIncompatReport {
 // doctest component (as well as cargo).
 // We could unify this struct the one in rustdoc but they have different
 // ownership semantics, so doing so would create wasteful allocations.
-#[derive(Encodable)]
+#[derive(Serialize)]
 struct UnusedExterns<'a, 'b, 'c> {
     /// The severity level of the unused dependencies lint
     lint_level: &'a str,

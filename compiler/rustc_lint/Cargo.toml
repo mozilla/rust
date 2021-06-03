@@ -7,6 +7,7 @@ edition = "2018"
 [dependencies]
 tracing = "0.1"
 unicode-security = "0.0.5"
+serde_json = "1.0.59"
 rustc_middle = { path = "../rustc_middle" }
 rustc_ast_pretty = { path = "../rustc_ast_pretty" }
 rustc_attr = { path = "../rustc_attr" }
