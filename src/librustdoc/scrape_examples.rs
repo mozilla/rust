@@ -25,6 +25,7 @@ use std::path::PathBuf;
 crate struct CallData {
     crate locations: Vec<(usize, usize)>,
     crate url: String,
+    crate display_name: String,
 }
 crate type DefIdCallKey = String;
 crate type FnCallLocations = FxHashMap<PathBuf, CallData>;
@@ -84,13 +85,16 @@ where
                 FileName::Real(real_filename) => real_filename.into_local_path(),
                 _ => None,
             };
+
             if let Some(file_path) = file_path {
+                let abs_path = fs::canonicalize(file_path.clone()).unwrap();
                 let cx = &self.cx;
                 entries
-                    .entry(file_path)
+                    .entry(abs_path)
                     .or_insert_with(|| {
                         let url = cx.src_href(Span::from_rustc_span(span), false).unwrap();
-                        CallData { locations: Vec::new(), url }
+                        let display_name = file_path.display().to_string();
+                        CallData { locations: Vec::new(), url, display_name }
                     })
                     .locations
                     .push((span.lo().0 as usize, span.hi().0 as usize));

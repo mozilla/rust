@@ -2472,7 +2472,7 @@ fn render_call_locations(
             r#"<a href="{root}{url}" target="_blank">{name}</a>"#,
             root = cx.root_path(),
             url = call_data.url,
-            name = path.file_name().unwrap().to_string_lossy()
+            name = call_data.display_name
         );
         let edition = cx.shared.edition();
         write!(
