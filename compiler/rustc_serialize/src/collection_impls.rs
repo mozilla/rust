@@ -32,8 +32,8 @@ impl<D: Decoder, A: Array<Item: Decodable<D>>> Decodable<D> for SmallVec<A> {
 impl<S: Encoder, T: Encodable<S>> Encodable<S> for LinkedList<T> {
     fn encode(&self, s: &mut S) -> Result<(), S::Error> {
         s.emit_seq(self.len(), |s| {
-            for (i, e) in self.iter().enumerate() {
-                s.emit_seq_elt(i, |s| e.encode(s))?;
+            for e in self.iter() {
+                s.emit_seq_elt(|s| e.encode(s))?;
             }
             Ok(())
         })
@@ -55,8 +55,8 @@ impl<D: Decoder, T: Decodable<D>> Decodable<D> for LinkedList<T> {
 impl<S: Encoder, T: Encodable<S>> Encodable<S> for VecDeque<T> {
     fn encode(&self, s: &mut S) -> Result<(), S::Error> {
         s.emit_seq(self.len(), |s| {
-            for (i, e) in self.iter().enumerate() {
-                s.emit_seq_elt(i, |s| e.encode(s))?;
+            for e in self.iter() {
+                s.emit_seq_elt(|s| e.encode(s))?;
             }
             Ok(())
         })
@@ -82,8 +82,8 @@ where
 {
     fn encode(&self, e: &mut S) -> Result<(), S::Error> {
         e.emit_map(self.len(), |e| {
-            for (i, (key, val)) in self.iter().enumerate() {
-                e.emit_map_elt_key(i, |e| key.encode(e))?;
+            for (key, val) in self.iter() {
+                e.emit_map_elt_key(|e| key.encode(e))?;
                 e.emit_map_elt_val(|e| val.encode(e))?;
             }
             Ok(())
@@ -115,8 +115,8 @@ where
 {
     fn encode(&self, s: &mut S) -> Result<(), S::Error> {
         s.emit_seq(self.len(), |s| {
-            for (i, e) in self.iter().enumerate() {
-                s.emit_seq_elt(i, |s| e.encode(s))?;
+            for e in self.iter() {
+                s.emit_seq_elt(|s| e.encode(s))?;
             }
             Ok(())
         })
@@ -146,8 +146,8 @@ where
 {
     fn encode(&self, e: &mut E) -> Result<(), E::Error> {
         e.emit_map(self.len(), |e| {
-            for (i, (key, val)) in self.iter().enumerate() {
-                e.emit_map_elt_key(i, |e| key.encode(e))?;
+            for (key, val) in self.iter() {
+                e.emit_map_elt_key(|e| key.encode(e))?;
                 e.emit_map_elt_val(|e| val.encode(e))?;
             }
             Ok(())
@@ -182,8 +182,8 @@ where
 {
     fn encode(&self, s: &mut E) -> Result<(), E::Error> {
         s.emit_seq(self.len(), |s| {
-            for (i, e) in self.iter().enumerate() {
-                s.emit_seq_elt(i, |s| e.encode(s))?;
+            for e in self.iter() {
+                s.emit_seq_elt(|s| e.encode(s))?;
             }
             Ok(())
         })
@@ -225,8 +225,8 @@ where
 {
     fn encode(&self, e: &mut E) -> Result<(), E::Error> {
         e.emit_map(self.len(), |e| {
-            for (i, (key, val)) in self.iter().enumerate() {
-                e.emit_map_elt_key(i, |e| key.encode(e))?;
+            for (key, val) in self.iter() {
+                e.emit_map_elt_key(|e| key.encode(e))?;
                 e.emit_map_elt_val(|e| val.encode(e))?;
             }
             Ok(())
@@ -261,8 +261,8 @@ where
 {
     fn encode(&self, s: &mut E) -> Result<(), E::Error> {
         s.emit_seq(self.len(), |s| {
-            for (i, e) in self.iter().enumerate() {
-                s.emit_seq_elt(i, |s| e.encode(s))?;
+            for e in self.iter() {
+                s.emit_seq_elt(|s| e.encode(s))?;
             }
             Ok(())
         })
