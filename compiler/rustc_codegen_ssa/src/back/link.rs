@@ -1822,8 +1822,7 @@ fn add_local_native_libraries(
             NativeLibKind::Framework { as_needed } => {
                 cmd.link_framework(name, as_needed.unwrap_or(true))
             }
-            NativeLibKind::Static { bundle: None | Some(true), .. }
-            | NativeLibKind::Static { whole_archive: Some(true), .. } => {
+            NativeLibKind::Static { whole_archive: Some(true), .. } => {
                 cmd.link_whole_staticlib(name, verbatim, &search_path);
             }
             NativeLibKind::Static { .. } => cmd.link_staticlib(name, verbatim),
@@ -2071,20 +2070,7 @@ fn add_upstream_rust_crates<'a, B: ArchiveBuilder<'a>>(
             }
             archive.build();
 
-            // If we're creating a dylib, then we need to include the
-            // whole of each object in our archive into that artifact. This is
-            // because a `dylib` can be reused as an intermediate artifact.
-            //
-            // Note, though, that we don't want to include the whole of a
-            // compiler-builtins crate (e.g., compiler-rt) because it'll get
-            // repeatedly linked anyway.
-            if crate_type == CrateType::Dylib
-                && codegen_results.crate_info.compiler_builtins != Some(cnum)
-            {
-                cmd.link_whole_rlib(&fix_windows_verbatim_for_gcc(&dst));
-            } else {
-                cmd.link_rlib(&fix_windows_verbatim_for_gcc(&dst));
-            }
+            cmd.link_rlib(&fix_windows_verbatim_for_gcc(&dst));
         });
     }
 
