@@ -8,7 +8,7 @@ use rustc_span::edition::Edition;
 use rustc_span::{sym, symbol::Ident, MultiSpan, Span, Symbol};
 use rustc_target::spec::abi::Abi;
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 pub mod builtin;
 

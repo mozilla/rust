@@ -28,7 +28,7 @@ use rustc_metadata::locator;
 use rustc_middle::middle::cstore::MetadataLoader;
 use rustc_save_analysis as save;
 use rustc_save_analysis::DumpHandler;
-use rustc_serialize::json;
+use rustc_serialize::{opaque, Decodable};
 use rustc_session::config::nightly_options;
 use rustc_session::config::{ErrorOutputType, Input, OutputType, PrintRequest, TrimmedDefPaths};
 use rustc_session::getopts;
@@ -603,13 +603,16 @@ impl RustcDefaultCalls {
                 // FIXME: #![crate_type] and #![crate_name] support not implemented yet
                 sess.init_crate_types(collect_crate_types(sess, &[]));
                 let outputs = compiler.build_output_filenames(&sess, &[]);
-                let rlink_data = fs::read_to_string(file).unwrap_or_else(|err| {
+                let rlink_data = fs::read(file).unwrap_or_else(|err| {
                     sess.fatal(&format!("failed to read rlink file: {}", err));
                 });
-                let codegen_results: CodegenResults =
-                    json::decode(&rlink_data).unwrap_or_else(|err| {
-                        sess.fatal(&format!("failed to decode rlink: {}", err));
-                    });
+                let mut decoder = opaque::Decoder::new(&rlink_data, 0);
+                let codegen_results = CodegenResults::decode(&mut decoder).unwrap_or_else(|err| {
+                    sess.fatal(&format!("failed to decode rlink: {}", err));
+                });
+                if decoder.position() != rlink_data.len() {
+                    sess.fatal("failed to decode rlink: trailing garbage");
+                }
                 let result = compiler.codegen_backend().link(&sess, codegen_results, &outputs);
                 abort_on_err(result, sess);
             } else {
