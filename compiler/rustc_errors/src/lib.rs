@@ -105,8 +105,8 @@ impl<D: Decoder> Decodable<D> for ToolMetadata {
 }
 
 impl<S: Encoder> Encodable<S> for ToolMetadata {
-    fn encode(&self, e: &mut S) -> Result<(), S::Error> {
-        e.emit_unit()
+    fn encode(&self, _e: &mut S) -> Result<(), S::Error> {
+        Ok(())
     }
 }
 

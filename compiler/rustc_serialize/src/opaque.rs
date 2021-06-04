@@ -59,11 +59,6 @@ impl serialize::Encoder for Encoder {
     type Error = !;
 
     #[inline]
-    fn emit_unit(&mut self) -> EncodeResult {
-        Ok(())
-    }
-
-    #[inline]
     fn emit_usize(&mut self, v: usize) -> EncodeResult {
         write_leb128!(self, v, usize, write_usize_leb128)
     }
@@ -412,11 +407,6 @@ impl serialize::Encoder for FileEncoder {
     type Error = io::Error;
 
     #[inline]
-    fn emit_unit(&mut self) -> FileEncodeResult {
-        Ok(())
-    }
-
-    #[inline]
     fn emit_usize(&mut self, v: usize) -> FileEncodeResult {
         file_encoder_write_leb128!(self, v, usize, write_usize_leb128)
     }
@@ -559,11 +549,6 @@ macro_rules! read_leb128 {
 
 impl<'a> serialize::Decoder for Decoder<'a> {
     type Error = String;
-
-    #[inline]
-    fn read_nil(&mut self) -> Result<(), Self::Error> {
-        Ok(())
-    }
 
     #[inline]
     fn read_u128(&mut self) -> Result<u128, Self::Error> {
