@@ -42,12 +42,9 @@ fn decodable_body(
     let ty_name = s.ast().ident.to_string();
     let decode_body = match s.variants() {
         [vi] => {
-            let construct = vi.construct(|field, _index| decode_field(field, true));
+            let construct = vi.construct(|field, _index| decode_field(field));
             quote! {
-                ::rustc_serialize::Decoder::read_struct(
-                    __decoder,
-                    |__decoder| { ::std::result::Result::Ok(#construct) },
-                )
+                ::std::result::Result::Ok(#construct)
             }
         }
         variants => {
@@ -55,7 +52,7 @@ fn decodable_body(
                 .iter()
                 .enumerate()
                 .map(|(idx, vi)| {
-                    let construct = vi.construct(|field, _index| decode_field(field, false));
+                    let construct = vi.construct(|field, _index| decode_field(field));
                     quote! { #idx => { ::std::result::Result::Ok(#construct) } }
                 })
                 .collect();
@@ -65,20 +62,15 @@ fn decodable_body(
                 variants.len()
             );
             quote! {
-                ::rustc_serialize::Decoder::read_enum(
+                ::rustc_serialize::Decoder::read_enum_variant(
                     __decoder,
-                    |__decoder| {
-                        ::rustc_serialize::Decoder::read_enum_variant(
-                            __decoder,
-                            |__decoder, __variant_idx| {
-                                match __variant_idx {
-                                    #match_inner
-                                    _ => return ::std::result::Result::Err(
-                                        ::rustc_serialize::Decoder::error(__decoder, #message)),
-                                }
-                            })
-                    }
-                )
+                    |__decoder, __variant_idx| {
+                        match __variant_idx {
+                            #match_inner
+                            _ => return ::std::result::Result::Err(
+                                ::rustc_serialize::Decoder::error(__decoder, #message)),
+                        }
+                    })
             }
         }
     };
@@ -95,21 +87,14 @@ fn decodable_body(
     )
 }
 
-fn decode_field(field: &syn::Field, is_struct: bool) -> proc_macro2::TokenStream {
+fn decode_field(field: &syn::Field) -> proc_macro2::TokenStream {
     let decode_inner_method = if let syn::Type::Reference(_) = field.ty {
         quote! { ::rustc_middle::ty::codec::RefDecodable::decode }
     } else {
         quote! { ::rustc_serialize::Decodable::decode }
     };
-    let decode_method = if is_struct {
-        proc_macro2::Ident::new("read_struct_field", proc_macro2::Span::call_site())
-    } else {
-        proc_macro2::Ident::new("read_enum_variant_arg", proc_macro2::Span::call_site())
-    };
-
     quote! {
-        match ::rustc_serialize::Decoder::#decode_method(
-            __decoder, #decode_inner_method) {
+        match #decode_inner_method(__decoder) {
             ::std::result::Result::Ok(__res) => __res,
             ::std::result::Result::Err(__err) => return ::std::result::Result::Err(__err),
         }
@@ -172,10 +157,9 @@ fn encodable_body(
                     .map(|binding| {
                         let bind_ident = &binding.binding;
                         let result = quote! {
-                            match ::rustc_serialize::Encoder::emit_struct_field(
+                            match ::rustc_serialize::Encodable::<#encoder_ty>::encode(
+                                #bind_ident,
                                 __encoder,
-                                |__encoder|
-                                ::rustc_serialize::Encodable::<#encoder_ty>::encode(#bind_ident, __encoder),
                             ) {
                                 ::std::result::Result::Ok(()) => (),
                                 ::std::result::Result::Err(__err)
@@ -187,9 +171,7 @@ fn encodable_body(
                     .collect::<TokenStream>()
             });
             quote! {
-                ::rustc_serialize::Encoder::emit_struct(__encoder, |__encoder| {
-                    ::std::result::Result::Ok(match *self { #encode_inner })
-                })
+                ::std::result::Result::Ok(match *self { #encode_inner })
             }
         }
         _ => {
@@ -201,10 +183,9 @@ fn encodable_body(
                     .map(|binding| {
                         let bind_ident = &binding.binding;
                         let result = quote! {
-                            match ::rustc_serialize::Encoder::emit_enum_variant_arg(
+                            match ::rustc_serialize::Encodable::<#encoder_ty>::encode(
+                                #bind_ident,
                                 __encoder,
-                                |__encoder|
-                                ::rustc_serialize::Encodable::<#encoder_ty>::encode(#bind_ident, __encoder),
                             ) {
                                 ::std::result::Result::Ok(()) => (),
                                 ::std::result::Result::Err(__err)
@@ -224,11 +205,9 @@ fn encodable_body(
                 result
             });
             quote! {
-                ::rustc_serialize::Encoder::emit_enum(__encoder, |__encoder| {
-                    match *self {
-                        #encode_inner
-                    }
-                })
+                match *self {
+                    #encode_inner
+                }
             }
         }
     };
