@@ -163,7 +163,6 @@ pub trait InferCtxtExt<'tcx> {
         cause_code: &ObligationCauseCode<'tcx>,
         obligated_types: &mut Vec<&ty::TyS<'tcx>>,
         seen_requirements: &mut FxHashSet<DefId>,
-        note: Option<&str>,
     ) where
         T: fmt::Display;
 
@@ -794,8 +793,9 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             } else {
                 return try_borrowing(new_mut_trait_ref, expected_trait_ref, true, &[]);
             }
-        } else if let ObligationCauseCode::BindingObligation(_, _)
-        | ObligationCauseCode::ItemObligation(_) = &obligation.cause.code
+        } else if let ObligationCauseCode::BindingObligation(..)
+        | ObligationCauseCode::ItemObligation(_)
+        | ObligationCauseCode::ImplicitSizedObligation(..) = &obligation.cause.code
         {
             if try_borrowing(
                 ty::TraitRef::new(trait_ref.def_id, imm_substs),
@@ -1876,7 +1876,6 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             next_code.unwrap(),
             &mut Vec::new(),
             &mut Default::default(),
-            None,
         );
     }
 
@@ -1887,7 +1886,6 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         cause_code: &ObligationCauseCode<'tcx>,
         obligated_types: &mut Vec<&ty::TyS<'tcx>>,
         seen_requirements: &mut FxHashSet<DefId>,
-        note: Option<&str>,
     ) where
         T: fmt::Display,
     {
@@ -1937,6 +1935,12 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     err.note(&msg);
                 }
             }
+            ObligationCauseCode::ImplicitSizedObligation(item_def_id, span) => {
+                let item_name = tcx.def_path_str(item_def_id);
+                let mut sp: MultiSpan = span.into();
+                sp.push_span_label(span, format!("required by this bound in `{}`", item_name));
+                err.span_note(sp, "type parameters have an implicit `Sized` obligation");
+            }
             ObligationCauseCode::BindingObligation(item_def_id, span) => {
                 let item_name = tcx.def_path_str(item_def_id);
                 let msg = format!("required by this bound in `{}`", item_name);
@@ -1952,13 +1956,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     }
                 }
                 if span != DUMMY_SP {
-                    if let Some(note) = note {
-                        let mut sp: MultiSpan = span.into();
-                        sp.push_span_label(span, msg);
-                        err.span_note(sp, note);
-                    } else {
                         err.span_label(span, &msg);
-                    }
                 } else {
                     err.note(&msg);
                 }
@@ -2160,7 +2158,6 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                             &data.parent_code,
                             obligated_types,
                             seen_requirements,
-                            note,
                         )
                     });
                 }
@@ -2231,7 +2228,6 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                         &data.parent_code,
                         obligated_types,
                         seen_requirements,
-                        note,
                     )
                 });
             }
@@ -2246,7 +2242,6 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                         &data.parent_code,
                         obligated_types,
                         seen_requirements,
-                        note,
                     )
                 });
             }
