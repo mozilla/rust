@@ -2459,13 +2459,27 @@ impl Path {
         fs::read_dir(self)
     }
 
-    /// Returns `true` if the path points at an existing entity.
+    /// Returns `true` if the path points at an existing entity. False if it doesn't
+    /// **or** we can't tell.
     ///
     /// This function will traverse symbolic links to query information about the
     /// destination file. In case of broken symbolic links this will return `false`.
     ///
-    /// If you cannot access the directory containing the file, e.g., because of a
-    /// permission error, this will return `false`.
+    /// # Caveats
+    ///
+    /// Checking if a file exists and then attempting to use it is vulnerable to race
+    /// conditions. It is better to attempt the operation and handle the error when it
+    /// fails.
+    ///
+    /// If you cannot access the metadata of the file, e.g., because of a permission
+    /// error on the containing directory, this will return `false`. In many cases this
+    /// is not desirable as it silently ignores error that might be serious.
+    ///
+    /// Sometimes existence of a file is not what's actually interesting for an
+    /// application but its accessibility. This function does **not** check if the file
+    /// is accessible by the calling user. Calling `access` on Unix (or a similar
+    /// syscall) would be more appropriate. Rust `std` currently does not provide such
+    /// method.
     ///
     /// # Examples
     ///
@@ -2478,6 +2492,24 @@ impl Path {
     ///
     /// This is a convenience function that coerces errors to false. If you want to
     /// check errors, call [`fs::metadata`].
+    ///
+    /// An example of proper error handling.
+    /// ```no_run
+    /// use std::fs;
+    /// use std::io::{self, ErrorKind};
+    /// use std::path::Path;
+    ///
+    /// fn main() -> io::Result<()> {
+    ///     let exists = match fs::metadata(Path::new("does_not_exist.txt")) {
+    ///         Ok(_) => true,
+    ///         Err(err) if err.kind() == ErrorKind::NotFound => false,
+    ///         Err(err) => return Err(err),
+    ///     };
+    ///
+    ///     assert!(!exists);
+    ///     Ok(())
+    /// }
+    /// ```
     #[stable(feature = "path_ext", since = "1.5.0")]
     #[inline]
     pub fn exists(&self) -> bool {
