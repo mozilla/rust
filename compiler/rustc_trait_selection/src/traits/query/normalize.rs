@@ -49,7 +49,7 @@ impl<'cx, 'tcx> AtExt<'tcx> for At<'cx, 'tcx> {
             value,
             self.param_env,
         );
-        if !value.has_projections() {
+        if !needs_normalization(&value, self.param_env.reveal()) {
             return Ok(Normalized { value, obligations: vec![] });
         }
 
@@ -83,6 +83,18 @@ impl<'cx, 'tcx> AtExt<'tcx> for At<'cx, 'tcx> {
     }
 }
 
+fn needs_normalization<'tcx, T: TypeFoldable<'tcx>>(value: &T, reveal: Reveal) -> bool {
+    match reveal {
+        Reveal::UserFacing => value
+            .has_type_flags(ty::TypeFlags::HAS_TY_PROJECTION | ty::TypeFlags::HAS_CT_PROJECTION),
+        Reveal::All => value.has_type_flags(
+            ty::TypeFlags::HAS_TY_PROJECTION
+                | ty::TypeFlags::HAS_TY_OPAQUE
+                | ty::TypeFlags::HAS_CT_PROJECTION,
+        ),
+    }
+}
+
 struct QueryNormalizer<'cx, 'tcx> {
     infcx: &'cx InferCtxt<'cx, 'tcx>,
     cause: &'cx ObligationCause<'tcx>,
@@ -103,7 +115,7 @@ impl<'cx, 'tcx> TypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
     where
         T: TypeFoldable<'tcx>,
     {
-        if !t.has_projections() {
+        if !needs_normalization(&t, self.param_env.reveal()) {
             return t;
         }
         if !t.as_ref().skip_binder().has_escaping_bound_vars() {
@@ -132,7 +144,7 @@ impl<'cx, 'tcx> TypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
 
     #[instrument(level = "debug", skip(self))]
     fn fold_ty(&mut self, ty: Ty<'tcx>) -> Ty<'tcx> {
-        if !ty.has_projections() {
+        if !needs_normalization(&ty, self.param_env.reveal()) {
             return ty;
         }
 

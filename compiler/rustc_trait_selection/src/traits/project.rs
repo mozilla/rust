@@ -293,6 +293,18 @@ where
     result
 }
 
+fn needs_normalization<'tcx, T: TypeFoldable<'tcx>>(value: &T, reveal: Reveal) -> bool {
+    match reveal {
+        Reveal::UserFacing => value
+            .has_type_flags(ty::TypeFlags::HAS_TY_PROJECTION | ty::TypeFlags::HAS_CT_PROJECTION),
+        Reveal::All => value.has_type_flags(
+            ty::TypeFlags::HAS_TY_PROJECTION
+                | ty::TypeFlags::HAS_TY_OPAQUE
+                | ty::TypeFlags::HAS_CT_PROJECTION,
+        ),
+    }
+}
+
 struct AssocTypeNormalizer<'a, 'b, 'tcx> {
     selcx: &'a mut SelectionContext<'b, 'tcx>,
     param_env: ty::ParamEnv<'tcx>,
@@ -316,7 +328,11 @@ impl<'a, 'b, 'tcx> AssocTypeNormalizer<'a, 'b, 'tcx> {
         let value = self.selcx.infcx().resolve_vars_if_possible(value);
         debug!(?value);
 
-        if !value.has_projections() { value } else { value.fold_with(self) }
+        if !needs_normalization(&value, self.param_env.reveal()) {
+            value
+        } else {
+            value.fold_with(self)
+        }
     }
 }
 
@@ -330,7 +346,7 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
     where
         T: TypeFoldable<'tcx>,
     {
-        if !t.has_projections() {
+        if !needs_normalization(&t, self.param_env.reveal()) {
             return t;
         }
         if !t.as_ref().skip_binder().has_escaping_bound_vars() {
@@ -358,7 +374,7 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
     }
 
     fn fold_ty(&mut self, ty: Ty<'tcx>) -> Ty<'tcx> {
-        if !ty.has_projections() {
+        if !needs_normalization(&ty, self.param_env.reveal()) {
             return ty;
         }
 
@@ -445,6 +461,9 @@ impl TypeFolder<'tcx> for PlaceholderReplacer<'_, 'tcx> {
         &mut self,
         t: ty::Binder<'tcx, T>,
     ) -> ty::Binder<'tcx, T> {
+        if !t.has_placeholders() && !t.has_infer_regions() {
+            return t;
+        }
         self.current_index.shift_in(1);
         let t = t.super_fold_with(self);
         self.current_index.shift_out(1);
@@ -452,12 +471,15 @@ impl TypeFolder<'tcx> for PlaceholderReplacer<'_, 'tcx> {
     }
 
     fn fold_region(&mut self, r0: ty::Region<'tcx>) -> ty::Region<'tcx> {
-        let r1 = self
-            .infcx
-            .inner
-            .borrow_mut()
-            .unwrap_region_constraints()
-            .opportunistic_resolve_region(self.infcx.tcx, r0);
+        let r1 = match r0 {
+            ty::ReVar(_) => self
+                .infcx
+                .inner
+                .borrow_mut()
+                .unwrap_region_constraints()
+                .opportunistic_resolve_region(self.infcx.tcx, r0),
+            _ => r0,
+        };
 
         let r2 = match *r1 {
             ty::RePlaceholder(p) => {
@@ -489,7 +511,8 @@ impl TypeFolder<'tcx> for PlaceholderReplacer<'_, 'tcx> {
                 }
             }
 
-            _ => ty.super_fold_with(self),
+            _ if ty.has_placeholders() || ty.has_infer_regions() => ty.super_fold_with(self),
+            _ => ty,
         }
     }
 
