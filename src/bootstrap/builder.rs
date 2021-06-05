@@ -3,15 +3,17 @@ use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::env;
 use std::ffi::OsStr;
-use std::fmt::Debug;
+use std::fmt::{self, Debug, Display};
 use std::fs;
 use std::hash::Hash;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use build_helper::{output, t};
+use lazy_static::lazy_static;
 
 use crate::cache::{Cache, Interned, INTERNER};
 use crate::check;
@@ -61,6 +63,17 @@ pub trait Step: 'static + Clone + Debug + PartialEq + Eq + Hash {
 
     /// If true, then this rule should be skipped if --target was specified, but --host was not
     const ONLY_HOSTS: bool = false;
+
+    /// A user-visible name to display if this step fails.
+    fn name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+
+    /// The path that should be used on the command line to run this step.
+    fn path(&self, builder: &Builder<'_>) -> PathBuf {
+        let paths = Self::should_run(ShouldRun::new(builder)).paths;
+        paths.iter().map(|pathset| pathset.path(builder)).next().expect("no paths for step")
+    }
 
     /// Primary function to execute this rule. Can call `builder.ensure()`
     /// with other steps to run those.
@@ -349,6 +362,26 @@ pub enum Kind {
     Doc,
     Install,
     Run,
+}
+
+impl Display for Kind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use Kind::*;
+        let s = match self {
+            Build => "build",
+            Check => "check",
+            Clippy => "clippy",
+            Fix => "fix",
+            Format => "fmt",
+            Test => "test",
+            Bench => "bench",
+            Dist => "dist",
+            Doc => "doc",
+            Install => "install",
+            Run => "run",
+        };
+        f.write_str(s)
+    }
 }
 
 impl<'a> Builder<'a> {
@@ -1557,12 +1590,29 @@ impl<'a> Builder<'a> {
         }
 
         let (out, dur) = {
+            let instructions = ReplicationStep {
+                cmd: self.kind,
+                name: step.name(),
+                path: step.path(self),
+                // FIXME: top_stage might be higher than the stage of the step
+                stage: self.top_stage,
+                test_args: self.config.cmd.test_args().into_iter().map(String::from).collect(),
+            };
+            // NOTE: don't hold onto this guard, it will cause a deadlock if the current step calls `ensure` recursively.
+            let old_instructions = CURRENT_INSTRUCTIONS
+                .lock()
+                .expect("steps are not run in parallel")
+                .replace(instructions);
+
             let start = Instant::now();
             let zero = Duration::new(0, 0);
             let parent = self.time_spent_on_dependencies.replace(zero);
             let out = step.clone().run(self);
             let dur = start.elapsed();
             let deps = self.time_spent_on_dependencies.replace(parent + dur);
+
+            *CURRENT_INSTRUCTIONS.lock().expect("steps are not run in parallel") = old_instructions;
+
             (out, dur - deps)
         };
 
@@ -1578,6 +1628,36 @@ impl<'a> Builder<'a> {
         self.verbose(&format!("{}< {:?}", "  ".repeat(self.stack.borrow().len()), step));
         self.cache.put(step, out.clone());
         out
+    }
+}
+
+struct ReplicationStep {
+    cmd: Kind,
+    name: &'static str,
+    path: PathBuf,
+    stage: u32,
+    test_args: Vec<String>,
+}
+
+lazy_static! {
+    static ref CURRENT_INSTRUCTIONS: Mutex<Option<ReplicationStep>> = Mutex::new(None);
+}
+
+pub(crate) extern "C" fn print_replication_steps() {
+    if let Some(step) = CURRENT_INSTRUCTIONS.lock().expect("mutex guard is dropped on panic").take()
+    {
+        // ignore errors; we're exiting anyway
+        println!("note: failed while building {}", step.name);
+        print!(
+            "help: to replicate this failure, run `./x.py {} {} --stage {}",
+            step.cmd,
+            step.path.display(),
+            step.stage,
+        );
+        for arg in step.test_args {
+            print!(" --test-args \"{}\"", arg);
+        }
+        println!("`");
     }
 }
 
