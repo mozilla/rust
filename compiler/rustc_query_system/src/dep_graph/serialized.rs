@@ -123,15 +123,16 @@ impl<'a, K: DepKind + Decodable<opaque::Decoder<'a>>> Decodable<opaque::Decoder<
 
         for _index in 0..node_count {
             d.read_struct(|d| {
-                let dep_node: DepNode<K> = d.read_struct_field(Decodable::decode)?;
+                let dep_node: DepNode<K> = d.read_struct_field("node", Decodable::decode)?;
                 let _i: SerializedDepNodeIndex = nodes.push(dep_node);
                 debug_assert_eq!(_i.index(), _index);
 
-                let fingerprint: Fingerprint = d.read_struct_field(Decodable::decode)?;
+                let fingerprint: Fingerprint =
+                    d.read_struct_field("fingerprint", Decodable::decode)?;
                 let _i: SerializedDepNodeIndex = fingerprints.push(fingerprint);
                 debug_assert_eq!(_i.index(), _index);
 
-                d.read_struct_field(|d| {
+                d.read_struct_field("edges", |d| {
                     d.read_seq(|d, len| {
                         let start = edge_list_data.len().try_into().unwrap();
                         for _ in 0..len {
