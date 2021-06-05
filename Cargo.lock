@@ -3777,6 +3777,7 @@ dependencies = [
  "rustc_span",
  "rustc_target",
  "rustc_typeck",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
  "tracing-tree",
@@ -4371,6 +4372,7 @@ dependencies = [
  "rustc_macros",
  "rustc_serialize",
  "rustc_span",
+ "serde_json",
  "tracing",
 ]
 
