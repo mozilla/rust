@@ -16,6 +16,7 @@ use rustc_index::vec::IndexVec;
 use rustc_middle::middle::cstore::{CrateDepKind, CrateSource, ExternCrate};
 use rustc_middle::middle::cstore::{ExternCrateSource, MetadataLoaderDyn};
 use rustc_middle::ty::TyCtxt;
+use rustc_serialize::json::ToJson;
 use rustc_session::config::{self, CrateType, ExternLocation};
 use rustc_session::lint::{self, BuiltinLintDiagnostics, ExternDepSpec};
 use rustc_session::output::validate_crate_name;
@@ -27,6 +28,7 @@ use rustc_span::{Span, DUMMY_SP};
 use rustc_target::spec::{PanicStrategy, TargetTriple};
 
 use proc_macro::bridge::client::ProcMacro;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::{cmp, env};
 use tracing::{debug, info};
@@ -941,11 +943,11 @@ impl<'a> CrateLoader<'a> {
                 None => {
                     // If we don't have a specific location, provide a json encoding of the `--extern`
                     // option.
-                    let meta: serde_json::Map<String, serde_json::Value> =
-                        std::iter::once(("name".to_string(), name.to_owned().into())).collect();
+                    let meta: BTreeMap<String, String> =
+                        std::iter::once(("name".to_string(), name.to_string())).collect();
                     BuiltinLintDiagnostics::ExternDepSpec(
                         name.clone(),
-                        ExternDepSpec::Json(serde_json::Value::Object(meta)),
+                        ExternDepSpec::Json(meta.to_json()),
                     )
                 }
             };

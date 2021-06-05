@@ -26,6 +26,7 @@ use rustc_data_structures::sync::{self, Lock, Lrc};
 use rustc_data_structures::AtomicRef;
 use rustc_lint_defs::FutureBreakage;
 pub use rustc_lint_defs::{pluralize, Applicability};
+use rustc_serialize::json::Json;
 use rustc_serialize::{Decodable, Decoder, Encodable, Encoder};
 use rustc_span::source_map::SourceMap;
 use rustc_span::{Loc, MultiSpan, Span};
@@ -37,7 +38,6 @@ use std::panic;
 use std::path::Path;
 use std::{error, fmt};
 
-use serde::{Deserialize, Serialize};
 use termcolor::{Color, ColorSpec};
 
 pub mod annotate_snippet_emitter_writer;
@@ -80,16 +80,16 @@ impl SuggestionStyle {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
-pub struct ToolMetadata(pub Option<serde_json::Value>);
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct ToolMetadata(pub Option<Json>);
 
 impl ToolMetadata {
-    fn new(json: serde_json::Value) -> Self {
+    fn new(json: Json) -> Self {
         ToolMetadata(Some(json))
     }
 
-    fn is_not_set(&self) -> bool {
-        self.0.is_none()
+    fn is_set(&self) -> bool {
+        self.0.is_some()
     }
 }
 
@@ -106,7 +106,10 @@ impl<D: Decoder> Decodable<D> for ToolMetadata {
 
 impl<S: Encoder> Encodable<S> for ToolMetadata {
     fn encode(&self, e: &mut S) -> Result<(), S::Error> {
-        e.emit_unit()
+        match &self.0 {
+            None => e.emit_unit(),
+            Some(json) => json.encode(e),
+        }
     }
 }
 

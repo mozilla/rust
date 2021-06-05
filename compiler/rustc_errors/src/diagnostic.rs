@@ -6,6 +6,7 @@ use crate::SubstitutionPart;
 use crate::SuggestionStyle;
 use crate::ToolMetadata;
 use rustc_lint_defs::Applicability;
+use rustc_serialize::json::Json;
 use rustc_span::{MultiSpan, Span, DUMMY_SP};
 use std::fmt;
 
@@ -507,7 +508,7 @@ impl Diagnostic {
         &mut self,
         msg: &str,
         applicability: Applicability,
-        tool_metadata: serde_json::Value,
+        tool_metadata: Json,
     ) {
         self.suggestions.push(CodeSuggestion {
             substitutions: vec![],
