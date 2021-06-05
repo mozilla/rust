@@ -59,7 +59,7 @@ cfg_if::cfg_if! {
 // don't want to duplicate it here.
 #[cfg(all(
     target_os = "linux",
-    target_env = "gnu",
+    any(target_env = "gnu", target_env = "uclibc"),
     not(feature = "llvm-libunwind"),
     not(feature = "system-llvm-libunwind")
 ))]
@@ -68,7 +68,7 @@ extern "C" {}
 
 #[cfg(all(
     target_os = "linux",
-    target_env = "gnu",
+    any(target_env = "gnu", target_env = "uclibc"),
     not(feature = "llvm-libunwind"),
     feature = "system-llvm-libunwind"
 ))]
