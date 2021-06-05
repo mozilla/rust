@@ -210,6 +210,7 @@ impl<'tcx> CheckInlineAssembly<'tcx> {
             | ExprKind::Index(..)
             | ExprKind::Path(..)
             | ExprKind::AddrOf(..)
+            | ExprKind::Let(..)
             | ExprKind::Break(..)
             | ExprKind::Continue(..)
             | ExprKind::Ret(..)

@@ -88,6 +88,7 @@ fn never_loop_expr(expr: &Expr<'_>, main_loop_id: HirId) -> NeverLoopResult {
         | ExprKind::Unary(_, e)
         | ExprKind::Cast(e, _)
         | ExprKind::Type(e, _)
+        | ExprKind::Let(_, e, _)
         | ExprKind::Field(e, _)
         | ExprKind::AddrOf(_, _, e)
         | ExprKind::Struct(_, _, Some(e))
@@ -105,7 +106,7 @@ fn never_loop_expr(expr: &Expr<'_>, main_loop_id: HirId) -> NeverLoopResult {
             // Break can come from the inner loop so remove them.
             absorb_break(&never_loop_block(b, main_loop_id))
         },
-        ExprKind::If(e, e2, ref e3) => {
+        ExprKind::If(e, e2, e3) => {
             let e1 = never_loop_expr(e, main_loop_id);
             let e2 = never_loop_expr(e2, main_loop_id);
             let e3 = e3
@@ -133,7 +134,7 @@ fn never_loop_expr(expr: &Expr<'_>, main_loop_id: HirId) -> NeverLoopResult {
                 NeverLoopResult::AlwaysBreak
             }
         },
-        ExprKind::Break(_, ref e) | ExprKind::Ret(ref e) => e.as_ref().map_or(NeverLoopResult::AlwaysBreak, |e| {
+        ExprKind::Break(_, e) | ExprKind::Ret(e) => e.as_ref().map_or(NeverLoopResult::AlwaysBreak, |e| {
             combine_seq(never_loop_expr(e, main_loop_id), NeverLoopResult::AlwaysBreak)
         }),
         ExprKind::InlineAsm(asm) => asm
