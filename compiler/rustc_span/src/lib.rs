@@ -146,10 +146,10 @@ impl Hash for RealFileName {
 // an added assert statement
 impl<S: Encoder> Encodable<S> for RealFileName {
     fn encode(&self, encoder: &mut S) -> Result<(), S::Error> {
-        match *self {
+        encoder.emit_enum(|encoder| match *self {
             RealFileName::LocalPath(ref local_path) => encoder.emit_enum_variant(0, |encoder| {
                 Ok({
-                    local_path.encode(encoder)?;
+                    encoder.emit_enum_variant_arg(|encoder| local_path.encode(encoder))?;
                 })
             }),
 
@@ -159,11 +159,11 @@ impl<S: Encoder> Encodable<S> for RealFileName {
                     // if they have been remapped by --remap-path-prefix
                     assert!(local_path.is_none());
                     Ok({
-                        local_path.encode(encoder)?;
-                        virtual_name.encode(encoder)?;
+                        encoder.emit_enum_variant_arg(|encoder| local_path.encode(encoder))?;
+                        encoder.emit_enum_variant_arg(|encoder| virtual_name.encode(encoder))?;
                     })
                 }),
-        }
+        })
     }
 }
 
@@ -825,16 +825,20 @@ impl Default for Span {
 impl<E: Encoder> Encodable<E> for Span {
     default fn encode(&self, s: &mut E) -> Result<(), E::Error> {
         let span = self.data();
-        span.lo.encode(s)?;
-        span.hi.encode(s)
+        s.emit_struct(|s| {
+            s.emit_struct_field(|s| span.lo.encode(s))?;
+            s.emit_struct_field(|s| span.hi.encode(s))
+        })
     }
 }
 impl<D: Decoder> Decodable<D> for Span {
-    default fn decode(d: &mut D) -> Result<Span, D::Error> {
-        let lo = Decodable::decode(d)?;
-        let hi = Decodable::decode(d)?;
+    default fn decode(s: &mut D) -> Result<Span, D::Error> {
+        s.read_struct(|d| {
+            let lo = d.read_struct_field(Decodable::decode)?;
+            let hi = d.read_struct_field(Decodable::decode)?;
 
-        Ok(Span::new(lo, hi, SyntaxContext::root()))
+            Ok(Span::new(lo, hi, SyntaxContext::root()))
+        })
     }
 }
 
@@ -1228,128 +1232,137 @@ pub struct SourceFile {
 
 impl<S: Encoder> Encodable<S> for SourceFile {
     fn encode(&self, s: &mut S) -> Result<(), S::Error> {
-        self.name.encode(s)?;
-        self.src_hash.encode(s)?;
-        self.start_pos.encode(s)?;
-        self.end_pos.encode(s)?;
-        {
-            let lines = &self.lines[..];
-            // Store the length.
-            s.emit_u32(lines.len() as u32)?;
+        s.emit_struct(|s| {
+            s.emit_struct_field(|s| self.name.encode(s))?;
+            s.emit_struct_field(|s| self.src_hash.encode(s))?;
+            s.emit_struct_field(|s| self.start_pos.encode(s))?;
+            s.emit_struct_field(|s| self.end_pos.encode(s))?;
+            s.emit_struct_field(|s| {
+                let lines = &self.lines[..];
+                // Store the length.
+                s.emit_u32(lines.len() as u32)?;
 
-            if !lines.is_empty() {
-                // In order to preserve some space, we exploit the fact that
-                // the lines list is sorted and individual lines are
-                // probably not that long. Because of that we can store lines
-                // as a difference list, using as little space as possible
-                // for the differences.
-                let max_line_length = if lines.len() == 1 {
-                    0
-                } else {
-                    lines
-                        .array_windows()
-                        .map(|&[fst, snd]| snd - fst)
-                        .map(|bp| bp.to_usize())
-                        .max()
-                        .unwrap()
-                };
+                if !lines.is_empty() {
+                    // In order to preserve some space, we exploit the fact that
+                    // the lines list is sorted and individual lines are
+                    // probably not that long. Because of that we can store lines
+                    // as a difference list, using as little space as possible
+                    // for the differences.
+                    let max_line_length = if lines.len() == 1 {
+                        0
+                    } else {
+                        lines
+                            .array_windows()
+                            .map(|&[fst, snd]| snd - fst)
+                            .map(|bp| bp.to_usize())
+                            .max()
+                            .unwrap()
+                    };
 
-                let bytes_per_diff: u8 = match max_line_length {
-                    0..=0xFF => 1,
-                    0x100..=0xFFFF => 2,
-                    _ => 4,
-                };
+                    let bytes_per_diff: u8 = match max_line_length {
+                        0..=0xFF => 1,
+                        0x100..=0xFFFF => 2,
+                        _ => 4,
+                    };
 
-                // Encode the number of bytes used per diff.
-                bytes_per_diff.encode(s)?;
+                    // Encode the number of bytes used per diff.
+                    bytes_per_diff.encode(s)?;
 
-                // Encode the first element.
-                lines[0].encode(s)?;
+                    // Encode the first element.
+                    lines[0].encode(s)?;
 
-                let diff_iter = lines[..].array_windows().map(|&[fst, snd]| snd - fst);
+                    let diff_iter = lines[..].array_windows().map(|&[fst, snd]| snd - fst);
 
-                match bytes_per_diff {
-                    1 => {
-                        for diff in diff_iter {
-                            (diff.0 as u8).encode(s)?
+                    match bytes_per_diff {
+                        1 => {
+                            for diff in diff_iter {
+                                (diff.0 as u8).encode(s)?
+                            }
                         }
-                    }
-                    2 => {
-                        for diff in diff_iter {
-                            (diff.0 as u16).encode(s)?
+                        2 => {
+                            for diff in diff_iter {
+                                (diff.0 as u16).encode(s)?
+                            }
                         }
-                    }
-                    4 => {
-                        for diff in diff_iter {
-                            diff.0.encode(s)?
+                        4 => {
+                            for diff in diff_iter {
+                                diff.0.encode(s)?
+                            }
                         }
+                        _ => unreachable!(),
                     }
-                    _ => unreachable!(),
                 }
-            }
-        }
-        self.multibyte_chars.encode(s)?;
-        self.non_narrow_chars.encode(s)?;
-        self.name_hash.encode(s)?;
-        self.normalized_pos.encode(s)?;
-        self.cnum.encode(s)
+
+                Ok(())
+            })?;
+            s.emit_struct_field(|s| self.multibyte_chars.encode(s))?;
+            s.emit_struct_field(|s| self.non_narrow_chars.encode(s))?;
+            s.emit_struct_field(|s| self.name_hash.encode(s))?;
+            s.emit_struct_field(|s| self.normalized_pos.encode(s))?;
+            s.emit_struct_field(|s| self.cnum.encode(s))
+        })
     }
 }
 
 impl<D: Decoder> Decodable<D> for SourceFile {
     fn decode(d: &mut D) -> Result<SourceFile, D::Error> {
-        let name = FileName::decode(d)?;
-        let src_hash = SourceFileHash::decode(d)?;
-        let start_pos = BytePos::decode(d)?;
-        let end_pos = BytePos::decode(d)?;
-        let lines: Vec<BytePos> = {
-            let num_lines: u32 = Decodable::decode(d)?;
-            let mut lines = Vec::with_capacity(num_lines as usize);
+        d.read_struct(|d| {
+            let name: FileName = d.read_struct_field(|d| Decodable::decode(d))?;
+            let src_hash: SourceFileHash = d.read_struct_field(|d| Decodable::decode(d))?;
+            let start_pos: BytePos = d.read_struct_field(|d| Decodable::decode(d))?;
+            let end_pos: BytePos = d.read_struct_field(|d| Decodable::decode(d))?;
+            let lines: Vec<BytePos> = d.read_struct_field(|d| {
+                let num_lines: u32 = Decodable::decode(d)?;
+                let mut lines = Vec::with_capacity(num_lines as usize);
 
-            if num_lines > 0 {
-                // Read the number of bytes used per diff.
-                let bytes_per_diff: u8 = Decodable::decode(d)?;
+                if num_lines > 0 {
+                    // Read the number of bytes used per diff.
+                    let bytes_per_diff: u8 = Decodable::decode(d)?;
 
-                // Read the first element.
-                let mut line_start: BytePos = Decodable::decode(d)?;
-                lines.push(line_start);
-
-                for _ in 1..num_lines {
-                    let diff = match bytes_per_diff {
-                        1 => d.read_u8()? as u32,
-                        2 => d.read_u16()? as u32,
-                        4 => d.read_u32()?,
-                        _ => unreachable!(),
-                    };
-
-                    line_start = line_start + BytePos(diff);
-
+                    // Read the first element.
+                    let mut line_start: BytePos = Decodable::decode(d)?;
                     lines.push(line_start);
-                }
-            }
 
-            lines
-        };
-        let multibyte_chars = Vec::<MultiByteChar>::decode(d)?;
-        let non_narrow_chars = Vec::<NonNarrowChar>::decode(d)?;
-        let name_hash = u128::decode(d)?;
-        let normalized_pos = Vec::<NormalizedPos>::decode(d)?;
-        let cnum = CrateNum::decode(d)?;
-        Ok(SourceFile {
-            name,
-            start_pos,
-            end_pos,
-            src: None,
-            src_hash,
-            // Unused - the metadata decoder will construct
-            // a new SourceFile, filling in `external_src` properly
-            external_src: Lock::new(ExternalSource::Unneeded),
-            lines,
-            multibyte_chars,
-            non_narrow_chars,
-            normalized_pos,
-            name_hash,
-            cnum,
+                    for _ in 1..num_lines {
+                        let diff = match bytes_per_diff {
+                            1 => d.read_u8()? as u32,
+                            2 => d.read_u16()? as u32,
+                            4 => d.read_u32()?,
+                            _ => unreachable!(),
+                        };
+
+                        line_start = line_start + BytePos(diff);
+
+                        lines.push(line_start);
+                    }
+                }
+
+                Ok(lines)
+            })?;
+            let multibyte_chars: Vec<MultiByteChar> =
+                d.read_struct_field(|d| Decodable::decode(d))?;
+            let non_narrow_chars: Vec<NonNarrowChar> =
+                d.read_struct_field(|d| Decodable::decode(d))?;
+            let name_hash: u128 = d.read_struct_field(|d| Decodable::decode(d))?;
+            let normalized_pos: Vec<NormalizedPos> =
+                d.read_struct_field(|d| Decodable::decode(d))?;
+            let cnum: CrateNum = d.read_struct_field(|d| Decodable::decode(d))?;
+            Ok(SourceFile {
+                name,
+                start_pos,
+                end_pos,
+                src: None,
+                src_hash,
+                // Unused - the metadata decoder will construct
+                // a new SourceFile, filling in `external_src` properly
+                external_src: Lock::new(ExternalSource::Unneeded),
+                lines,
+                multibyte_chars,
+                non_narrow_chars,
+                normalized_pos,
+                name_hash,
+                cnum,
+            })
         })
     }
 }
