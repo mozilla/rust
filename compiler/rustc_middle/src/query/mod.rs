@@ -1333,7 +1333,6 @@ rustc_queries! {
         desc { "fetching what a dependency looks like" }
     }
     query crate_name(_: CrateNum) -> Symbol {
-        eval_always
         desc { "fetching what a crate is named" }
     }
     query item_children(def_id: DefId) -> &'tcx [Export<hir::HirId>] {
