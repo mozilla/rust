@@ -666,6 +666,9 @@ declare_features! (
     /// Allows qualified paths in struct expressions, struct patterns and tuple struct patterns.
     (active, more_qualified_paths, "1.54.0", Some(80080), None),
 
+    /// Allows explicit generic arguments specification with `impl Trait` present.
+    (active, explicit_generic_args_with_impl_trait, "1.54.0", Some(83701), None),
+
     // -------------------------------------------------------------------------
     // feature-group-end: actual feature gates
     // -------------------------------------------------------------------------
