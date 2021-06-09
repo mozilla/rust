@@ -78,9 +78,7 @@ impl LinkerInfo {
                     as Box<dyn Linker>
             }
 
-            LinkerFlavor::L4Bender => {
-                Box::new(L4Bender::new(cmd, sess)) as Box<dyn Linker>
-            },
+            LinkerFlavor::L4Bender => Box::new(L4Bender::new(cmd, sess)) as Box<dyn Linker>,
             LinkerFlavor::Lld(LldFlavor::Wasm) => {
                 Box::new(WasmLd::new(cmd, sess, self)) as Box<dyn Linker>
             }
@@ -1296,10 +1294,10 @@ pub struct L4Bender<'a> {
 }
 
 impl<'a> Linker for L4Bender<'a> {
-    fn link_dylib(&mut self, _lib: Symbol) {
-        panic!("dylibs not supported yet")
+    fn link_dylib(&mut self, _lib: Symbol, _verbatim: bool, _as_needed: bool) {
+        bug!("dylibs are not supported on L4Re");
     }
-    fn link_staticlib(&mut self, lib: Symbol) {
+    fn link_staticlib(&mut self, lib: Symbol, _verbatim: bool) {
         self.hint_static();
         self.cmd.arg(format!("-PC{}", lib));
     }
@@ -1311,36 +1309,43 @@ impl<'a> Linker for L4Bender<'a> {
         self.cmd.arg("-L").arg(path);
     }
     fn framework_path(&mut self, _: &Path) {
-        bug!("Frameworks are not supported on L4Re!");
+        bug!("frameworks are not supported on L4Re");
     }
-    fn output_filename(&mut self, path: &Path) { self.cmd.arg("-o").arg(path); }
-    fn add_object(&mut self, path: &Path) { self.cmd.arg(path); }
-    // not sure about pie on L4Re
-    fn position_independent_executable(&mut self) { }
-    fn no_position_independent_executable(&mut self) { }
-    fn full_relro(&mut self) { self.cmd.arg("-z,relro,-z,now"); }
-    fn partial_relro(&mut self) { self.cmd.arg("-z,relro"); }
-    fn no_relro(&mut self) { self.cmd.arg("-z,norelro"); }
-    fn build_static_executable(&mut self) { self.cmd.arg("-static"); }
+    fn output_filename(&mut self, path: &Path) {
+        self.cmd.arg("-o").arg(path);
+    }
+
+    fn add_object(&mut self, path: &Path) {
+        self.cmd.arg(path);
+    }
+
+    fn full_relro(&mut self) {
+        self.cmd.arg("-z,relro,-z,now");
+    }
+
+    fn partial_relro(&mut self) {
+        self.cmd.arg("-z,relro");
+    }
+
+    fn no_relro(&mut self) {
+        self.cmd.arg("-z,norelro");
+    }
+
     fn cmd(&mut self) -> &mut Command {
         &mut self.cmd
     }
+
+    fn set_output_kind(&mut self, _output_kind: LinkOutputKind, _out_filename: &Path) {}
 
     fn link_rust_dylib(&mut self, _: Symbol, _: &Path) {
         panic!("Rust dylibs not supported");
     }
 
-    fn link_framework(&mut self, _: Symbol) {
-        bug!("Frameworks not supported on L4Re.");
+    fn link_framework(&mut self, _framework: Symbol, _as_needed: bool) {
+        bug!("frameworks not supported on L4Re");
     }
 
-    // Here we explicitly ask that the entire archive is included into the
-    // result artifact. For more details see #15460, but the gist is that
-    // the linker will strip away any unused objects in the archive if we
-    // don't otherwise explicitly reference them. This can occur for
-    // libraries which are just providing bindings, libraries with generic
-    // functions, etc.
-    fn link_whole_staticlib(&mut self, lib: Symbol, _: &[PathBuf]) {
+    fn link_whole_staticlib(&mut self, lib: Symbol, _verbatim: bool, _search_path: &[PathBuf]) {
         self.hint_static();
         self.cmd.arg("--whole-archive").arg(format!("-l{}", lib));
         self.cmd.arg("--no-whole-archive");
@@ -1357,17 +1362,22 @@ impl<'a> Linker for L4Bender<'a> {
         }
     }
 
+    fn no_gc_sections(&mut self) {
+        self.cmd.arg("--no-gc-sections");
+    }
+
     fn optimize(&mut self) {
         self.cmd.arg("-O2");
     }
 
-    fn pgo_gen(&mut self) { }
+    fn pgo_gen(&mut self) {}
 
     fn debuginfo(&mut self, strip: Strip) {
         match strip {
             Strip::None => {}
             Strip::Debuginfo => {
-                self.cmd().arg("--strip-debug"); }
+                self.cmd().arg("--strip-debug");
+            }
             Strip::Symbols => {
                 self.cmd().arg("--strip-all");
             }
@@ -1378,12 +1388,9 @@ impl<'a> Linker for L4Bender<'a> {
         self.cmd.arg("-nostdlib");
     }
 
-    fn build_dylib(&mut self, _: &Path) {
-        bug!("not implemented");
-    }
-
     fn export_symbols(&mut self, _: &Path, _: CrateType) {
         // ToDo, not implemented, copy from GCC
+        self.sess.warn("exporting symbols not implemented yet for L4Bender");
         return;
     }
 
@@ -1391,20 +1398,23 @@ impl<'a> Linker for L4Bender<'a> {
         self.cmd.arg(&format!("--subsystem,{}", subsystem));
     }
 
-    fn finalize(&mut self) {
+    fn reset_per_library_state(&mut self) {
         self.hint_static(); // Reset to default before returning the composed command line.
     }
 
-    fn group_start(&mut self) { self.cmd.arg("--start-group"); }
-    fn group_end(&mut self) { self.cmd.arg("--end-group"); }
-    fn linker_plugin_lto(&mut self) {
-        // do nothing
-    }
-    fn control_flow_guard(&mut self) {
-        self.sess.warn("Windows Control Flow Guard is not supported by this linker.");
+    fn group_start(&mut self) {
+        self.cmd.arg("--start-group");
     }
 
-    fn no_crt_objects(&mut self) { }
+    fn group_end(&mut self) {
+        self.cmd.arg("--end-group");
+    }
+
+    fn linker_plugin_lto(&mut self) {}
+
+    fn control_flow_guard(&mut self) {}
+
+    fn no_crt_objects(&mut self) {}
 }
 
 impl<'a> L4Bender<'a> {
@@ -1415,11 +1425,7 @@ impl<'a> L4Bender<'a> {
 
         cmd.arg("--"); // separate direct l4-bender args from linker args
 
-        L4Bender {
-            cmd: cmd,
-            sess: sess,
-            hinted_static: false,
-        }
+        L4Bender { cmd: cmd, sess: sess, hinted_static: false }
     }
 
     /// This parses a shell-escaped string and unquotes the arguments. It doesn't attempt to
@@ -1435,7 +1441,7 @@ impl<'a> L4Bender<'a> {
                 ' ' if !quoted => {
                     cmd.arg(&arg);
                     arg.clear();
-                },
+                }
                 '"' | '\'' => quoted = !quoted,
                 _ => arg.push(character),
             };
