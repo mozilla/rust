@@ -6,7 +6,7 @@ LL |         unsafe { intrinsics::offset(self, count) }
    |                  |
    |                  overflowing in-bounds pointer arithmetic
    |                  inside `ptr::const_ptr::<impl *const u8>::offset` at $SRC_DIR/core/src/ptr/const_ptr.rs:LL:COL
-   | 
+   |
   ::: $DIR/offset_ub.rs:6:46
    |
 LL | pub const BEFORE_START: *const u8 = unsafe { (&0u8 as *const u8).offset(-1) };
@@ -20,7 +20,7 @@ LL |         unsafe { intrinsics::offset(self, count) }
    |                  |
    |                  pointer arithmetic failed: pointer must be in-bounds at offset 2, but is outside bounds of allocN which has size 1
    |                  inside `ptr::const_ptr::<impl *const u8>::offset` at $SRC_DIR/core/src/ptr/const_ptr.rs:LL:COL
-   | 
+   |
   ::: $DIR/offset_ub.rs:7:43
    |
 LL | pub const AFTER_END: *const u8 = unsafe { (&0u8 as *const u8).offset(2) };
@@ -34,7 +34,7 @@ LL |         unsafe { intrinsics::offset(self, count) }
    |                  |
    |                  pointer arithmetic failed: pointer must be in-bounds at offset 101, but is outside bounds of allocN which has size 100
    |                  inside `ptr::const_ptr::<impl *const u8>::offset` at $SRC_DIR/core/src/ptr/const_ptr.rs:LL:COL
-   | 
+   |
   ::: $DIR/offset_ub.rs:8:45
    |
 LL | pub const AFTER_ARRAY: *const u8 = unsafe { [0u8; 100].as_ptr().offset(101) };
@@ -48,7 +48,7 @@ LL |         unsafe { intrinsics::offset(self, count) }
    |                  |
    |                  overflowing in-bounds pointer arithmetic
    |                  inside `ptr::const_ptr::<impl *const u16>::offset` at $SRC_DIR/core/src/ptr/const_ptr.rs:LL:COL
-   | 
+   |
   ::: $DIR/offset_ub.rs:10:43
    |
 LL | pub const OVERFLOW: *const u16 = unsafe { [0u16; 1].as_ptr().offset(isize::MAX) };
@@ -62,7 +62,7 @@ LL |         unsafe { intrinsics::offset(self, count) }
    |                  |
    |                  overflowing in-bounds pointer arithmetic
    |                  inside `ptr::const_ptr::<impl *const u16>::offset` at $SRC_DIR/core/src/ptr/const_ptr.rs:LL:COL
-   | 
+   |
   ::: $DIR/offset_ub.rs:11:44
    |
 LL | pub const UNDERFLOW: *const u16 = unsafe { [0u16; 1].as_ptr().offset(isize::MIN) };
@@ -76,7 +76,7 @@ LL |         unsafe { intrinsics::offset(self, count) }
    |                  |
    |                  overflowing in-bounds pointer arithmetic
    |                  inside `ptr::const_ptr::<impl *const u8>::offset` at $SRC_DIR/core/src/ptr/const_ptr.rs:LL:COL
-   | 
+   |
   ::: $DIR/offset_ub.rs:12:56
    |
 LL | pub const OVERFLOW_ADDRESS_SPACE: *const u8 = unsafe { (usize::MAX as *const u8).offset(2) };
@@ -90,7 +90,7 @@ LL |         unsafe { intrinsics::offset(self, count) }
    |                  |
    |                  overflowing in-bounds pointer arithmetic
    |                  inside `ptr::const_ptr::<impl *const u8>::offset` at $SRC_DIR/core/src/ptr/const_ptr.rs:LL:COL
-   | 
+   |
   ::: $DIR/offset_ub.rs:13:57
    |
 LL | pub const UNDERFLOW_ADDRESS_SPACE: *const u8 = unsafe { (1 as *const u8).offset(-2) };
@@ -104,7 +104,7 @@ LL |         unsafe { intrinsics::offset(self, count) }
    |                  |
    |                  pointer arithmetic failed: pointer must be in-bounds at offset 1, but is outside bounds of allocN which has size 0
    |                  inside `ptr::const_ptr::<impl *const u8>::offset` at $SRC_DIR/core/src/ptr/const_ptr.rs:LL:COL
-   | 
+   |
   ::: $DIR/offset_ub.rs:15:50
    |
 LL | pub const ZERO_SIZED_ALLOC: *const u8 = unsafe { [0u8; 0].as_ptr().offset(1) };
@@ -119,7 +119,7 @@ LL |         unsafe { intrinsics::offset(self, count) as *mut T }
    |                  unable to turn bytes into a pointer
    |                  inside `ptr::mut_ptr::<impl *mut u8>::offset` at $SRC_DIR/core/src/ptr/mut_ptr.rs:LL:COL
    |                  inside `DANGLING` at $DIR/offset_ub.rs:16:42
-   | 
+   |
   ::: $DIR/offset_ub.rs:16:1
    |
 LL | pub const DANGLING: *const u8 = unsafe { ptr::NonNull::<u8>::dangling().as_ptr().offset(4) };
@@ -137,7 +137,7 @@ LL |         unsafe { intrinsics::offset(self, count) }
    |                  |
    |                  pointer arithmetic failed: 0x0 is not a valid pointer
    |                  inside `ptr::const_ptr::<impl *const u8>::offset` at $SRC_DIR/core/src/ptr/const_ptr.rs:LL:COL
-   | 
+   |
   ::: $DIR/offset_ub.rs:19:50
    |
 LL | pub const NULL_OFFSET_ZERO: *const u8 = unsafe { ptr::null::<u8>().offset(0) };
@@ -152,7 +152,7 @@ LL |         unsafe { intrinsics::offset(self, count) }
    |                  unable to turn bytes into a pointer
    |                  inside `ptr::const_ptr::<impl *const u8>::offset` at $SRC_DIR/core/src/ptr/const_ptr.rs:LL:COL
    |                  inside `UNDERFLOW_ABS` at $DIR/offset_ub.rs:22:47
-   | 
+   |
   ::: $DIR/offset_ub.rs:22:1
    |
 LL | pub const UNDERFLOW_ABS: *const u8 = unsafe { (usize::MAX as *const u8).offset(isize::MIN) };
