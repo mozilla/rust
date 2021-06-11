@@ -36,7 +36,7 @@ struct ThreadInner {
     ///          LIFECYCLE_INIT   ----------->  LIFECYCLE_DYING
     ///
     ///                |                               |
-    /// [DEATCH-LIVE]  |                               |  [DEATCH-DYING]
+    /// [DETACH-LIVE]  |                               |  [DETACH-DYING]
     ///                v                               v
     ///
     ///        LIFECYCLE_DETACHED  --------->  LIFECYCLE_DYING |
