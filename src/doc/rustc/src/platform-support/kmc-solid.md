@@ -58,13 +58,6 @@ $ rustc --target aarch64-kmc-solid-asp3 your-code.rs --crate-type staticlib
 $ ls libyour_code.a
 ```
 
-Building dynamic libraries is also possible, though a linker script with specific requirements (not included or used here) is required for the compiled shared objects to be actually loadable:
-
-```shell
-$ rustc --target aarch64-kmc-solid-asp3 your-code.rs --crate-type dylib -Ctarget-feature=-crt-static
-$ ls libyour_code.so
-```
-
 On Rust Nightly it's possible to build without the target artifacts available:
 
 ```text
