@@ -1,4 +1,4 @@
-error[E0618]: expected function, found `!`
+error[E0618]: expected function, found `_`
   --> $DIR/issue-18532.rs:6:5
    |
 LL |     (return)((),());
