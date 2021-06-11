@@ -46,8 +46,10 @@ pub const TA_INHERIT: ATR = 0x02;
 /// Activate the task on creation
 pub const TA_ACT: ATR = 0x01;
 
+/// The bit pattern for eventflag objects
 pub type FLGPTN = uint_t;
 
+/// The mode parameter type for [`wai_flg`]
 pub type MODE = uint_t;
 
 /// Wake up when any specified bits are set
