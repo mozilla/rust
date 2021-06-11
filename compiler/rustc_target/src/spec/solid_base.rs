@@ -14,7 +14,6 @@ pub fn opts(kernel: &str) -> TargetOptions {
         has_elf_tls: true,
         dynamic_linking: true,
         executables: false,
-        position_independent_executables: true,
         relro_level: RelroLevel::Full,
         ..Default::default()
     }
