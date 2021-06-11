@@ -15,8 +15,6 @@ pub type RELTIM = u32;
 /// Timeout (relative time or infinity)
 pub type TMO = u32;
 
-pub type HRTTIM = u32;
-
 /// The maximum valid value of `RELTIM`
 pub const TMAX_RELTIM: RELTIM = 4_000_000_000;
 
