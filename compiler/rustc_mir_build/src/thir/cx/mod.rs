@@ -34,7 +34,7 @@ crate fn thir_tree<'tcx>(
     tcx: TyCtxt<'tcx>,
     owner_def: ty::WithOptConstParam<LocalDefId>,
 ) -> String {
-    format!("{:?}", thir_body(tcx, owner_def).0.steal())
+    format!("{:#?}", thir_body(tcx, owner_def).0.steal())
 }
 
 struct Cx<'tcx> {
