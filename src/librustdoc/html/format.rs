@@ -472,7 +472,11 @@ impl clean::GenericArgs {
     }
 }
 
-crate fn href(did: DefId, cx: &Context<'_>) -> Option<(String, ItemType, Vec<String>)> {
+crate fn href_with_root_path(
+    did: DefId,
+    cx: &Context<'_>,
+    root_path: Option<&str>,
+) -> Option<(String, ItemType, Vec<String>)> {
     let cache = &cx.cache();
     let relative_to = &cx.current;
     fn to_module_fqp(shortty: ItemType, fqp: &[String]) -> &[String] {
@@ -483,6 +487,7 @@ crate fn href(did: DefId, cx: &Context<'_>) -> Option<(String, ItemType, Vec<Str
         return None;
     }
 
+    let mut is_remote = false;
     let (fqp, shortty, mut url_parts) = match cache.paths.get(&did) {
         Some(&(ref fqp, shortty)) => (fqp, shortty, {
             let module_fqp = to_module_fqp(shortty, fqp);
@@ -496,6 +501,7 @@ crate fn href(did: DefId, cx: &Context<'_>) -> Option<(String, ItemType, Vec<Str
                 shortty,
                 match cache.extern_locations[&did.krate] {
                     ExternalLocation::Remote(ref s) => {
+                        is_remote = true;
                         let s = s.trim_end_matches('/');
                         let mut s = vec![&s[..]];
                         s.extend(module_fqp[..].iter().map(String::as_str));
@@ -507,6 +513,12 @@ crate fn href(did: DefId, cx: &Context<'_>) -> Option<(String, ItemType, Vec<Str
             )
         }
     };
+    if !is_remote {
+        if let Some(root_path) = root_path {
+            let root = root_path.trim_end_matches('/');
+            url_parts.insert(0, root);
+        }
+    }
     let last = &fqp.last().unwrap()[..];
     let filename;
     match shortty {
@@ -519,6 +531,10 @@ crate fn href(did: DefId, cx: &Context<'_>) -> Option<(String, ItemType, Vec<Str
         }
     }
     Some((url_parts.join("/"), shortty, fqp.to_vec()))
+}
+
+crate fn href(did: DefId, cx: &Context<'_>) -> Option<(String, ItemType, Vec<String>)> {
+    href_with_root_path(did, cx, None)
 }
 
 /// Both paths should only be modules.
