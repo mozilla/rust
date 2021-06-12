@@ -38,6 +38,8 @@ use rustc_target::spec::SanitizerSet;
 use std::ffi::CString;
 use std::time::Instant;
 
+use tracing::trace;
+
 pub fn write_compressed_metadata<'tcx>(
     tcx: TyCtxt<'tcx>,
     metadata: &EncodedMetadata,
@@ -121,6 +123,7 @@ pub fn compile_codegen_unit(
     // the time we needed for codegenning it.
     let cost = time_to_codegen.as_nanos() as u64;
 
+    #[tracing::instrument(level = "trace", skip(tcx))]
     fn module_codegen(tcx: TyCtxt<'_>, cgu_name: Symbol) -> ModuleCodegen<ModuleLlvm> {
         let cgu = tcx.codegen_unit(cgu_name);
         let _prof_timer = tcx.prof.generic_activity_with_args(
@@ -133,11 +136,13 @@ pub fn compile_codegen_unit(
             let cx = CodegenCx::new(tcx, cgu, &llvm_module);
             let mono_items = cx.codegen_unit.items_in_deterministic_order(cx.tcx);
             for &(mono_item, (linkage, visibility)) in &mono_items {
+                trace!(?mono_item, "predefine");
                 mono_item.predefine::<Builder<'_, '_, '_>>(&cx, linkage, visibility);
             }
 
             // ... and now that we have everything pre-defined, fill out those definitions.
             for &(mono_item, _) in &mono_items {
+                trace!(?mono_item, "define");
                 mono_item.define::<Builder<'_, '_, '_>>(&cx);
             }
 
