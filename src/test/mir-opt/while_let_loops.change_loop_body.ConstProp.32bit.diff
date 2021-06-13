@@ -30,7 +30,7 @@
           StorageLive(_7);                 // scope 1 at $DIR/while_let_loops.rs:7:5: 10:6
           nop;                             // scope 1 at $DIR/while_let_loops.rs:7:5: 10:6
           StorageDead(_7);                 // scope 1 at $DIR/while_let_loops.rs:10:5: 10:6
-          goto -> bb4;                     // scope 1 at $DIR/while_let_loops.rs:1:1: 1:1
+          goto -> bb4;                     // scope 1 at no-location
       }
   
       bb2: {
