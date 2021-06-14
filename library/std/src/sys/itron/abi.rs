@@ -6,7 +6,7 @@ pub type bool_t = int_t;
 /// Kernel object ID
 pub type ID = int_t;
 
-/// The special value of `ID` representing the current task.
+/// The current task.
 pub const TSK_SELF: PRI = 0;
 
 /// Relative time
