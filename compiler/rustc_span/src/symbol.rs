@@ -936,6 +936,7 @@ symbols! {
         raw_identifiers,
         raw_ref_op,
         re_rebalance_coherence,
+        reachable,
         read_enum,
         read_enum_variant,
         read_enum_variant_arg,
