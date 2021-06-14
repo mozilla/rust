@@ -472,15 +472,19 @@ pub fn remove_dir_all(path: &Path) -> io::Result<()> {
     rmdir(path)
 }
 
-pub fn readlink(_p: &Path) -> io::Result<PathBuf> {
-    unsupported()
+pub fn readlink(p: &Path) -> io::Result<PathBuf> {
+    // This target doesn't support symlinks
+    stat(p)?;
+    Err(io::Error::new_const(io::ErrorKind::InvalidInput, &"not a symbolic link"))
 }
 
 pub fn symlink(_original: &Path, _link: &Path) -> io::Result<()> {
+    // This target doesn't support symlinks
     unsupported()
 }
 
 pub fn link(_src: &Path, _dst: &Path) -> io::Result<()> {
+    // This target doesn't support symlinks
     unsupported()
 }
 
