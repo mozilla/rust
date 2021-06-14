@@ -40,7 +40,9 @@ impl FileDesc {
     }
 }
 
-pub struct File(FileDesc);
+pub struct File {
+    fd: FileDesc,
+}
 
 #[derive(Clone)]
 pub struct FileAttr {
@@ -303,7 +305,7 @@ impl File {
                 flags,
             ))
             .map_err(|e| e.as_io_error())?;
-            Ok(File(FileDesc::new(fd.assume_init())))
+            Ok(File { fd: FileDesc::new(fd.assume_init()) })
         }
     }
 
@@ -327,7 +329,7 @@ impl File {
         unsafe {
             let mut out_num_bytes = MaybeUninit::uninit();
             error::SolidError::err_if_negative(abi::SOLID_FS_Read(
-                self.0.raw(),
+                self.fd.raw(),
                 buf.as_mut_ptr(),
                 buf.len(),
                 out_num_bytes.as_mut_ptr(),
@@ -349,7 +351,7 @@ impl File {
         unsafe {
             let mut out_num_bytes = MaybeUninit::uninit();
             error::SolidError::err_if_negative(abi::SOLID_FS_Write(
-                self.0.raw(),
+                self.fd.raw(),
                 buf.as_ptr(),
                 buf.len(),
                 out_num_bytes.as_mut_ptr(),
@@ -368,7 +370,7 @@ impl File {
     }
 
     pub fn flush(&self) -> io::Result<()> {
-        error::SolidError::err_if_negative(unsafe { abi::SOLID_FS_Sync(self.0.raw()) })
+        error::SolidError::err_if_negative(unsafe { abi::SOLID_FS_Sync(self.fd.raw()) })
             .map_err(|e| e.as_io_error())?;
         Ok(())
     }
@@ -382,7 +384,7 @@ impl File {
             SeekFrom::Current(off) => (abi::SEEK_CUR, off),
         };
         error::SolidError::err_if_negative(unsafe {
-            abi::SOLID_FS_Lseek(self.0.raw(), pos, whence)
+            abi::SOLID_FS_Lseek(self.fd.raw(), pos, whence)
         })
         .map_err(|e| e.as_io_error())?;
 
@@ -390,7 +392,7 @@ impl File {
         unsafe {
             let mut out_offset = MaybeUninit::uninit();
             error::SolidError::err_if_negative(abi::SOLID_FS_Ftell(
-                self.0.raw(),
+                self.fd.raw(),
                 out_offset.as_mut_ptr(),
             ))
             .map_err(|e| e.as_io_error())?;
@@ -409,7 +411,7 @@ impl File {
 
 impl Drop for File {
     fn drop(&mut self) {
-        unsafe { abi::SOLID_FS_Close(self.0.raw()) };
+        unsafe { abi::SOLID_FS_Close(self.fd.raw()) };
     }
 }
 
@@ -427,7 +429,7 @@ impl DirBuilder {
 
 impl fmt::Debug for File {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("File").field("fd", &self.0.raw()).finish()
+        f.debug_struct("File").field("fd", &self.fd.raw()).finish()
     }
 }
 
