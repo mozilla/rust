@@ -7,7 +7,7 @@ pub type bool_t = int_t;
 pub type ID = int_t;
 
 /// The current task.
-pub const TSK_SELF: PRI = 0;
+pub const TSK_SELF: ID = 0;
 
 /// Relative time
 pub type RELTIM = u32;
