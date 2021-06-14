@@ -43,7 +43,8 @@ impl fmt::Display for ItronError {
 /// undefined error code.
 pub fn error_name(er: abi::ER) -> Option<&'static str> {
     match er {
-        er if er >= 0 => Some("operation successful"),
+        // Success
+        er if er >= 0 => None,
 
         // μITRON 4.0
         abi::E_SYS => Some("system error"),

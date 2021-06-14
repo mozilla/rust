@@ -9,7 +9,8 @@ pub use self::itron::error::ItronError as SolidError;
 /// The SOLID error codes are a superset of μITRON error codes.
 pub fn error_name(er: abi::ER) -> Option<&'static str> {
     match er {
-        er if er >= 0 => Some("operation successful"),
+        // Success
+        er if er >= 0 => None,
 
         abi::SOLID_ERR_NOTFOUND => Some("not found"),
         abi::SOLID_ERR_NOTSUPPORTED => Some("not supported"),
