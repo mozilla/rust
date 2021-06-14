@@ -1,11 +1,15 @@
 use super::unsupported;
 use crate::error::Error as StdError;
-use crate::ffi::{OsStr, OsString};
+use crate::ffi::{CStr, CString, OsStr, OsString};
 use crate::fmt;
 use crate::io;
+use crate::os::raw::{c_char, c_int};
 use crate::path::{self, PathBuf};
+use crate::sys_common::os_str_bytes::{OsStrExt, OsStringExt};
+use crate::sys_common::rwlock::RWLock;
+use crate::vec;
 
-use super::{abi, error, itron};
+use super::{abi, error, itron, memchr};
 
 // `solid` directly maps `errno`s to μITRON error codes.
 impl itron::error::ItronError {
@@ -72,29 +76,127 @@ pub fn current_exe() -> io::Result<PathBuf> {
     unsupported()
 }
 
-pub struct Env(!);
+static ENV_LOCK: RWLock = RWLock::new();
+
+pub fn env_read_lock() -> impl Drop {
+    struct EnvLockReadGuard;
+    impl Drop for EnvLockReadGuard {
+        #[inline]
+        fn drop(&mut self) {
+            unsafe { ENV_LOCK.read_unlock() };
+        }
+    }
+    unsafe { ENV_LOCK.read() };
+    EnvLockReadGuard
+}
+
+pub fn env_write_lock() -> impl Drop {
+    struct EnvLockWriteGuard;
+    impl Drop for EnvLockWriteGuard {
+        #[inline]
+        fn drop(&mut self) {
+            unsafe { ENV_LOCK.write_unlock() };
+        }
+    }
+    unsafe { ENV_LOCK.write() };
+    EnvLockWriteGuard
+}
+
+pub struct Env {
+    iter: vec::IntoIter<(OsString, OsString)>,
+}
+
+impl !Send for Env {}
+impl !Sync for Env {}
 
 impl Iterator for Env {
     type Item = (OsString, OsString);
     fn next(&mut self) -> Option<(OsString, OsString)> {
-        self.0
+        self.iter.next()
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
     }
 }
 
+/// Returns a vector of (variable, value) byte-vector pairs for all the
+/// environment variables of the current process.
 pub fn env() -> Env {
-    panic!("not supported on this platform")
+    extern "C" {
+        static mut environ: *const *const c_char;
+    }
+
+    unsafe {
+        let _guard = env_read_lock();
+        let mut result = Vec::new();
+        if !environ.is_null() {
+            while !(*environ).is_null() {
+                if let Some(key_value) = parse(CStr::from_ptr(*environ).to_bytes()) {
+                    result.push(key_value);
+                }
+                environ = environ.add(1);
+            }
+        }
+        return Env { iter: result.into_iter() };
+    }
+
+    fn parse(input: &[u8]) -> Option<(OsString, OsString)> {
+        // Strategy (copied from glibc): Variable name and value are separated
+        // by an ASCII equals sign '='. Since a variable name must not be
+        // empty, allow variable names starting with an equals sign. Skip all
+        // malformed lines.
+        if input.is_empty() {
+            return None;
+        }
+        let pos = memchr::memchr(b'=', &input[1..]).map(|p| p + 1);
+        pos.map(|p| {
+            (
+                OsStringExt::from_vec(input[..p].to_vec()),
+                OsStringExt::from_vec(input[p + 1..].to_vec()),
+            )
+        })
+    }
 }
 
-pub fn getenv(_: &OsStr) -> io::Result<Option<OsString>> {
-    Ok(None)
+pub fn getenv(k: &OsStr) -> io::Result<Option<OsString>> {
+    // environment variables with a nul byte can't be set, so their value is
+    // always None as well
+    let k = CString::new(k.as_bytes())?;
+    unsafe {
+        let _guard = env_read_lock();
+        let s = libc::getenv(k.as_ptr()) as *const libc::c_char;
+        let ret = if s.is_null() {
+            None
+        } else {
+            Some(OsStringExt::from_vec(CStr::from_ptr(s).to_bytes().to_vec()))
+        };
+        Ok(ret)
+    }
 }
 
-pub fn setenv(_: &OsStr, _: &OsStr) -> io::Result<()> {
-    Err(io::Error::new_const(io::ErrorKind::Other, &"cannot set env vars on this platform"))
+pub fn setenv(k: &OsStr, v: &OsStr) -> io::Result<()> {
+    let k = CString::new(k.as_bytes())?;
+    let v = CString::new(v.as_bytes())?;
+
+    unsafe {
+        let _guard = env_write_lock();
+        cvt_env(libc::setenv(k.as_ptr(), v.as_ptr(), 1)).map(drop)
+    }
 }
 
-pub fn unsetenv(_: &OsStr) -> io::Result<()> {
-    Err(io::Error::new_const(io::ErrorKind::Other, &"cannot unset env vars on this platform"))
+pub fn unsetenv(n: &OsStr) -> io::Result<()> {
+    let nbuf = CString::new(n.as_bytes())?;
+
+    unsafe {
+        let _guard = env_write_lock();
+        cvt_env(libc::unsetenv(nbuf.as_ptr())).map(drop)
+    }
+}
+
+/// In kmclib, `setenv` and `unsetenv` don't always set `errno`, so this
+/// function just returns a generic error.
+fn cvt_env(t: c_int) -> io::Result<c_int> {
+    if t == -1 { Err(io::Error::new_const(io::ErrorKind::Other, &"failure")) } else { Ok(t) }
 }
 
 pub fn temp_dir() -> PathBuf {
