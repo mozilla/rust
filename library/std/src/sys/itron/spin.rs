@@ -22,11 +22,12 @@ impl<T> SpinMutex<T> {
     /// Acquire a lock.
     #[inline]
     pub fn with_locked<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
-        struct SpinMutexGuard;
+        struct SpinMutexGuard<'a>(&'a AtomicBool);
 
-        impl Drop for SpinMutexGuard {
+        impl Drop for SpinMutexGuard<'_> {
             #[inline]
             fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
                 unsafe { abi::ena_dsp() };
             }
         }
@@ -36,13 +37,13 @@ impl<T> SpinMutex<T> {
             let er = unsafe { abi::dis_dsp() };
             debug_assert!(er >= 0);
 
-            _guard = SpinMutexGuard;
+            // Wait until the current processor acquires a lock.
+            while self.locked.swap(true, Ordering::Acquire) {}
+
+            _guard = SpinMutexGuard(&self.locked);
         }
 
-        while self.locked.swap(true, Ordering::Acquire) {}
-        let ret = f(unsafe { &mut *self.data.get() });
-        self.locked.store(false, Ordering::Release);
-        ret
+        f(unsafe { &mut *self.data.get() })
     }
 }
 
