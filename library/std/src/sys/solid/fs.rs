@@ -453,12 +453,21 @@ pub fn set_perm(p: &Path, perm: FilePermissions) -> io::Result<()> {
     Ok(())
 }
 
-pub fn rmdir(_p: &Path) -> io::Result<()> {
-    unsupported()
+pub fn rmdir(p: &Path) -> io::Result<()> {
+    unlink(p)
 }
 
-pub fn remove_dir_all(_path: &Path) -> io::Result<()> {
-    unsupported()
+pub fn remove_dir_all(path: &Path) -> io::Result<()> {
+    for child in readdir(path)? {
+        let child = child?;
+        let child_type = child.file_type()?;
+        if child_type.is_dir() {
+            remove_dir_all(&child.path())?;
+        } else {
+            unlink(&child.path())?;
+        }
+    }
+    rmdir(path)
 }
 
 pub fn readlink(_p: &Path) -> io::Result<PathBuf> {
