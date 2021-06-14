@@ -12,8 +12,11 @@ pub const TSK_SELF: ID = 0;
 /// Relative time
 pub type RELTIM = u32;
 
-/// Timeout (relative time or infinity)
+/// Timeout (a valid `RELTIM` value or `TMO_FEVR`)
 pub type TMO = u32;
+
+/// The infinite timeout value
+pub const TMO_FEVR: TMO = TMO::MAX;
 
 /// The maximum valid value of `RELTIM`
 pub const TMAX_RELTIM: RELTIM = 4_000_000_000;
