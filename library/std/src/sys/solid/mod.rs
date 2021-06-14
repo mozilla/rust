@@ -6,14 +6,14 @@ mod abi;
 
 #[path = "../itron"]
 mod itron {
-    pub mod abi;
+    pub(super) mod abi;
     pub mod condvar;
     pub(super) mod error;
     pub mod mutex;
-    pub mod spin;
-    pub mod task;
+    pub(super) mod spin;
+    pub(super) mod task;
     pub mod thread;
-    pub mod time;
+    pub(super) mod time;
 }
 
 pub mod alloc;
