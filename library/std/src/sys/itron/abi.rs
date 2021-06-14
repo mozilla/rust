@@ -172,8 +172,3 @@ extern "C" {
     pub fn tloc_mtx(mtxid: ID, tmout: TMO) -> ER;
     pub fn unl_mtx(mtxid: ID) -> ER;
 }
-
-#[cfg(target_os = "solid-asp3")]
-extern "C" {
-    pub fn exd_tsk() -> ER;
-}

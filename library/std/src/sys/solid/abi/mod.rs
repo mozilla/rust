@@ -89,3 +89,7 @@ extern "C" {
     pub fn rwl_acre_rwl() -> ER_ID;
     pub fn rwl_del_rwl(id: ID) -> ER;
 }
+
+extern "C" {
+    pub fn exd_tsk() -> ER;
+}
