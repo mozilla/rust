@@ -12,7 +12,8 @@ if_chain! {
     if let LitKind::Int(2, _) = lit.node;
     if let ExprKind::Lit(ref lit1) = right.kind;
     if let LitKind::Int(2, _) = lit1.node;
-    if let ExprKind::Lit(ref lit2) = cond.kind;
+    if let ExprKind::DropTemps(ref expr) = cond.kind;
+    if let ExprKind::Lit(ref lit2) = expr.kind;
     if let LitKind::Bool(true) = lit2.node;
     if let ExprKind::Block(ref block1) = then.kind;
     if let Some(trailing_expr1) = &block1.expr;

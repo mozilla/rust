@@ -203,6 +203,15 @@ impl<'tcx> Visitor<'tcx> for PrintVisitor {
         print!("    if let ExprKind::");
         let current = format!("{}.kind", self.current);
         match expr.kind {
+            ExprKind::Let(pat, expr, _) => {
+                let let_pat = self.next("pat");
+                let let_expr = self.next("expr");
+                println!("    Let(ref {}, ref {}, _) = {};", let_pat, let_expr, current);
+                self.current = let_expr;
+                self.visit_expr(expr);
+                self.current = let_pat;
+                self.visit_pat(pat);
+            },
             ExprKind::Box(inner) => {
                 let inner_pat = self.next("inner");
                 println!("Box(ref {}) = {};", inner_pat, current);
@@ -728,14 +737,7 @@ fn desugaring_name(des: hir::MatchSource) -> String {
     match des {
         hir::MatchSource::ForLoopDesugar => "MatchSource::ForLoopDesugar".to_string(),
         hir::MatchSource::TryDesugar => "MatchSource::TryDesugar".to_string(),
-        hir::MatchSource::WhileDesugar => "MatchSource::WhileDesugar".to_string(),
-        hir::MatchSource::WhileLetDesugar => "MatchSource::WhileLetDesugar".to_string(),
         hir::MatchSource::Normal => "MatchSource::Normal".to_string(),
-        hir::MatchSource::IfLetDesugar { contains_else_clause } => format!(
-            "MatchSource::IfLetDesugar {{ contains_else_clause: {} }}",
-            contains_else_clause
-        ),
-        hir::MatchSource::IfLetGuardDesugar => "MatchSource::IfLetGuardDesugar".to_string(),
         hir::MatchSource::AwaitDesugar => "MatchSource::AwaitDesugar".to_string(),
     }
 }
@@ -746,7 +748,6 @@ fn loop_desugaring_name(des: hir::LoopSource) -> &'static str {
         hir::LoopSource::ForLoop => "LoopSource::ForLoop",
         hir::LoopSource::Loop => "LoopSource::Loop",
         hir::LoopSource::While => "LoopSource::While",
-        hir::LoopSource::WhileLet => "LoopSource::WhileLet",
     }
 }
 

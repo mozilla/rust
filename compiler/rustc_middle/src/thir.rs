@@ -237,6 +237,10 @@ pub enum ExprKind<'tcx> {
     Loop {
         body: ExprId,
     },
+    Let {
+        expr: ExprId,
+        pat: Pat<'tcx>,
+    },
     Match {
         scrutinee: ExprId,
         arms: Box<[ArmId]>,

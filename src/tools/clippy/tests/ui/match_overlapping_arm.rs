@@ -1,6 +1,7 @@
 #![feature(exclusive_range_pattern)]
 #![feature(half_open_range_patterns)]
 #![warn(clippy::match_overlapping_arm)]
+#![allow(clippy::if_same_then_else)]
 #![allow(clippy::redundant_pattern_matching)]
 
 /// Tests for match_overlapping_arm

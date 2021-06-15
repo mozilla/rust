@@ -93,7 +93,7 @@ fn check_closure(cx: &LateContext<'_>, expr: &Expr<'_>) {
 
         if ex.span.ctxt() != expr.span.ctxt() {
             if decl.inputs.is_empty() {
-                if let Some(VecArgs::Vec(&[])) = higher::vec_macro(cx, ex) {
+                if let Some(VecArgs::Vec(&[])) = higher::VecArgs::hir(cx, ex) {
                     // replace `|| vec![]` with `Vec::new`
                     span_lint_and_sugg(
                         cx,

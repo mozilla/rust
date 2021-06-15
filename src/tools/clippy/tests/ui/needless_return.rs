@@ -6,7 +6,8 @@
     clippy::if_same_then_else,
     clippy::single_match,
     clippy::branches_sharing_code,
-    clippy::needless_bool
+    clippy::needless_bool,
+    clippy::redundant_pattern_matching
 )]
 #![warn(clippy::needless_return)]
 
@@ -62,6 +63,15 @@ fn test_void_fun() {
 
 fn test_void_if_fun(b: bool) {
     if b {
+        return;
+    } else {
+        return;
+    }
+}
+
+fn test_if_let() {
+    let a: Option<i32> = None;
+    if let None = a {
         return;
     } else {
         return;
