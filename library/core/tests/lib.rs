@@ -70,7 +70,6 @@
 #![feature(trusted_random_access)]
 #![feature(unsize)]
 #![feature(get_many)]
-#![feature(unsafe_block_in_unsafe_fn)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
 extern crate test;
