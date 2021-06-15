@@ -3605,7 +3605,7 @@ impl<T> [T] {
             return None;
         }
         // SAFETY: The `get_many_check_valid()` call checked that all indices
-        // are disjunct.
+        // are disjunct and in bounds.
         unsafe { Some(self.get_many_unchecked(indices)) }
     }
 
@@ -3636,7 +3636,7 @@ impl<T> [T] {
             return None;
         }
         // SAFETY: The `get_many_check_valid()` call checked that all indices
-        // are disjunct.
+        // are disjunct and in bounds.
         unsafe { Some(self.get_many_unchecked_mut(indices)) }
     }
 }
