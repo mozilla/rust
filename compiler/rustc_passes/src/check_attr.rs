@@ -1151,36 +1151,21 @@ impl CheckAttrVisitor<'tcx> {
             Target::Field | Target::Arm | Target::MacroDef => {
                 self.inline_attr_str_error_with_macro_def(hir_id, attr, "no_mangle");
             }
-            Target::ForeignFn => {
+            Target::ForeignFn | Target::ForeignStatic => {
+                let foreign_item_kind = match target {
+                    Target::ForeignFn => "function",
+                    Target::ForeignStatic => "static",
+                    _ => unreachable!(),
+                };
                 // FIXME: #[no_mangle] was previously allowed on non-functions/statics, this should be an error
                 self.tcx.struct_span_lint_hir(UNUSED_ATTRIBUTES, hir_id, attr.span, |lint| {
-                    lint.build("#[no_mangle] should not be applied to a foreign function")
+                    lint.build(&format!("#[no_mangle] should not be applied to a foreign {}", foreign_item_kind))
                         .warn(
                             "this was previously accepted by the compiler but is \
                             being phased out; it will become a hard error in \
                             a future release!",
                         )
-                        .span_label(*span, "foreign function")
-                        .note("foreign symbol names are always preserved and the #[no_mangle] attribute may have additional undesired exporting effects.")
-                        .span_suggestion(
-                            attr.span,
-                            "remove this attribute",
-                            String::new(),
-                            Applicability::Unspecified,
-                        )
-                        .emit();
-                });
-            }
-            Target::ForeignStatic => {
-                // FIXME: #[no_mangle] was previously allowed on non-functions/statics, this should be an error
-                self.tcx.struct_span_lint_hir(UNUSED_ATTRIBUTES, hir_id, attr.span, |lint| {
-                    lint.build("#[no_mangle] should not be applied to a foreign static")
-                        .warn(
-                            "this was previously accepted by the compiler but is \
-                            being phased out; it will become a hard error in \
-                            a future release!",
-                        )
-                        .span_label(*span, "foreign static")
+                        .span_label(*span, format!("foreign {}", foreign_item_kind))
                         .note("foreign symbol names are always preserved and the #[no_mangle] attribute may have additional undesired exporting effects.")
                         .span_suggestion(
                             attr.span,
