@@ -208,7 +208,7 @@ pub fn home_dir() -> Option<PathBuf> {
 }
 
 pub fn exit(_code: i32) -> ! {
-    let tid = itron::task::current_task_id().unwrap_or(0);
+    let tid = itron::task::try_current_task_id().unwrap_or(0);
     loop {
         abi::breakpoint_program_exited(tid as usize);
     }

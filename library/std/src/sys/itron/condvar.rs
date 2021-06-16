@@ -151,8 +151,8 @@ mod waiter_queue {
     impl Waiter {
         #[inline]
         pub fn new() -> Self {
-            let task = task::current_task_id().expect("get_tid failed");
-            let priority = task::task_priority(abi::TSK_SELF).expect("get_pri failed");
+            let task = task::current_task_id();
+            let priority = task::task_priority(abi::TSK_SELF);
 
             // Zeroness of `Waiter::task` indicates whether the `Waiter` is
             // linked to a queue or not. This invariant is important for

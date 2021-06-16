@@ -11,7 +11,6 @@ use crate::{
     ffi::CStr,
     io,
     mem::{ManuallyDrop, MaybeUninit},
-    process::abort,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -71,8 +70,8 @@ impl Thread {
     /// See `thread::Builder::spawn_unchecked` for safety requirements.
     pub unsafe fn new(stack: usize, p: Box<dyn FnOnce()>) -> io::Result<Thread> {
         // Inherit the current task's priority
-        let current_task = task::current_task_id().map_err(|e| e.as_io_error())?;
-        let priority = task::task_priority(current_task).map_err(|e| e.as_io_error())?;
+        let current_task = task::try_current_task_id().map_err(|e| e.as_io_error())?;
+        let priority = task::try_task_priority(current_task).map_err(|e| e.as_io_error())?;
 
         // Initialize the task collector ahead-of-time instead of doing it
         // lazily and escalating any errors occurred to panics
@@ -126,7 +125,7 @@ impl Thread {
                 // Safety: Not really unsafe
                 unsafe { abi::ena_dsp() };
 
-                let current_task = task::current_task_id().unwrap_or_else(|_| abort());
+                let current_task = task::current_task_id_aborting();
 
                 // Safety: There are no pinned references to the stack
                 unsafe { detached_task_collector::request_terminate_and_delete_task(current_task) };
