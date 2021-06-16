@@ -1151,6 +1151,47 @@ impl CheckAttrVisitor<'tcx> {
             Target::Field | Target::Arm | Target::MacroDef => {
                 self.inline_attr_str_error_with_macro_def(hir_id, attr, "no_mangle");
             }
+            Target::ForeignFn => {
+                // FIXME: #[no_mangle] was previously allowed on non-functions/statics, this should be an error
+                self.tcx.struct_span_lint_hir(UNUSED_ATTRIBUTES, hir_id, attr.span, |lint| {
+                    lint.build("#[no_mangle] should not be applied to a foreign function")
+                        .warn(
+                            "this was previously accepted by the compiler but is \
+                            being phased out; it will become a hard error in \
+                            a future release!",
+                        )
+                        .span_label(*span, "foreign function")
+                        .note("foreign symbol names are always preserved and the #[no_mangle] attribute may have additional undesired exporting effects.")
+                        .span_suggestion(
+                            attr.span,
+                            "remove this attribute",
+                            String::new(),
+                            Applicability::Unspecified,
+                        )
+                        .emit();
+                });
+            }
+            Target::ForeignStatic => {
+                // FIXME: #[no_mangle] was previously allowed on non-functions/statics, this should be an error
+                self.tcx.struct_span_lint_hir(UNUSED_ATTRIBUTES, hir_id, attr.span, |lint| {
+                    lint.build("#[no_mangle] should not be applied to a foreign static")
+                        .warn(
+                            "this was previously accepted by the compiler but is \
+                            being phased out; it will become a hard error in \
+                            a future release!",
+                        )
+                        .span_label(*span, "foreign static")
+                        .note("foreign symbol names are always preserved and the #[no_mangle] attribute may have additional undesired exporting effects.")
+                        .span_suggestion(
+                            attr.span,
+                            "remove this attribute",
+                            String::new(),
+                            Applicability::Unspecified,
+                        )
+                        .emit();
+                });
+                //bug!("AAAAAAAAAA");
+            }
             _ => {
                 // FIXME: #[no_mangle] was previously allowed on non-functions/statics and some
                 // crates used this, so only emit a warning.
