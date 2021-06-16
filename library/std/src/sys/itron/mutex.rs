@@ -131,7 +131,7 @@ impl ReentrantMutex {
                         *count = new_count;
                     } else {
                         // counter overflow
-                        crate::intrinsics::abort();
+                        rtabort!("lock count overflow");
                     }
                 }
             }
@@ -163,7 +163,7 @@ impl ReentrantMutex {
                     *count = new_count;
                 } else {
                     // counter overflow
-                    crate::intrinsics::abort();
+                    rtabort!("lock count overflow");
                 }
             }
             true
