@@ -31,7 +31,8 @@ impl ItronError {
 
 impl fmt::Display for ItronError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(name) = error_name(self.er) {
+        // Allow the platforms to extend `error_name`
+        if let Some(name) = crate::sys::error::error_name(self.er) {
             write!(f, "{} ({})", name, self.er)
         } else {
             write!(f, "{}", self.er)

@@ -22,7 +22,9 @@ pub mod args;
 #[path = "../unix/cmath.rs"]
 pub mod cmath;
 pub mod env;
-mod error;
+// `error` is `pub(crate)` so that it can be accessed by `itron/error.rs` as
+// `crate::sys::error`
+pub(crate) mod error;
 pub mod fs;
 pub mod io;
 #[path = "../unsupported/net.rs"]
