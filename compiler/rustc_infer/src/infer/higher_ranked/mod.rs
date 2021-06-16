@@ -1,8 +1,6 @@
 //! Helper routines for higher-ranked things. See the `doc` module at
 //! the end of the file for details.
 
-use std::collections::BTreeMap;
-
 use super::combine::CombineFields;
 use super::{HigherRankedType, InferCtxt};
 
@@ -75,23 +73,6 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
     where
         T: TypeFoldable<'tcx>,
     {
-        self.replace_bound_vars_with_placeholders_mapped(binder).0
-    }
-
-    /// Like `replace_bound_vars_with_placeholders`, but also returns map from
-    /// the placeholders to the bound vars that were replaced.
-    pub fn replace_bound_vars_with_placeholders_mapped<T>(
-        &self,
-        binder: ty::Binder<'tcx, T>,
-    ) -> (
-        T,
-        BTreeMap<ty::PlaceholderRegion, ty::BoundRegion>,
-        BTreeMap<ty::PlaceholderType, ty::BoundTy>,
-        BTreeMap<ty::PlaceholderConst<'tcx>, ty::BoundVar>,
-    )
-    where
-        T: TypeFoldable<'tcx>,
-    {
         // Figure out what the next universe will be, but don't actually create
         // it until after we've done the substitution (in particular there may
         // be no bound variables). This is a performance optimization, since the
@@ -99,19 +80,13 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         // (i.e., if there are no placeholders).
         let next_universe = self.universe().next_universe();
 
-        let mut mapped_regions: BTreeMap<ty::PlaceholderRegion, ty::BoundRegion> = BTreeMap::new();
-        let mut mapped_types: BTreeMap<ty::PlaceholderType, ty::BoundTy> = BTreeMap::new();
-        let mut mapped_consts: BTreeMap<ty::PlaceholderConst<'tcx>, ty::BoundVar> = BTreeMap::new();
-
         let fld_r = |br: ty::BoundRegion| {
             let p = ty::PlaceholderRegion { universe: next_universe, name: br.kind };
-            mapped_regions.insert(p, br);
             self.tcx.mk_region(ty::RePlaceholder(p))
         };
 
         let fld_t = |bound_ty: ty::BoundTy| {
             let p = ty::PlaceholderType { universe: next_universe, name: bound_ty.var };
-            mapped_types.insert(p, bound_ty);
             self.tcx.mk_ty(ty::Placeholder(p))
         };
 
@@ -120,7 +95,6 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 universe: next_universe,
                 name: ty::BoundConst { var: bound_var, ty },
             };
-            mapped_consts.insert(p, bound_var);
             self.tcx.mk_const(ty::Const { val: ty::ConstKind::Placeholder(p), ty })
         };
 
@@ -141,7 +115,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             next_universe, result, map,
         );
 
-        (result, mapped_regions, mapped_types, mapped_consts)
+        result
     }
 
     /// See `infer::region_constraints::RegionConstraintCollector::leak_check`.
