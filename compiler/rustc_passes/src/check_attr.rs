@@ -1190,7 +1190,6 @@ impl CheckAttrVisitor<'tcx> {
                         )
                         .emit();
                 });
-                //bug!("AAAAAAAAAA");
             }
             _ => {
                 // FIXME: #[no_mangle] was previously allowed on non-functions/statics and some
