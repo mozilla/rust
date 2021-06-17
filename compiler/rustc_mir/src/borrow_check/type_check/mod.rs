@@ -1337,7 +1337,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                         // In our example, this would be `(U, u32)`. Note that this references
                         // the type parameter `U` from the definition of `Foo`.
                         let concrete_ty = match concrete_opaque_types
-                            .get_by(|(key, _)| key.def_id == opaque_type_key.def_id)
+                            .get_value_matching(|(key, _)| key.def_id == opaque_type_key.def_id)
                         {
                             None => {
                                 if !concrete_is_opaque {
