@@ -1,4 +1,4 @@
-use super::{abi, error::ItronError};
+use super::{abi, error::expect_success};
 use crate::{convert::TryInto, mem::MaybeUninit, time::Duration};
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
@@ -9,7 +9,7 @@ impl Instant {
         // Safety: The provided pointer is valid
         unsafe {
             let mut out = MaybeUninit::uninit();
-            ItronError::err_if_negative(abi::get_tim(out.as_mut_ptr())).expect("get_tim failed");
+            expect_success(abi::get_tim(out.as_mut_ptr()), &"get_tim");
             Instant(out.assume_init())
         }
     }

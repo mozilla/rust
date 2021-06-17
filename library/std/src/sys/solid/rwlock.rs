@@ -1,7 +1,10 @@
 //! A readers-writer lock implementation backed by the SOLID kernel extension.
 use super::{
     abi,
-    itron::{error::ItronError, spin::SpinIdOnceCell},
+    itron::{
+        error::{expect_success, expect_success_aborting, fail, ItronError},
+        spin::SpinIdOnceCell,
+    },
 };
 
 pub struct RWLock {
@@ -13,8 +16,8 @@ pub struct RWLock {
 unsafe impl Send for RWLock {}
 unsafe impl Sync for RWLock {}
 
-fn new_rwl() -> abi::ID {
-    ItronError::err_if_negative(unsafe { abi::rwl_acre_rwl() }).expect("acre_mtx failed")
+fn new_rwl() -> Result<abi::ID, ItronError> {
+    ItronError::err_if_negative(unsafe { abi::rwl_acre_rwl() })
 }
 
 impl RWLock {
@@ -24,57 +27,64 @@ impl RWLock {
 
     /// Get the inner mutex's ID, which is lazily created.
     fn raw(&self) -> abi::ID {
-        let Ok((id, _)) = self.rwl.get_or_try_init(|| Ok::<_, !>((new_rwl(), ())));
-        id
+        match self.rwl.get_or_try_init(|| new_rwl().map(|id| (id, ()))) {
+            Ok((id, ())) => id,
+            Err(e) => fail(e, &"acre_mtx"),
+        }
     }
 
     #[inline]
     pub unsafe fn read(&self) {
         let rwl = self.raw();
-        ItronError::err_if_negative(unsafe { abi::rwl_loc_rdl(rwl) }).expect("rwl_loc_rdl failed");
+        expect_success(unsafe { abi::rwl_loc_rdl(rwl) }, &"rwl_loc_rdl");
     }
 
     #[inline]
     pub unsafe fn try_read(&self) -> bool {
         let rwl = self.raw();
-        ItronError::err_if_negative(unsafe { abi::rwl_ploc_rdl(rwl) })
-            .map(|_| true)
-            .or_else(|e| if e.as_raw() != abi::E_TMOUT { Err(e) } else { Ok(false) })
-            .expect("rwl_ploc_rdl failed")
+        match unsafe { abi::rwl_ploc_rdl(rwl) } {
+            abi::E_TMOUT => false,
+            er => {
+                expect_success(er, &"rwl_ploc_rdl");
+                true
+            }
+        }
     }
 
     #[inline]
     pub unsafe fn write(&self) {
         let rwl = self.raw();
-        ItronError::err_if_negative(unsafe { abi::rwl_loc_wrl(rwl) }).expect("rwl_loc_wrl failed");
+        expect_success(unsafe { abi::rwl_loc_wrl(rwl) }, &"rwl_loc_wrl");
     }
 
     #[inline]
     pub unsafe fn try_write(&self) -> bool {
         let rwl = self.raw();
-        ItronError::err_if_negative(unsafe { abi::rwl_ploc_wrl(rwl) })
-            .map(|_| true)
-            .or_else(|e| if e.as_raw() != abi::E_TMOUT { Err(e) } else { Ok(false) })
-            .expect("rwl_ploc_wrl failed")
+        match unsafe { abi::rwl_ploc_wrl(rwl) } {
+            abi::E_TMOUT => false,
+            er => {
+                expect_success(er, &"rwl_ploc_wrl");
+                true
+            }
+        }
     }
 
     #[inline]
     pub unsafe fn read_unlock(&self) {
         let rwl = self.raw();
-        ItronError::err_if_negative(unsafe { abi::rwl_unl_rwl(rwl) }).expect("rwl_unl_rwl failed");
+        expect_success_aborting(unsafe { abi::rwl_unl_rwl(rwl) }, &"rwl_unl_rwl");
     }
 
     #[inline]
     pub unsafe fn write_unlock(&self) {
         let rwl = self.raw();
-        ItronError::err_if_negative(unsafe { abi::rwl_unl_rwl(rwl) }).expect("rwl_unl_rwl failed");
+        expect_success_aborting(unsafe { abi::rwl_unl_rwl(rwl) }, &"rwl_unl_rwl");
     }
 
     #[inline]
     pub unsafe fn destroy(&self) {
         if let Some(rwl) = self.rwl.get().map(|x| x.0) {
-            ItronError::err_if_negative(unsafe { abi::rwl_del_rwl(rwl) })
-                .expect("rwl_del_rwl failed");
+            expect_success_aborting(unsafe { abi::rwl_del_rwl(rwl) }, &"rwl_del_rwl");
         }
     }
 }

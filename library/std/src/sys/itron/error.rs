@@ -114,3 +114,46 @@ pub fn decode_error_kind(er: abi::ER) -> ErrorKind {
         _ => ErrorKind::Other,
     }
 }
+
+/// Similar to `ItronError::err_if_negative(er).expect()` except that, while
+/// panicking, it prints the message to `panic_output` and aborts the program
+/// instead. This ensures the error message is not obscured by double
+/// panicking.
+///
+/// This is useful for diagnosing creation failures of synchronization
+/// primitives that are used by `std`'s internal mechanisms. Such failures
+/// are common when the system is mis-configured to provide a too-small pool for
+/// kernel objects.
+#[inline]
+pub fn expect_success(er: abi::ER, msg: &&str) -> abi::ER {
+    match ItronError::err_if_negative(er) {
+        Ok(x) => x,
+        Err(e) => fail(e, msg),
+    }
+}
+
+/// Similar to `ItronError::err_if_negative(er).expect()` but aborts instead.
+///
+/// Use this where panicking is not allowed or the effect of the failure
+/// would be persistent.
+#[inline]
+pub fn expect_success_aborting(er: abi::ER, msg: &&str) -> abi::ER {
+    match ItronError::err_if_negative(er) {
+        Ok(x) => x,
+        Err(e) => fail_aborting(e, msg),
+    }
+}
+
+#[cold]
+pub fn fail(e: impl fmt::Display, msg: &&str) -> ! {
+    if crate::thread::panicking() {
+        fail_aborting(e, msg)
+    } else {
+        panic!("{} failed: {}", *msg, e)
+    }
+}
+
+#[cold]
+pub fn fail_aborting(e: impl fmt::Display, msg: &&str) -> ! {
+    rtabort!("{} failed: {}", *msg, e)
+}

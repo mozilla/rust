@@ -1,4 +1,4 @@
-use super::{abi, error::SolidError};
+use super::{abi, error::expect_success};
 use crate::{convert::TryInto, mem::MaybeUninit, time::Duration};
 
 pub use super::itron::time::Instant;
@@ -12,7 +12,7 @@ impl SystemTime {
     pub fn now() -> SystemTime {
         let rtc = unsafe {
             let mut out = MaybeUninit::zeroed();
-            SolidError::err_if_negative(abi::SOLID_RTC_ReadTime(out.as_mut_ptr())).unwrap();
+            expect_success(abi::SOLID_RTC_ReadTime(out.as_mut_ptr()), &"SOLID_RTC_ReadTime");
             out.assume_init()
         };
         let t = unsafe {

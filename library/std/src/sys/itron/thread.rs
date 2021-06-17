@@ -1,6 +1,11 @@
 //! Thread implementation backed by μITRON tasks. Assumes `acre_tsk`,
 //! `acre_dtq`, and `acre_flg` are available.
-use super::{abi, error::ItronError, task, time::dur2reltims};
+use super::{
+    abi,
+    error::{expect_success, expect_success_aborting, ItronError},
+    task,
+    time::dur2reltims,
+};
 use crate::{
     cell::UnsafeCell,
     ffi::CStr,
@@ -136,8 +141,7 @@ impl Thread {
                 drop(inner);
 
                 // Set `death_flag`
-                ItronError::err_if_negative(unsafe { abi::set_flg(death_flag, 1) })
-                    .unwrap_or_else(|_| abort());
+                expect_success_aborting(unsafe { abi::set_flg(death_flag, 1) }, &"set_flg");
             }
 
             // The last statement (`request_terminate_and_delete_task` or
@@ -173,8 +177,7 @@ impl Thread {
     }
 
     pub fn yield_now() {
-        ItronError::err_if_negative(unsafe { abi::rot_rdq(abi::TPRI_SELF) })
-            .expect("rot_rdq failed");
+        expect_success(unsafe { abi::rot_rdq(abi::TPRI_SELF) }, &"rot_rdq");
     }
 
     pub fn set_name(_name: &CStr) {
@@ -183,7 +186,7 @@ impl Thread {
 
     pub fn sleep(dur: Duration) {
         for timeout in dur2reltims(dur) {
-            ItronError::err_if_negative(unsafe { abi::dly_tsk(timeout) }).expect("dly_tsk failed");
+            expect_success(unsafe { abi::dly_tsk(timeout) }, &"dly_tsk");
         }
     }
 
@@ -204,16 +207,18 @@ impl Thread {
     ///
     /// This method can be called only once for each `Thread`.
     unsafe fn join_inner(&mut self) {
-        ItronError::err_if_negative(unsafe {
-            abi::wai_flg(
-                self.inner.death_flag.0,
-                1,
-                abi::TWF_ORW,
-                // unused out parameter
-                MaybeUninit::uninit().as_mut_ptr(),
-            )
-        })
-        .expect("wai_flg failed");
+        expect_success(
+            unsafe {
+                abi::wai_flg(
+                    self.inner.death_flag.0,
+                    1,
+                    abi::TWF_ORW,
+                    // unused out parameter
+                    MaybeUninit::uninit().as_mut_ptr(),
+                )
+            },
+            &"wai_flg",
+        );
 
         // Terminate and delete the task
         // Safety: `self.task` still represents a task we own (because this
@@ -262,21 +267,17 @@ pub mod guard {
 unsafe fn terminate_and_delete_task(deleted_task: abi::ID) {
     // Terminate the task
     // Safety: Upheld by the caller
-    ItronError::err_if_negative(unsafe { abi::ter_tsk(deleted_task) })
-        .map(|_| ())
-        .or_else(|e| {
-            if e.as_raw() == abi::E_OBJ {
-                // Indicates the task is already dormant, ignore it
-                Ok(())
-            } else {
-                Err(e)
-            }
-        })
-        .expect("ter_tsk failed");
+    match unsafe { abi::ter_tsk(deleted_task) } {
+        // Indicates the task is already dormant, ignore it
+        abi::E_OBJ => {}
+        er => {
+            expect_success_aborting(er, &"ter_tsk");
+        }
+    }
 
     // Delete the task
     // Safety: Upheld by the caller
-    ItronError::err_if_negative(unsafe { abi::del_tsk(deleted_task) }).expect("del_tsk failed");
+    expect_success_aborting(unsafe { abi::del_tsk(deleted_task) }, &"del_tsk");
 }
 
 /// Smart pointer for eventflag objects.
@@ -373,8 +374,10 @@ mod detached_task_collector {
         // they would be able to stall the GC of higher-priority tasks
         // (unbounded priority inversion), causing resource starvation.
         // Safety: Not really unsafe
-        ItronError::err_if_negative(unsafe { abi::snd_dtq(deletion_queue, deleted_task as isize) })
-            .unwrap_or_else(|_| abort());
+        expect_success_aborting(
+            unsafe { abi::snd_dtq(deletion_queue, deleted_task as isize) },
+            &"snd_dtq",
+        );
     }
 
     extern "C" fn task_gc_task(exinf: isize) {
@@ -383,8 +386,7 @@ mod detached_task_collector {
         loop {
             let payload = unsafe {
                 let mut out = MaybeUninit::uninit();
-                ItronError::err_if_negative(abi::rcv_dtq(deletion_queue, out.as_mut_ptr()))
-                    .expect("rcv_dtq failed");
+                expect_success_aborting(abi::rcv_dtq(deletion_queue, out.as_mut_ptr()), "rcv_dtq");
                 out.assume_init()
             };
             let deleted_task = payload as abi::ID;
@@ -416,6 +418,6 @@ mod detached_task_collector {
     ///
     /// `deleted_task` must refer to the current task.
     pub unsafe fn request_terminate_and_delete_task(_deleted_task: abi::ID) {
-        ItronError::err_if_negative(unsafe { exd_tsk() }).unwrap_or_else(|_| abort());
+        expect_success_aborting(unsafe { exd_tsk() }, &"exd_tsk");
     }
 }

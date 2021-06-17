@@ -107,6 +107,12 @@ impl<T> SpinIdOnceCell<T> {
         self.id.store(id, Ordering::Release);
     }
 
+    /// Gets the contents of the cell, initializing it with `f` if
+    /// the cell was empty. If the cell was empty and `f` failed, an
+    /// error is returned.
+    ///
+    /// Warning: `f` must not perform a blocking operation, which
+    /// includes panicking.
     #[inline]
     pub fn get_or_try_init<F, E>(&self, f: F) -> Result<(abi::ID, &T), E>
     where

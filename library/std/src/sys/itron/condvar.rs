@@ -1,5 +1,5 @@
 //! POSIX conditional variable implementation based on user-space wait queues.
-use super::{abi, error::ItronError, spin::SpinMutex, task, time::with_tmos_strong};
+use super::{abi, error::expect_success_aborting, spin::SpinMutex, task, time::with_tmos_strong};
 use crate::{mem::replace, ptr::NonNull, sys::mutex::Mutex, time::Duration};
 
 // The implementation is inspired by the queue-based implementation shown in
@@ -25,10 +25,14 @@ impl Condvar {
         self.waiters.with_locked(|waiters| {
             if let Some(task) = waiters.pop_front() {
                 // Unpark the task
-                ItronError::err_if_negative(unsafe { abi::wup_tsk(task) })
-                    .map(|_| ())
-                    .or_else(|e| if e.as_raw() != abi::E_QOVR { Err(e) } else { Ok(()) })
-                    .expect("wup_tsk failed");
+                match unsafe { abi::wup_tsk(task) } {
+                    // The task already has a token.
+                    abi::E_QOVR => {}
+                    // Can't undo the effect; abort the program on failure
+                    er => {
+                        expect_success_aborting(er, &"wup_tsk");
+                    }
+                }
             }
         });
     }
@@ -37,10 +41,14 @@ impl Condvar {
         self.waiters.with_locked(|waiters| {
             while let Some(task) = waiters.pop_front() {
                 // Unpark the task
-                ItronError::err_if_negative(unsafe { abi::wup_tsk(task) })
-                    .map(|_| ())
-                    .or_else(|e| if e.as_raw() != abi::E_QOVR { Err(e) } else { Ok(()) })
-                    .expect("wup_tsk failed");
+                match unsafe { abi::wup_tsk(task) } {
+                    // The task already has a token.
+                    abi::E_QOVR => {}
+                    // Can't undo the effect; abort the program on failure
+                    er => {
+                        expect_success_aborting(er, &"wup_tsk");
+                    }
+                }
             }
         });
     }
@@ -59,7 +67,7 @@ impl Condvar {
         // Wait until `waiter` is removed from the queue
         loop {
             // Park the current task
-            ItronError::err_if_negative(unsafe { abi::slp_tsk() }).expect("slp_tsk failed");
+            expect_success_aborting(unsafe { abi::slp_tsk() }, &"slp_tsk");
 
             if !self.waiters.with_locked(|waiters| unsafe { waiters.is_queued(waiter) }) {
                 break;
@@ -82,7 +90,7 @@ impl Condvar {
 
         // Park the current task and do not wake up until the timeout elapses
         // or the task gets woken up by `notify_*`
-        ItronError::err_if_negative(with_tmos_strong(dur, |tmo| {
+        match with_tmos_strong(dur, |tmo| {
             let er = unsafe { abi::tslp_tsk(tmo) };
             if er == 0 {
                 // We were unparked. Are we really dequeued?
@@ -92,10 +100,12 @@ impl Condvar {
                 }
             }
             er
-        }))
-        .map(|_| ())
-        .or_else(|e| if e.as_raw() != abi::E_TMOUT { Err(e) } else { Ok(()) })
-        .expect("tslp_tsk failed");
+        }) {
+            abi::E_TMOUT => {}
+            er => {
+                expect_success_aborting(er, &"tslp_tsk");
+            }
+        }
 
         // Remove `waiter` from `self.waiters`. If `waiter` is still in
         // `waiters`, it means we woke up because of a timeout. Otherwise,
