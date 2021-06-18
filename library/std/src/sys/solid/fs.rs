@@ -434,9 +434,13 @@ impl fmt::Debug for File {
 }
 
 pub fn unlink(p: &Path) -> io::Result<()> {
-    error::SolidError::err_if_negative(unsafe { abi::SOLID_FS_Unlink(cstr(p)?.as_ptr()) })
-        .map_err(|e| e.as_io_error())?;
-    Ok(())
+    if stat(p)?.file_type().is_dir() {
+        Err(io::Error::new_const(io::ErrorKind::Other, &"is a directory"))
+    } else {
+        error::SolidError::err_if_negative(unsafe { abi::SOLID_FS_Unlink(cstr(p)?.as_ptr()) })
+            .map_err(|e| e.as_io_error())?;
+        Ok(())
+    }
 }
 
 pub fn rename(old: &Path, new: &Path) -> io::Result<()> {
@@ -456,7 +460,13 @@ pub fn set_perm(p: &Path, perm: FilePermissions) -> io::Result<()> {
 }
 
 pub fn rmdir(p: &Path) -> io::Result<()> {
-    unlink(p)
+    if stat(p)?.file_type().is_dir() {
+        error::SolidError::err_if_negative(unsafe { abi::SOLID_FS_Unlink(cstr(p)?.as_ptr()) })
+            .map_err(|e| e.as_io_error())?;
+        Ok(())
+    } else {
+        Err(io::Error::new_const(io::ErrorKind::Other, &"not a directory"))
+    }
 }
 
 pub fn remove_dir_all(path: &Path) -> io::Result<()> {
