@@ -9,12 +9,12 @@
 
 extern "C" {
     #[no_mangle]
-    //~^ WARNING #[no_mangle] should not be applied to a foreign static
+    //~^ WARNING `#[no_mangle]` should not be applied to a foreign static
     //~^^ WARNING this was previously accepted by the compiler
     pub static FOO: u8;
 
     #[no_mangle]
-    //~^ WARNING #[no_mangle] should not be applied to a foreign function
+    //~^ WARNING `#[no_mangle]` should not be applied to a foreign function
     //~^^ WARNING this was previously accepted by the compiler
     pub fn bar();
 }
