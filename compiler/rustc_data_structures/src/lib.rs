@@ -26,6 +26,8 @@
 #![feature(maybe_uninit_uninit_array)]
 #![allow(rustc::default_hash_types)]
 #![deny(unaligned_references)]
+#![feature(iter_map_while)]
+#![feature(bool_to_option)]
 
 #[macro_use]
 extern crate tracing;
