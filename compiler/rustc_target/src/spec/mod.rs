@@ -35,10 +35,10 @@
 //! to the list specified by the target, rather than replace.
 
 use crate::abi::Endian;
+use crate::json::{Json, ToJson};
 use crate::spec::abi::{lookup as lookup_abi, Abi};
 use crate::spec::crt_objects::{CrtObjects, CrtObjectsFallback};
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
-use rustc_serialize::json::{Json, ToJson};
 use rustc_span::symbol::{sym, Symbol};
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
@@ -201,7 +201,7 @@ impl ToJson for PanicStrategy {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Hash, Encodable, Decodable)]
+#[derive(Clone, Copy, Debug, PartialEq, Hash)]
 pub enum RelroLevel {
     Full,
     Partial,
@@ -245,7 +245,7 @@ impl ToJson for RelroLevel {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Hash, Encodable, Decodable)]
+#[derive(Clone, Copy, Debug, PartialEq, Hash)]
 pub enum MergeFunctions {
     Disabled,
     Trampolines,
@@ -535,7 +535,7 @@ impl StackProbeType {
         let object = json.as_object().ok_or_else(|| "expected a JSON object")?;
         let kind = object
             .get("kind")
-            .and_then(|o| o.as_string())
+            .and_then(|o| o.as_str())
             .ok_or_else(|| "expected `kind` to be a string")?;
         match kind {
             "none" => Ok(StackProbeType::None),
@@ -579,15 +579,17 @@ impl ToJson for StackProbeType {
             StackProbeType::Call => {
                 vec![(String::from("kind"), "call".to_json())].into_iter().collect()
             }
-            StackProbeType::InlineOrCall { min_llvm_version_for_inline } => vec![
-                (String::from("kind"), "inline-or-call".to_json()),
-                (
-                    String::from("min-llvm-version-for-inline"),
-                    min_llvm_version_for_inline.to_json(),
-                ),
-            ]
-            .into_iter()
-            .collect(),
+            StackProbeType::InlineOrCall { min_llvm_version_for_inline: (maj, min, patch) } => {
+                vec![
+                    (String::from("kind"), "inline-or-call".to_json()),
+                    (
+                        String::from("min-llvm-version-for-inline"),
+                        Json::Array(vec![maj.to_json(), min.to_json(), patch.to_json()]),
+                    ),
+                ]
+                .into_iter()
+                .collect()
+            }
         })
     }
 }
@@ -1457,8 +1459,8 @@ impl Target {
         // the JSON parser is not updated to match the structs.
 
         let get_req_field = |name: &str| {
-            obj.find(name)
-                .and_then(Json::as_string)
+            obj[name]
+                .as_str()
                 .map(str::to_string)
                 .ok_or_else(|| format!("Field {} in target specification is required", name))
         };
@@ -1476,25 +1478,25 @@ impl Target {
         macro_rules! key {
             ($key_name:ident) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                if let Some(s) = obj.find(&name).and_then(Json::as_string) {
+                if let Some(s) = obj[&name].as_str() {
                     base.$key_name = s.to_string();
                 }
             } );
             ($key_name:ident = $json_name:expr) => ( {
                 let name = $json_name;
-                if let Some(s) = obj.find(&name).and_then(Json::as_string) {
+                if let Some(s) = obj[&name].as_str() {
                     base.$key_name = s.to_string();
                 }
             } );
             ($key_name:ident, bool) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                if let Some(s) = obj.find(&name).and_then(Json::as_boolean) {
+                if let Some(s) = obj[&name].as_bool() {
                     base.$key_name = s;
                 }
             } );
             ($key_name:ident, Option<u32>) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                if let Some(s) = obj.find(&name).and_then(Json::as_u64) {
+                if let Some(s) = obj[&name].as_u64() {
                     if s < 1 || s > 5 {
                         return Err("Not a valid DWARF version number".to_string());
                     }
@@ -1503,13 +1505,13 @@ impl Target {
             } );
             ($key_name:ident, Option<u64>) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                if let Some(s) = obj.find(&name).and_then(Json::as_u64) {
+                if let Some(s) = obj[&name].as_u64() {
                     base.$key_name = Some(s);
                 }
             } );
             ($key_name:ident, MergeFunctions) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                obj.find(&name[..]).and_then(|o| o.as_string().and_then(|s| {
+                obj[&name[..]].as_str().and_then(|s| {
                     match s.parse::<MergeFunctions>() {
                         Ok(mergefunc) => base.$key_name = mergefunc,
                         _ => return Some(Err(format!("'{}' is not a valid value for \
@@ -1518,11 +1520,11 @@ impl Target {
                                                       s))),
                     }
                     Some(Ok(()))
-                })).unwrap_or(Ok(()))
+                }).unwrap_or(Ok(()))
             } );
             ($key_name:ident, RelocModel) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                obj.find(&name[..]).and_then(|o| o.as_string().and_then(|s| {
+                obj[&name[..]].as_str().and_then(|s| {
                     match s.parse::<RelocModel>() {
                         Ok(relocation_model) => base.$key_name = relocation_model,
                         _ => return Some(Err(format!("'{}' is not a valid relocation model. \
@@ -1530,11 +1532,11 @@ impl Target {
                                                       see the list of supported values.", s))),
                     }
                     Some(Ok(()))
-                })).unwrap_or(Ok(()))
+                }).unwrap_or(Ok(()))
             } );
             ($key_name:ident, CodeModel) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                obj.find(&name[..]).and_then(|o| o.as_string().and_then(|s| {
+                obj[&name[..]].as_str().and_then(|s| {
                     match s.parse::<CodeModel>() {
                         Ok(code_model) => base.$key_name = Some(code_model),
                         _ => return Some(Err(format!("'{}' is not a valid code model. \
@@ -1542,11 +1544,11 @@ impl Target {
                                                       see the list of supported values.", s))),
                     }
                     Some(Ok(()))
-                })).unwrap_or(Ok(()))
+                }).unwrap_or(Ok(()))
             } );
             ($key_name:ident, TlsModel) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                obj.find(&name[..]).and_then(|o| o.as_string().and_then(|s| {
+                obj[&name[..]].as_str().and_then(|s| {
                     match s.parse::<TlsModel>() {
                         Ok(tls_model) => base.$key_name = tls_model,
                         _ => return Some(Err(format!("'{}' is not a valid TLS model. \
@@ -1554,11 +1556,11 @@ impl Target {
                                                       see the list of supported values.", s))),
                     }
                     Some(Ok(()))
-                })).unwrap_or(Ok(()))
+                }).unwrap_or(Ok(()))
             } );
             ($key_name:ident, PanicStrategy) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                obj.find(&name[..]).and_then(|o| o.as_string().and_then(|s| {
+                obj[&name[..]].as_str().and_then(|s| {
                     match s {
                         "unwind" => base.$key_name = PanicStrategy::Unwind,
                         "abort" => base.$key_name = PanicStrategy::Abort,
@@ -1567,11 +1569,11 @@ impl Target {
                                                      s))),
                 }
                 Some(Ok(()))
-            })).unwrap_or(Ok(()))
+            }).unwrap_or(Ok(()))
             } );
             ($key_name:ident, RelroLevel) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                obj.find(&name[..]).and_then(|o| o.as_string().and_then(|s| {
+                obj[&name[..]].as_str().and_then(|s| {
                     match s.parse::<RelroLevel>() {
                         Ok(level) => base.$key_name = level,
                         _ => return Some(Err(format!("'{}' is not a valid value for \
@@ -1579,11 +1581,11 @@ impl Target {
                                                       s))),
                     }
                     Some(Ok(()))
-                })).unwrap_or(Ok(()))
+                }).unwrap_or(Ok(()))
             } );
             ($key_name:ident, SplitDebuginfo) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                obj.find(&name[..]).and_then(|o| o.as_string().and_then(|s| {
+                obj[&name[..]].as_str().and_then(|s| {
                     match s.parse::<SplitDebuginfo>() {
                         Ok(level) => base.$key_name = level,
                         _ => return Some(Err(format!("'{}' is not a valid value for \
@@ -1591,35 +1593,36 @@ impl Target {
                                                       s))),
                     }
                     Some(Ok(()))
-                })).unwrap_or(Ok(()))
+                }).unwrap_or(Ok(()))
             } );
             ($key_name:ident, list) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                if let Some(v) = obj.find(&name).and_then(Json::as_array) {
+                if let Some(v) = obj[&name].as_array() {
                     base.$key_name = v.iter()
-                        .map(|a| a.as_string().unwrap().to_string())
+                        .map(|a| a.as_str().unwrap().to_string())
                         .collect();
                 }
             } );
             ($key_name:ident, opt_list) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                if let Some(v) = obj.find(&name).and_then(Json::as_array) {
+                if let Some(v) = obj[&name].as_array() {
                     base.$key_name = Some(v.iter()
-                        .map(|a| a.as_string().unwrap().to_string())
+                        .map(|a| a.as_str().unwrap().to_string())
                         .collect());
                 }
             } );
             ($key_name:ident, optional) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                if let Some(o) = obj.find(&name[..]) {
+                let o = &obj[&name[..]];
+                if !o.is_null() {
                     base.$key_name = o
-                        .as_string()
+                        .as_str()
                         .map(|s| s.to_string() );
                 }
             } );
             ($key_name:ident, LldFlavor) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                obj.find(&name[..]).and_then(|o| o.as_string().and_then(|s| {
+                obj[&name[..]].as_str().and_then(|s| {
                     if let Some(flavor) = LldFlavor::from_str(&s) {
                         base.$key_name = flavor;
                     } else {
@@ -1629,36 +1632,41 @@ impl Target {
                             s)))
                     }
                     Some(Ok(()))
-                })).unwrap_or(Ok(()))
+                }).unwrap_or(Ok(()))
             } );
             ($key_name:ident, LinkerFlavor) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                obj.find(&name[..]).and_then(|o| o.as_string().and_then(|s| {
+                obj[&name[..]].as_str().and_then(|s| {
                     match LinkerFlavor::from_str(s) {
                         Some(linker_flavor) => base.$key_name = linker_flavor,
                         _ => return Some(Err(format!("'{}' is not a valid value for linker-flavor. \
                                                       Use {}", s, LinkerFlavor::one_of()))),
                     }
                     Some(Ok(()))
-                })).unwrap_or(Ok(()))
+                }).unwrap_or(Ok(()))
             } );
             ($key_name:ident, StackProbeType) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                obj.find(&name[..]).and_then(|o| match StackProbeType::from_json(o) {
-                    Ok(v) => {
-                        base.$key_name = v;
-                        Some(Ok(()))
-                    },
-                    Err(s) => Some(Err(
-                        format!("`{:?}` is not a valid value for `{}`: {}", o, name, s)
-                    )),
-                }).unwrap_or(Ok(()))
+                let o = &obj[&name[..]];
+                if !o.is_null() {
+                    match StackProbeType::from_json(&o) {
+                        Ok(v) => {
+                            base.$key_name = v;
+                            Ok(())
+                        },
+                        Err(s) => Err(
+                            format!("`{:?}` is not a valid value for `{}`: {}", o, name, s)
+                        ),
+                    }
+                } else {
+                    Ok(())
+                }
             } );
             ($key_name:ident, SanitizerSet) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                obj.find(&name[..]).and_then(|o| o.as_array()).and_then(|a| {
+                obj[&name[..]].as_array().and_then(|a| {
                     for s in a {
-                        base.$key_name |= match s.as_string() {
+                        base.$key_name |= match s.as_str() {
                             Some("address") => SanitizerSet::ADDRESS,
                             Some("leak") => SanitizerSet::LEAK,
                             Some("memory") => SanitizerSet::MEMORY,
@@ -1674,18 +1682,19 @@ impl Target {
 
             ($key_name:ident, crt_objects_fallback) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                obj.find(&name[..]).and_then(|o| o.as_string().and_then(|s| {
+                obj[&name[..]].as_str().and_then(|s| {
                     match s.parse::<CrtObjectsFallback>() {
                         Ok(fallback) => base.$key_name = Some(fallback),
                         _ => return Some(Err(format!("'{}' is not a valid CRT objects fallback. \
                                                       Use 'musl', 'mingw' or 'wasm'", s))),
                     }
                     Some(Ok(()))
-                })).unwrap_or(Ok(()))
+                }).unwrap_or(Ok(()))
             } );
             ($key_name:ident, link_objects) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                if let Some(val) = obj.find(&name[..]) {
+                let val = &obj[&name[..]];
+                if !val.is_null() {
                     let obj = val.as_object().ok_or_else(|| format!("{}: expected a \
                         JSON object with fields per CRT object kind.", name))?;
                     let mut args = CrtObjects::new();
@@ -1700,7 +1709,7 @@ impl Target {
                             format!("{}.{}: expected a JSON array", name, k)
                         )?.iter().enumerate()
                             .map(|(i,s)| {
-                                let s = s.as_string().ok_or_else(||
+                                let s = s.as_str().ok_or_else(||
                                     format!("{}.{}[{}]: expected a JSON string", name, k, i))?;
                                 Ok(s.to_owned())
                             })
@@ -1713,7 +1722,8 @@ impl Target {
             } );
             ($key_name:ident, link_args) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                if let Some(val) = obj.find(&name[..]) {
+                let val = &obj[&name[..]];
+                if !val.is_null() {
                     let obj = val.as_object().ok_or_else(|| format!("{}: expected a \
                         JSON object with fields per linker-flavor.", name))?;
                     let mut args = LinkArgs::new();
@@ -1727,7 +1737,7 @@ impl Target {
                             format!("{}.{}: expected a JSON array", name, k)
                         )?.iter().enumerate()
                             .map(|(i,s)| {
-                                let s = s.as_string().ok_or_else(||
+                                let s = s.as_str().ok_or_else(||
                                     format!("{}.{}[{}]: expected a JSON string", name, k, i))?;
                                 Ok(s.to_owned())
                             })
@@ -1740,9 +1750,9 @@ impl Target {
             } );
             ($key_name:ident, env) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                if let Some(a) = obj.find(&name[..]).and_then(|o| o.as_array()) {
+                if let Some(a) = obj[&name[..]].as_array() {
                     for o in a {
-                        if let Some(s) = o.as_string() {
+                        if let Some(s) = o.as_str() {
                             let p = s.split('=').collect::<Vec<_>>();
                             if p.len() == 2 {
                                 let k = p[0].to_string();
@@ -1755,27 +1765,26 @@ impl Target {
             } );
             ($key_name:ident, Option<Abi>) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                obj.find(&name[..]).and_then(|o| o.as_string().and_then(|s| {
+                obj[&name[..]].as_str().and_then(|s| {
                     match lookup_abi(s) {
                         Some(abi) => base.$key_name = Some(abi),
                         _ => return Some(Err(format!("'{}' is not a valid value for abi", s))),
                     }
                     Some(Ok(()))
-                })).unwrap_or(Ok(()))
+                }).unwrap_or(Ok(()))
             } );
             ($key_name:ident, TargetFamilies) => ( {
-                let value = obj.find("target-family");
-                if let Some(v) = value.and_then(Json::as_array) {
+                if let Some(v) = obj["target-family"].as_array() {
                     base.$key_name = v.iter()
-                        .map(|a| a.as_string().unwrap().to_string())
+                        .map(|a| a.as_str().unwrap().to_string())
                         .collect();
-                } else if let Some(v) = value.and_then(Json::as_string) {
+                } else if let Some(v) = obj["target-family"].as_str() {
                     base.$key_name = vec![v.to_string()];
                 }
             } );
         }
 
-        if let Some(s) = obj.find("target-endian").and_then(Json::as_string) {
+        if let Some(s) = obj["target-endian"].as_str() {
             base.endian = s.parse()?;
         }
         key!(is_builtin, bool);
@@ -1877,8 +1886,8 @@ impl Target {
         // NB: The old name is deprecated, but support for it is retained for
         // compatibility.
         for name in ["abi-blacklist", "unsupported-abis"].iter() {
-            if let Some(array) = obj.find(name).and_then(Json::as_array) {
-                for name in array.iter().filter_map(|abi| abi.as_string()) {
+            if let Some(array) = obj[name].as_array() {
+                for name in array.iter().filter_map(|abi| abi.as_str()) {
                     match lookup_abi(name) {
                         Some(abi) => {
                             if abi.generic() {
@@ -1915,13 +1924,12 @@ impl Target {
     /// The error string could come from any of the APIs called, including filesystem access and
     /// JSON decoding.
     pub fn search(target_triple: &TargetTriple, sysroot: &PathBuf) -> Result<Target, String> {
-        use rustc_serialize::json;
         use std::env;
         use std::fs;
 
         fn load_file(path: &Path) -> Result<Target, String> {
             let contents = fs::read(path).map_err(|e| e.to_string())?;
-            let obj = json::from_reader(&mut &contents[..]).map_err(|e| e.to_string())?;
+            let obj = serde_json::from_reader(&mut &contents[..]).map_err(|e| e.to_string())?;
             Target::from_json(obj)
         }
 
@@ -1975,7 +1983,7 @@ impl Target {
 
 impl ToJson for Target {
     fn to_json(&self) -> Json {
-        let mut d = BTreeMap::new();
+        let mut d = serde_json::Map::new();
         let default: TargetOptions = Default::default();
 
         macro_rules! target_val {

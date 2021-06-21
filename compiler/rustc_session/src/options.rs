@@ -1001,10 +1001,6 @@ options! {
         "make cfg(version) treat the current version as incomplete (default: no)"),
     asm_comments: bool = (false, parse_bool, [TRACKED],
         "generate comments into the assembly (may change behavior) (default: no)"),
-    ast_json: bool = (false, parse_bool, [UNTRACKED],
-        "print the AST as JSON and halt (default: no)"),
-    ast_json_noexpand: bool = (false, parse_bool, [UNTRACKED],
-        "print the pre-expansion AST as JSON and halt (default: no)"),
     binary_dep_depinfo: bool = (false, parse_bool, [TRACKED],
         "include artifacts (sysroot, crate dependencies) used during compilation in dep-info \
         (default: no)"),

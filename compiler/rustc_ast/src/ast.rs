@@ -40,9 +40,6 @@ use std::cmp::Ordering;
 use std::convert::TryFrom;
 use std::fmt;
 
-#[cfg(test)]
-mod tests;
-
 /// A "Label" is an identifier of some point in sources,
 /// e.g. in the following code:
 ///

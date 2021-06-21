@@ -39,7 +39,6 @@ use rustc_trait_selection::traits;
 use rustc_typeck as typeck;
 use tracing::{info, warn};
 
-use rustc_serialize::json;
 use tempfile::Builder as TempFileBuilder;
 
 use std::any::Any;
@@ -60,10 +59,6 @@ pub fn parse<'a>(sess: &'a Session, input: &Input) -> PResult<'a, ast::Crate> {
             parse_crate_from_source_str(name.clone(), input.clone(), &sess.parse_sess)
         }
     })?;
-
-    if sess.opts.debugging_opts.ast_json_noexpand {
-        println!("{}", json::as_json(&krate));
-    }
 
     if sess.opts.debugging_opts.input_stats {
         eprintln!("Lines of code:             {}", sess.source_map().count_lines());
@@ -450,10 +445,6 @@ fn configure_and_expand_inner<'a>(
 
     if sess.opts.debugging_opts.hir_stats {
         hir_stats::print_ast_stats(&krate, "POST EXPANSION AST STATS");
-    }
-
-    if sess.opts.debugging_opts.ast_json {
-        println!("{}", json::as_json(&krate));
     }
 
     resolver.resolve_crate(&krate);

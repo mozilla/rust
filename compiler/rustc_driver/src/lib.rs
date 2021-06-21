@@ -28,7 +28,7 @@ use rustc_metadata::locator;
 use rustc_middle::middle::cstore::MetadataLoader;
 use rustc_save_analysis as save;
 use rustc_save_analysis::DumpHandler;
-use rustc_serialize::json::{self, ToJson};
+use rustc_serialize::{opaque, Decodable};
 use rustc_session::config::nightly_options;
 use rustc_session::config::{ErrorOutputType, Input, OutputType, PrintRequest, TrimmedDefPaths};
 use rustc_session::getopts;
@@ -37,6 +37,7 @@ use rustc_session::{config, DiagnosticOutput, Session};
 use rustc_session::{early_error, early_error_no_abort, early_warn};
 use rustc_span::source_map::{FileLoader, FileName};
 use rustc_span::symbol::sym;
+use rustc_target::json::ToJson;
 
 use std::borrow::Cow;
 use std::cmp::max;
@@ -345,10 +346,7 @@ fn run_compiler(
                 return early_exit();
             }
 
-            if sess.opts.debugging_opts.parse_only
-                || sess.opts.debugging_opts.show_span.is_some()
-                || sess.opts.debugging_opts.ast_json_noexpand
-            {
+            if sess.opts.debugging_opts.parse_only || sess.opts.debugging_opts.show_span.is_some() {
                 return early_exit();
             }
 
@@ -383,7 +381,7 @@ fn run_compiler(
                 mem::drop(queries.expansion()?.take());
             }
 
-            if sess.opts.debugging_opts.no_analysis || sess.opts.debugging_opts.ast_json {
+            if sess.opts.debugging_opts.no_analysis {
                 return early_exit();
             }
 
@@ -602,13 +600,16 @@ impl RustcDefaultCalls {
                 // FIXME: #![crate_type] and #![crate_name] support not implemented yet
                 sess.init_crate_types(collect_crate_types(sess, &[]));
                 let outputs = compiler.build_output_filenames(&sess, &[]);
-                let rlink_data = fs::read_to_string(file).unwrap_or_else(|err| {
+                let rlink_data = fs::read(file).unwrap_or_else(|err| {
                     sess.fatal(&format!("failed to read rlink file: {}", err));
                 });
-                let codegen_results: CodegenResults =
-                    json::decode(&rlink_data).unwrap_or_else(|err| {
-                        sess.fatal(&format!("failed to decode rlink: {}", err));
-                    });
+                let mut decoder = opaque::Decoder::new(&rlink_data, 0);
+                let codegen_results = CodegenResults::decode(&mut decoder).unwrap_or_else(|err| {
+                    sess.fatal(&format!("failed to decode rlink: {}", err));
+                });
+                if decoder.position() != rlink_data.len() {
+                    sess.fatal("failed to decode rlink: trailing garbage");
+                }
                 let result = compiler.codegen_backend().link(&sess, codegen_results, &outputs);
                 abort_on_err(result, sess);
             } else {
@@ -684,7 +685,9 @@ impl RustcDefaultCalls {
                     "{}",
                     sess.target_tlib_path.as_ref().unwrap_or(&sess.host_tlib_path).dir.display()
                 ),
-                TargetSpec => println!("{}", sess.target.to_json().pretty()),
+                TargetSpec => {
+                    println!("{}", serde_json::to_string_pretty(&sess.target.to_json()).unwrap());
+                }
                 FileNames | CrateName => {
                     let input = input.unwrap_or_else(|| {
                         early_error(ErrorOutputType::default(), "no input file provided")

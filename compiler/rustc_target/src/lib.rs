@@ -25,6 +25,7 @@ extern crate tracing;
 
 pub mod abi;
 pub mod asm;
+pub mod json;
 pub mod spec;
 
 /// Requirements for a `StableHashingContext` to be used in this crate.
