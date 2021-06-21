@@ -31,10 +31,17 @@ pub fn array_len<const N: usize>(arr: &[u8; N]) -> usize {
     arr.len()
 }
 
+// EMIT_MIR lower_array_len.array_len_by_value.NormalizeArrayLen.diff
+// EMIT_MIR lower_array_len.array_len_by_value.SimplifyLocals.diff
+// EMIT_MIR lower_array_len.array_len_by_value.InstCombine.diff
+pub fn array_len_by_value<const N: usize>(arr: [u8; N]) -> usize {
+    arr.len()
+}
+
 fn main() {
     let _ = array_bound(3, &[0, 1, 2, 3]);
     let mut tmp = [0, 1, 2, 3, 4];
     let _ = array_bound_mut(3, &mut [0, 1, 2, 3]);
-
     let _ = array_len(&[0]);
+    let _ = array_len_by_value([0, 2]);
 }
