@@ -12,8 +12,9 @@ LL | use foo::self;
    |
 help: consider importing the module directly
    |
-LL | use foo;
-   |       --
+LL - use foo::self;
+LL + use foo;
+   | 
 help: alternatively, use the multi-path `use` syntax to import `self`
    |
 LL | use foo::{self};

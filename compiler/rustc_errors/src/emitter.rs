@@ -1592,6 +1592,7 @@ impl EmitterWriter {
         );
 
         let mut row_num = 2;
+        draw_col_separator_no_space(&mut buffer, 1, max_line_num_len + 1);
         let mut notice_capitalization = false;
         for (complete, parts, only_capitalization) in suggestions.iter().take(MAX_SUGGESTIONS) {
             notice_capitalization |= only_capitalization;
@@ -1601,11 +1602,20 @@ impl EmitterWriter {
             let show_underline = !(parts.len() == 1 && parts[0].snippet.trim() == complete.trim())
                 && complete.lines().count() == 1;
 
-            let lines = sm
+            let has_deletion = parts.iter().any(|p| p.is_deletion());
+            let is_multiline = complete.lines().count() > 1;
+
+            let show_diff = has_deletion && !is_multiline;
+
+            if show_diff {
+                row_num += 1;
+            }
+
+            let file_lines = sm
                 .span_to_lines(parts[0].span)
                 .expect("span_to_lines failed when emitting suggestion");
 
-            assert!(!lines.lines.is_empty() || parts[0].span.is_dummy());
+            assert!(!file_lines.lines.is_empty() || parts[0].span.is_dummy());
 
             let line_start = sm.lookup_char_pos(parts[0].span.lo()).line;
             draw_col_separator_no_space(&mut buffer, 1, max_line_num_len + 1);
@@ -1619,8 +1629,37 @@ impl EmitterWriter {
                     &self.maybe_anonymized(line_start + line_pos),
                     Style::LineNumber,
                 );
+                if show_diff {
+                    // Add the line number for both addition and removal to drive the point home.
+                    //
+                    // N - fn foo<A: T>(bar: A) {
+                    // N + fn foo(bar: impl T) {
+                    buffer.puts(
+                        row_num - 1,
+                        0,
+                        &self.maybe_anonymized(line_start + line_pos),
+                        Style::LineNumber,
+                    );
+                    buffer.puts(row_num - 1, max_line_num_len + 1, "- ", Style::Removal);
+                    buffer.puts(
+                        row_num - 1,
+                        max_line_num_len + 3,
+                        &replace_tabs(
+                            &*file_lines
+                                .file
+                                .get_line(file_lines.lines[line_pos].line_index)
+                                .unwrap(),
+                        ),
+                        Style::NoStyle,
+                    );
+                }
                 // print the suggestion
-                draw_col_separator(&mut buffer, row_num, max_line_num_len + 1);
+                if show_diff {
+                    buffer.puts(row_num, max_line_num_len + 1, "+ ", Style::Addition);
+                } else {
+                    draw_col_separator(&mut buffer, row_num, max_line_num_len + 1);
+                }
+
                 buffer.append(row_num, &replace_tabs(line), Style::NoStyle);
                 row_num += 1;
             }
@@ -1631,6 +1670,7 @@ impl EmitterWriter {
             // Only show an underline in the suggestions if the suggestion is not the
             // entirety of the code being shown and the displayed code is not multiline.
             if show_underline {
+                let padding: usize = max_line_num_len + 3;
                 draw_col_separator(&mut buffer, row_num, max_line_num_len + 1);
                 for part in parts {
                     let span_start_pos = sm.lookup_char_pos(part.span.lo()).col_display;
@@ -1657,21 +1697,30 @@ impl EmitterWriter {
                     let underline_end = (span_start_pos + start + sub_len) as isize + offset;
                     assert!(underline_start >= 0 && underline_end >= 0);
                     for p in underline_start..underline_end {
+                        // Colorize addition/replacements with green.
+                        buffer.set_style(
+                            row_num - 1,
+                            (padding as isize + p) as usize,
+                            Style::Addition,
+                            true,
+                        );
+                        // If this is a replacement, underline with `^`, if this is an addition
+                        // underline with `+`.
                         buffer.putc(
                             row_num,
-                            ((max_line_num_len + 3) as isize + p) as usize,
+                            (padding as isize + p) as usize,
                             '^',
-                            Style::UnderlinePrimary,
+                            Style::Addition,
                         );
                     }
-                    // underline removals too
-                    if underline_start == underline_end {
-                        for p in underline_start - 1..underline_start + 1 {
-                            buffer.putc(
-                                row_num,
-                                ((max_line_num_len + 3) as isize + p) as usize,
-                                '-',
-                                Style::UnderlineSecondary,
+                    if show_diff {
+                        // Colorize removal with red in diff format.
+                        for i in span_start_pos..span_end_pos {
+                            buffer.set_style(
+                                row_num - 2,
+                                (padding as isize + i as isize) as usize,
+                                Style::Removal,
+                                true,
                             );
                         }
                     }
@@ -2131,6 +2180,12 @@ impl<'a> WritableDst<'a> {
     fn apply_style(&mut self, lvl: Level, style: Style) -> io::Result<()> {
         let mut spec = ColorSpec::new();
         match style {
+            Style::Addition => {
+                spec.set_fg(Some(Color::Green)).set_intense(true);
+            }
+            Style::Removal => {
+                spec.set_fg(Some(Color::Red)).set_intense(true);
+            }
             Style::LineAndColumn => {}
             Style::LineNumber => {
                 spec.set_bold(true);

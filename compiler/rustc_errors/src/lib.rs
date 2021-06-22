@@ -162,6 +162,28 @@ pub struct SubstitutionPart {
     pub snippet: String,
 }
 
+impl SubstitutionPart {
+    pub fn is_addition(&self, sm: &SourceMap) -> bool {
+        self.snippet.len() != 0
+            && sm
+                .span_to_snippet(self.span)
+                .map(|snippet| snippet.trim().len() == 0)
+                .unwrap_or(self.span.lo() == self.span.hi())
+    }
+
+    pub fn is_deletion(&self) -> bool {
+        self.snippet.trim().len() == 0
+    }
+
+    pub fn is_replacement(&self, sm: &SourceMap) -> bool {
+        self.snippet.len() != 0
+            && sm
+                .span_to_snippet(self.span)
+                .map(|snippet| snippet.trim().len() != 0)
+                .unwrap_or(self.span.lo() != self.span.hi())
+    }
+}
+
 impl CodeSuggestion {
     /// Returns the assembled code suggestions, whether they should be shown with an underline
     /// and whether the substitution only differs in capitalization.

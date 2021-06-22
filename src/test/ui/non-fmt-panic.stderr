@@ -217,8 +217,9 @@ LL |     panic!(format!("{}", 1));
    = note: the panic!() macro supports formatting, so there's no need for the format!() macro here
 help: remove the `format!(..)` macro call
    |
-LL |     panic!("{}", 1);
-   |           --     --
+LL -     panic!(format!("{}", 1));
+LL +     panic!("{}", 1);
+   | 
 
 warning: panic message is not a string literal
   --> $DIR/non-fmt-panic.rs:39:20
@@ -231,8 +232,9 @@ LL |     assert!(false, format!("{}", 1));
    = note: the assert!() macro supports formatting, so there's no need for the format!() macro here
 help: remove the `format!(..)` macro call
    |
-LL |     assert!(false, "{}", 1);
-   |                   --     --
+LL -     assert!(false, format!("{}", 1));
+LL +     assert!(false, "{}", 1);
+   | 
 
 warning: panic message is not a string literal
   --> $DIR/non-fmt-panic.rs:40:26
@@ -245,8 +247,9 @@ LL |     debug_assert!(false, format!("{}", 1));
    = note: the debug_assert!() macro supports formatting, so there's no need for the format!() macro here
 help: remove the `format!(..)` macro call
    |
-LL |     debug_assert!(false, "{}", 1);
-   |                         --     --
+LL -     debug_assert!(false, format!("{}", 1));
+LL +     debug_assert!(false, "{}", 1);
+   | 
 
 warning: panic message is not a string literal
   --> $DIR/non-fmt-panic.rs:42:12
