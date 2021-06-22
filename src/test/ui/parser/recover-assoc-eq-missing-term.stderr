@@ -10,8 +10,9 @@ LL |     bar::<Item = TheType>();
    |                  ^^^^^^^
 help: remove the `=` if `Item` is a type
    |
-LL |     bar::<Item >();
-   |               --
+LL -     bar::<Item =   >();
+LL +     bar::<Item >();
+   | 
 
 error: aborting due to previous error
 
