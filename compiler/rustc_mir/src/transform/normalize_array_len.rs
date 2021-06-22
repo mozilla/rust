@@ -1,4 +1,4 @@
-//! This pass eliminates casting of arrays [T; N] into &[T] when their length
+//! This pass eliminates casting of arrays into slices when their length
 //! is taken using `.len()` method. Handy to preserve information in MIR for const prop
 
 use crate::transform::MirPass;
