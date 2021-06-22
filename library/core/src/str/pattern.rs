@@ -611,11 +611,7 @@ where
 impl<const N: usize> MultiCharEq for &[char; N] {
     #[inline]
     fn matches(&mut self, c: char) -> bool {
-        match N {
-            0 => false,
-            1 => self[0] == c,
-            _ => self.iter().any(|&m| m == c),
-        }
+        self.iter().any(|&m| m == c)
     }
 }
 
