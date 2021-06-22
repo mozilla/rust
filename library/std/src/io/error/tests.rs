@@ -5,6 +5,11 @@ use crate::mem::size_of;
 use crate::sys::decode_error_kind;
 use crate::sys::os::error_string;
 
+fn _assert_error_is_sync_send() {
+    fn _is_sync_send<T: Sync + Send>() {}
+    _is_sync_send::<Error>();
+}
+
 #[test]
 fn test_size() {
     assert!(size_of::<Error>() <= size_of::<[usize; 2]>());
