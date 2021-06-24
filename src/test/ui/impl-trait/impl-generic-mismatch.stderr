@@ -8,7 +8,7 @@ LL |     fn foo<U: Debug>(&self, _: &U) { }
    |            ^ expected `impl Trait`, found generic parameter
    |
 help: try removing the generic parameter and using `impl Trait` instead
-   |
+   |           __________            _
 LL -     fn foo<U: Debug>(&self, _: &U) { }
 LL +     fn foo(&self, _: &impl Debug) { }
    |                       ^^^^^^^^^^

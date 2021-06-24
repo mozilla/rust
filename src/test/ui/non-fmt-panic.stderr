@@ -216,7 +216,7 @@ LL |     panic!(format!("{}", 1));
    = note: for more information, see <https://doc.rust-lang.org/nightly/edition-guide/rust-2021/panic-macro-consistency.html>
    = note: the panic!() macro supports formatting, so there's no need for the format!() macro here
 help: remove the `format!(..)` macro call
-   |
+   |            ________       _
 LL -     panic!(format!("{}", 1));
 LL +     panic!("{}", 1);
    | 
@@ -231,7 +231,7 @@ LL |     assert!(false, format!("{}", 1));
    = note: for more information, see <https://doc.rust-lang.org/nightly/edition-guide/rust-2021/panic-macro-consistency.html>
    = note: the assert!() macro supports formatting, so there's no need for the format!() macro here
 help: remove the `format!(..)` macro call
-   |
+   |                    ________       _
 LL -     assert!(false, format!("{}", 1));
 LL +     assert!(false, "{}", 1);
    | 
@@ -246,7 +246,7 @@ LL |     debug_assert!(false, format!("{}", 1));
    = note: for more information, see <https://doc.rust-lang.org/nightly/edition-guide/rust-2021/panic-macro-consistency.html>
    = note: the debug_assert!() macro supports formatting, so there's no need for the format!() macro here
 help: remove the `format!(..)` macro call
-   |
+   |                          ________       _
 LL -     debug_assert!(false, format!("{}", 1));
 LL +     debug_assert!(false, "{}", 1);
    | 

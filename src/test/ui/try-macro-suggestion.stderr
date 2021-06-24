@@ -18,7 +18,7 @@ LL |     Ok(try!(Ok(())))
    |
    = note: in the 2018 edition `try` is a reserved keyword, and the `try!()` macro is deprecated
 help: you can use the `?` operator instead
-   |
+   |        _____      _
 LL -     Ok(try!(Ok(())))
 LL +     Ok(Ok(())?)
    |              ^

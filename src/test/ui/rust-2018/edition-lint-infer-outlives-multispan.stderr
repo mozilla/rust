@@ -10,7 +10,7 @@ note: the lint level is defined here
 LL | #![deny(explicit_outlives_requirements)]
    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: remove these bounds
-   |
+   |                                               _____     _____
 LL -     struct TeeOutlivesAyIsDebugBee<'a, 'b, T: 'a + Debug + 'b> {
 LL +     struct TeeOutlivesAyIsDebugBee<'a, 'b, T: Debug> {
    | 
@@ -22,7 +22,7 @@ LL |     struct TeeWhereOutlivesAyIsDebugBee<'a, 'b, T> where T: 'a + Debug + 'b
    |                                                             ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                             _____     _____
 LL -     struct TeeWhereOutlivesAyIsDebugBee<'a, 'b, T> where T: 'a + Debug + 'b {
 LL +     struct TeeWhereOutlivesAyIsDebugBee<'a, 'b, T> where T: Debug {
    | 
@@ -34,7 +34,7 @@ LL |     struct TeeYooOutlivesAyIsDebugBee<'a, 'b, T, U: 'a + Debug + 'b> {
    |                                                     ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                     _____     _____
 LL -     struct TeeYooOutlivesAyIsDebugBee<'a, 'b, T, U: 'a + Debug + 'b> {
 LL +     struct TeeYooOutlivesAyIsDebugBee<'a, 'b, T, U: Debug> {
    | 
@@ -46,7 +46,7 @@ LL |     struct TeeOutlivesAyYooBeeIsDebug<'a, 'b, T: 'a, U: 'b + Debug> {
    |                                                ^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                ____     _____
 LL -     struct TeeOutlivesAyYooBeeIsDebug<'a, 'b, T: 'a, U: 'b + Debug> {
 LL +     struct TeeOutlivesAyYooBeeIsDebug<'a, 'b, T, U: Debug> {
    | 
@@ -58,7 +58,7 @@ LL |     struct TeeOutlivesAyYooIsDebugBee<'a, 'b, T: 'a, U: Debug + 'b> {
    |                                                ^^^^          ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                ____          _____
 LL -     struct TeeOutlivesAyYooIsDebugBee<'a, 'b, T: 'a, U: Debug + 'b> {
 LL +     struct TeeOutlivesAyYooIsDebugBee<'a, 'b, T, U: Debug> {
    | 
@@ -70,7 +70,7 @@ LL |     struct TeeOutlivesAyYooWhereBee<'a, 'b, T: 'a, U> where U: 'b {
    |                                              ^^^^    ^^^^^^^^^^^^
    |
 help: remove these bounds
-   |
+   |                                              ____    ____________
 LL -     struct TeeOutlivesAyYooWhereBee<'a, 'b, T: 'a, U> where U: 'b {
 LL +     struct TeeOutlivesAyYooWhereBee<'a, 'b, T, U> {
    | 
@@ -82,7 +82,7 @@ LL |     struct TeeYooWhereOutlivesAyIsDebugBee<'a, 'b, T, U> where U: 'a + Debu
    |                                                                   ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                                   _____     _____
 LL -     struct TeeYooWhereOutlivesAyIsDebugBee<'a, 'b, T, U> where U: 'a + Debug + 'b {
 LL +     struct TeeYooWhereOutlivesAyIsDebugBee<'a, 'b, T, U> where U: Debug {
    | 
@@ -94,7 +94,7 @@ LL |     struct TeeOutlivesAyYooWhereBeeIsDebug<'a, 'b, T: 'a, U> where U: 'b + 
    |                                                     ^^^^              ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                     ____              _____
 LL -     struct TeeOutlivesAyYooWhereBeeIsDebug<'a, 'b, T: 'a, U> where U: 'b + Debug {
 LL +     struct TeeOutlivesAyYooWhereBeeIsDebug<'a, 'b, T, U> where U: Debug {
    | 
@@ -106,7 +106,7 @@ LL |     struct TeeOutlivesAyYooWhereIsDebugBee<'a, 'b, T: 'a, U> where U: Debug
    |                                                     ^^^^                   ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                     ____                   _____
 LL -     struct TeeOutlivesAyYooWhereIsDebugBee<'a, 'b, T: 'a, U> where U: Debug + 'b {
 LL +     struct TeeOutlivesAyYooWhereIsDebugBee<'a, 'b, T, U> where U: Debug {
    | 
@@ -118,7 +118,7 @@ LL |     struct TeeWhereOutlivesAyYooWhereBeeIsDebug<'a, 'b, T, U> where T: 'a, 
    |                                                                     ^^^^^^^   ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                                     _______   _____
 LL -     struct TeeWhereOutlivesAyYooWhereBeeIsDebug<'a, 'b, T, U> where T: 'a, U: 'b + Debug {
 LL +     struct TeeWhereOutlivesAyYooWhereBeeIsDebug<'a, 'b, T, U> where U: Debug {
    | 
@@ -130,7 +130,7 @@ LL |     struct TeeWhereOutlivesAyYooWhereIsDebugBee<'a, 'b, T, U> where T: 'a, 
    |                                                                     ^^^^^^^        ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                                     _______        _____
 LL -     struct TeeWhereOutlivesAyYooWhereIsDebugBee<'a, 'b, T, U> where T: 'a, U: Debug + 'b {
 LL +     struct TeeWhereOutlivesAyYooWhereIsDebugBee<'a, 'b, T, U> where U: Debug {
    | 
@@ -142,7 +142,7 @@ LL |     struct BeeOutlivesAyTeeBee<'a, 'b: 'a, T: 'b> {
    |                                      ^^^^   ^^^^
    |
 help: remove these bounds
-   |
+   |                                      ____   ____
 LL -     struct BeeOutlivesAyTeeBee<'a, 'b: 'a, T: 'b> {
 LL +     struct BeeOutlivesAyTeeBee<'a, 'b, T> {
    | 
@@ -154,7 +154,7 @@ LL |     struct BeeOutlivesAyTeeAyBee<'a, 'b: 'a, T: 'a + 'b> {
    |                                        ^^^^   ^^^^^^^^^
    |
 help: remove these bounds
-   |
+   |                                        ____   _________
 LL -     struct BeeOutlivesAyTeeAyBee<'a, 'b: 'a, T: 'a + 'b> {
 LL +     struct BeeOutlivesAyTeeAyBee<'a, 'b, T> {
    | 
@@ -166,7 +166,7 @@ LL |     struct BeeOutlivesAyTeeOutlivesAyIsDebugBee<'a, 'b: 'a, T: 'a + Debug +
    |                                                       ^^^^     ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                       ____     _____     _____
 LL -     struct BeeOutlivesAyTeeOutlivesAyIsDebugBee<'a, 'b: 'a, T: 'a + Debug + 'b> {
 LL +     struct BeeOutlivesAyTeeOutlivesAyIsDebugBee<'a, 'b, T: Debug> {
    | 
@@ -178,7 +178,7 @@ LL |     struct BeeWhereAyTeeWhereOutlivesAyIsDebugBee<'a, 'b, T> where 'b: 'a, 
    |                                                                    ^^^^^^^^   ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                                    ________   _____     _____
 LL -     struct BeeWhereAyTeeWhereOutlivesAyIsDebugBee<'a, 'b, T> where 'b: 'a, T: 'a + Debug + 'b {
 LL +     struct BeeWhereAyTeeWhereOutlivesAyIsDebugBee<'a, 'b, T> where T: Debug {
    | 
@@ -190,7 +190,7 @@ LL |     struct BeeOutlivesAyTeeYooOutlivesAyIsDebugBee<'a, 'b: 'a, T, U: 'a + D
    |                                                          ^^^^        ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                          ____        _____     _____
 LL -     struct BeeOutlivesAyTeeYooOutlivesAyIsDebugBee<'a, 'b: 'a, T, U: 'a + Debug + 'b> {
 LL +     struct BeeOutlivesAyTeeYooOutlivesAyIsDebugBee<'a, 'b, T, U: Debug> {
    | 
@@ -202,7 +202,7 @@ LL |         where U: 'a + Debug + 'b, 'b: 'a
    |                  ^^^^^     ^^^^^  ^^^^^^
    |
 help: remove these bounds
-   |
+   |                  _____     _____  ______
 LL -         where U: 'a + Debug + 'b, 'b: 'a
 LL +         where U: Debug, 
    | 
@@ -214,7 +214,7 @@ LL |     struct TeeOutlivesAyIsDebugBee<'a, 'b, T: 'a + Debug + 'b>(&'a &'b T);
    |                                               ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                               _____     _____
 LL -     struct TeeOutlivesAyIsDebugBee<'a, 'b, T: 'a + Debug + 'b>(&'a &'b T);
 LL +     struct TeeOutlivesAyIsDebugBee<'a, 'b, T: Debug>(&'a &'b T);
    | 
@@ -226,7 +226,7 @@ LL |     struct TeeWhereOutlivesAyIsDebugBee<'a, 'b, T>(&'a &'b T) where T: 'a +
    |                                                                        ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                                        _____     _____
 LL -     struct TeeWhereOutlivesAyIsDebugBee<'a, 'b, T>(&'a &'b T) where T: 'a + Debug + 'b;
 LL +     struct TeeWhereOutlivesAyIsDebugBee<'a, 'b, T>(&'a &'b T) where T: Debug;
    | 
@@ -238,7 +238,7 @@ LL |     struct TeeYooOutlivesAyIsDebugBee<'a, 'b, T, U: 'a + Debug + 'b>(T, &'a
    |                                                     ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                     _____     _____
 LL -     struct TeeYooOutlivesAyIsDebugBee<'a, 'b, T, U: 'a + Debug + 'b>(T, &'a &'b U);
 LL +     struct TeeYooOutlivesAyIsDebugBee<'a, 'b, T, U: Debug>(T, &'a &'b U);
    | 
@@ -250,7 +250,7 @@ LL |     struct TeeOutlivesAyYooBeeIsDebug<'a, 'b, T: 'a, U: 'b + Debug>(&'a T, 
    |                                                ^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                ____     _____
 LL -     struct TeeOutlivesAyYooBeeIsDebug<'a, 'b, T: 'a, U: 'b + Debug>(&'a T, &'b U);
 LL +     struct TeeOutlivesAyYooBeeIsDebug<'a, 'b, T, U: Debug>(&'a T, &'b U);
    | 
@@ -262,7 +262,7 @@ LL |     struct TeeOutlivesAyYooIsDebugBee<'a, 'b, T: 'a, U: Debug + 'b>(&'a T, 
    |                                                ^^^^          ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                ____          _____
 LL -     struct TeeOutlivesAyYooIsDebugBee<'a, 'b, T: 'a, U: Debug + 'b>(&'a T, &'b U);
 LL +     struct TeeOutlivesAyYooIsDebugBee<'a, 'b, T, U: Debug>(&'a T, &'b U);
    | 
@@ -274,7 +274,7 @@ LL |     struct TeeOutlivesAyYooWhereBee<'a, 'b, T: 'a, U>(&'a T, &'b U) where U
    |                                              ^^^^                   ^^^^^^^^^^^
    |
 help: remove these bounds
-   |
+   |                                              ____                   ___________
 LL -     struct TeeOutlivesAyYooWhereBee<'a, 'b, T: 'a, U>(&'a T, &'b U) where U: 'b;
 LL +     struct TeeOutlivesAyYooWhereBee<'a, 'b, T, U>(&'a T, &'b U) ;
    | 
@@ -286,7 +286,7 @@ LL |     struct TeeYooWhereOutlivesAyIsDebugBee<'a, 'b, T, U>(T, &'a &'b U) wher
    |                                                                                 ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                                                 _____     _____
 LL -     struct TeeYooWhereOutlivesAyIsDebugBee<'a, 'b, T, U>(T, &'a &'b U) where U: 'a + Debug + 'b;
 LL +     struct TeeYooWhereOutlivesAyIsDebugBee<'a, 'b, T, U>(T, &'a &'b U) where U: Debug;
    | 
@@ -298,7 +298,7 @@ LL |     struct TeeOutlivesAyYooWhereBeeIsDebug<'a, 'b, T: 'a, U>(&'a T, &'b U) 
    |                                                     ^^^^                            ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                     ____                            _____
 LL -     struct TeeOutlivesAyYooWhereBeeIsDebug<'a, 'b, T: 'a, U>(&'a T, &'b U) where U: 'b + Debug;
 LL +     struct TeeOutlivesAyYooWhereBeeIsDebug<'a, 'b, T, U>(&'a T, &'b U) where U: Debug;
    | 
@@ -310,7 +310,7 @@ LL |     struct TeeOutlivesAyYooWhereIsDebugBee<'a, 'b, T: 'a, U>(&'a T, &'b U) 
    |                                                     ^^^^                                 ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                     ____                                 _____
 LL -     struct TeeOutlivesAyYooWhereIsDebugBee<'a, 'b, T: 'a, U>(&'a T, &'b U) where U: Debug + 'b;
 LL +     struct TeeOutlivesAyYooWhereIsDebugBee<'a, 'b, T, U>(&'a T, &'b U) where U: Debug;
    | 
@@ -322,7 +322,7 @@ LL |     struct TeeWhereAyYooWhereBeeIsDebug<'a, 'b, T, U>(&'a T, &'b U) where T
    |                                                                           ^^^^^^^   ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                                           _______   _____
 LL -     struct TeeWhereAyYooWhereBeeIsDebug<'a, 'b, T, U>(&'a T, &'b U) where T: 'a, U: 'b + Debug;
 LL +     struct TeeWhereAyYooWhereBeeIsDebug<'a, 'b, T, U>(&'a T, &'b U) where U: Debug;
    | 
@@ -334,7 +334,7 @@ LL |     struct TeeWhereAyYooWhereIsDebugBee<'a, 'b, T, U>(&'a T, &'b U) where T
    |                                                                           ^^^^^^^        ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                                           _______        _____
 LL -     struct TeeWhereAyYooWhereIsDebugBee<'a, 'b, T, U>(&'a T, &'b U) where T: 'a, U: Debug + 'b;
 LL +     struct TeeWhereAyYooWhereIsDebugBee<'a, 'b, T, U>(&'a T, &'b U) where U: Debug;
    | 
@@ -346,7 +346,7 @@ LL |     struct BeeOutlivesAyTeeBee<'a, 'b: 'a, T: 'b>(&'a &'b T);
    |                                      ^^^^   ^^^^
    |
 help: remove these bounds
-   |
+   |                                      ____   ____
 LL -     struct BeeOutlivesAyTeeBee<'a, 'b: 'a, T: 'b>(&'a &'b T);
 LL +     struct BeeOutlivesAyTeeBee<'a, 'b, T>(&'a &'b T);
    | 
@@ -358,7 +358,7 @@ LL |     struct BeeOutlivesAyTeeAyBee<'a, 'b: 'a, T: 'a + 'b>(&'a &'b T);
    |                                        ^^^^   ^^^^^^^^^
    |
 help: remove these bounds
-   |
+   |                                        ____   _________
 LL -     struct BeeOutlivesAyTeeAyBee<'a, 'b: 'a, T: 'a + 'b>(&'a &'b T);
 LL +     struct BeeOutlivesAyTeeAyBee<'a, 'b, T>(&'a &'b T);
    | 
@@ -370,7 +370,7 @@ LL |     struct BeeOutlivesAyTeeOutlivesAyIsDebugBee<'a, 'b: 'a, T: 'a + Debug +
    |                                                       ^^^^     ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                       ____     _____     _____
 LL -     struct BeeOutlivesAyTeeOutlivesAyIsDebugBee<'a, 'b: 'a, T: 'a + Debug + 'b>(&'a &'b T);
 LL +     struct BeeOutlivesAyTeeOutlivesAyIsDebugBee<'a, 'b, T: Debug>(&'a &'b T);
    | 
@@ -382,7 +382,7 @@ LL |     struct BeeWhereAyTeeWhereAyIsDebugBee<'a, 'b, T>(&'a &'b T) where 'b: '
    |                                                                       ^^^^^^^^   ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                                       ________   _____     _____
 LL -     struct BeeWhereAyTeeWhereAyIsDebugBee<'a, 'b, T>(&'a &'b T) where 'b: 'a, T: 'a + Debug + 'b;
 LL +     struct BeeWhereAyTeeWhereAyIsDebugBee<'a, 'b, T>(&'a &'b T) where T: Debug;
    | 
@@ -394,7 +394,7 @@ LL |     struct BeeOutlivesAyTeeYooOutlivesAyIsDebugBee<'a, 'b: 'a, T, U: 'a + D
    |                                                          ^^^^        ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                          ____        _____     _____
 LL -     struct BeeOutlivesAyTeeYooOutlivesAyIsDebugBee<'a, 'b: 'a, T, U: 'a + Debug + 'b>(T, &'a &'b U);
 LL +     struct BeeOutlivesAyTeeYooOutlivesAyIsDebugBee<'a, 'b, T, U: Debug>(T, &'a &'b U);
    | 
@@ -406,7 +406,7 @@ LL |         where U: 'a + Debug + 'b, 'b: 'a;
    |                  ^^^^^     ^^^^^  ^^^^^^
    |
 help: remove these bounds
-   |
+   |                  _____     _____  ______
 LL -         where U: 'a + Debug + 'b, 'b: 'a;
 LL +         where U: Debug, ;
    | 
@@ -418,7 +418,7 @@ LL |     enum TeeOutlivesAyIsDebugBee<'a, 'b, T: 'a + Debug + 'b> {
    |                                             ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                             _____     _____
 LL -     enum TeeOutlivesAyIsDebugBee<'a, 'b, T: 'a + Debug + 'b> {
 LL +     enum TeeOutlivesAyIsDebugBee<'a, 'b, T: Debug> {
    | 
@@ -430,7 +430,7 @@ LL |     enum TeeWhereOutlivesAyIsDebugBee<'a, 'b, T> where T: 'a + Debug + 'b {
    |                                                           ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                           _____     _____
 LL -     enum TeeWhereOutlivesAyIsDebugBee<'a, 'b, T> where T: 'a + Debug + 'b {
 LL +     enum TeeWhereOutlivesAyIsDebugBee<'a, 'b, T> where T: Debug {
    | 
@@ -442,7 +442,7 @@ LL |     enum TeeYooOutlivesAyIsDebugBee<'a, 'b, T, U: 'a + Debug + 'b> {
    |                                                   ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                   _____     _____
 LL -     enum TeeYooOutlivesAyIsDebugBee<'a, 'b, T, U: 'a + Debug + 'b> {
 LL +     enum TeeYooOutlivesAyIsDebugBee<'a, 'b, T, U: Debug> {
    | 
@@ -454,7 +454,7 @@ LL |     enum TeeOutlivesAyYooBeeIsDebug<'a, 'b, T: 'a, U: 'b + Debug> {
    |                                              ^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                              ____     _____
 LL -     enum TeeOutlivesAyYooBeeIsDebug<'a, 'b, T: 'a, U: 'b + Debug> {
 LL +     enum TeeOutlivesAyYooBeeIsDebug<'a, 'b, T, U: Debug> {
    | 
@@ -466,7 +466,7 @@ LL |     enum TeeOutlivesAyYooIsDebugBee<'a, 'b, T: 'a, U: Debug + 'b> {
    |                                              ^^^^          ^^^^^
    |
 help: remove these bounds
-   |
+   |                                              ____          _____
 LL -     enum TeeOutlivesAyYooIsDebugBee<'a, 'b, T: 'a, U: Debug + 'b> {
 LL +     enum TeeOutlivesAyYooIsDebugBee<'a, 'b, T, U: Debug> {
    | 
@@ -478,7 +478,7 @@ LL |     enum TeeOutlivesAyYooWhereBee<'a, 'b, T: 'a, U> where U: 'b {
    |                                            ^^^^    ^^^^^^^^^^^^
    |
 help: remove these bounds
-   |
+   |                                            ____    ____________
 LL -     enum TeeOutlivesAyYooWhereBee<'a, 'b, T: 'a, U> where U: 'b {
 LL +     enum TeeOutlivesAyYooWhereBee<'a, 'b, T, U> {
    | 
@@ -490,7 +490,7 @@ LL |     enum TeeYooWhereOutlivesAyIsDebugBee<'a, 'b, T, U> where U: 'a + Debug 
    |                                                                 ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                                 _____     _____
 LL -     enum TeeYooWhereOutlivesAyIsDebugBee<'a, 'b, T, U> where U: 'a + Debug + 'b {
 LL +     enum TeeYooWhereOutlivesAyIsDebugBee<'a, 'b, T, U> where U: Debug {
    | 
@@ -502,7 +502,7 @@ LL |     enum TeeOutlivesAyYooWhereBeeIsDebug<'a, 'b, T: 'a, U> where U: 'b + De
    |                                                   ^^^^              ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                   ____              _____
 LL -     enum TeeOutlivesAyYooWhereBeeIsDebug<'a, 'b, T: 'a, U> where U: 'b + Debug {
 LL +     enum TeeOutlivesAyYooWhereBeeIsDebug<'a, 'b, T, U> where U: Debug {
    | 
@@ -514,7 +514,7 @@ LL |     enum TeeOutlivesAyYooWhereIsDebugBee<'a, 'b, T: 'a, U> where U: Debug +
    |                                                   ^^^^                   ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                   ____                   _____
 LL -     enum TeeOutlivesAyYooWhereIsDebugBee<'a, 'b, T: 'a, U> where U: Debug + 'b {
 LL +     enum TeeOutlivesAyYooWhereIsDebugBee<'a, 'b, T, U> where U: Debug {
    | 
@@ -526,7 +526,7 @@ LL |     enum TeeWhereOutlivesAyYooWhereBeeIsDebug<'a, 'b, T, U> where T: 'a, U:
    |                                                                   ^^^^^^^   ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                                   _______   _____
 LL -     enum TeeWhereOutlivesAyYooWhereBeeIsDebug<'a, 'b, T, U> where T: 'a, U: 'b + Debug {
 LL +     enum TeeWhereOutlivesAyYooWhereBeeIsDebug<'a, 'b, T, U> where U: Debug {
    | 
@@ -538,7 +538,7 @@ LL |     enum TeeWhereOutlivesAyYooWhereIsDebugBee<'a, 'b, T, U> where T: 'a, U:
    |                                                                   ^^^^^^^        ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                                   _______        _____
 LL -     enum TeeWhereOutlivesAyYooWhereIsDebugBee<'a, 'b, T, U> where T: 'a, U: Debug + 'b {
 LL +     enum TeeWhereOutlivesAyYooWhereIsDebugBee<'a, 'b, T, U> where U: Debug {
    | 
@@ -550,7 +550,7 @@ LL |     enum BeeOutlivesAyTeeBee<'a, 'b: 'a, T: 'b> {
    |                                    ^^^^   ^^^^
    |
 help: remove these bounds
-   |
+   |                                    ____   ____
 LL -     enum BeeOutlivesAyTeeBee<'a, 'b: 'a, T: 'b> {
 LL +     enum BeeOutlivesAyTeeBee<'a, 'b, T> {
    | 
@@ -562,7 +562,7 @@ LL |     enum BeeOutlivesAyTeeAyBee<'a, 'b: 'a, T: 'a + 'b> {
    |                                      ^^^^   ^^^^^^^^^
    |
 help: remove these bounds
-   |
+   |                                      ____   _________
 LL -     enum BeeOutlivesAyTeeAyBee<'a, 'b: 'a, T: 'a + 'b> {
 LL +     enum BeeOutlivesAyTeeAyBee<'a, 'b, T> {
    | 
@@ -574,7 +574,7 @@ LL |     enum BeeOutlivesAyTeeOutlivesAyIsDebugBee<'a, 'b: 'a, T: 'a + Debug + '
    |                                                     ^^^^     ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                     ____     _____     _____
 LL -     enum BeeOutlivesAyTeeOutlivesAyIsDebugBee<'a, 'b: 'a, T: 'a + Debug + 'b> {
 LL +     enum BeeOutlivesAyTeeOutlivesAyIsDebugBee<'a, 'b, T: Debug> {
    | 
@@ -586,7 +586,7 @@ LL |     enum BeeWhereAyTeeWhereOutlivesAyIsDebugBee<'a, 'b, T> where 'b: 'a, T:
    |                                                                  ^^^^^^^^   ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                                  ________   _____     _____
 LL -     enum BeeWhereAyTeeWhereOutlivesAyIsDebugBee<'a, 'b, T> where 'b: 'a, T: 'a + Debug + 'b {
 LL +     enum BeeWhereAyTeeWhereOutlivesAyIsDebugBee<'a, 'b, T> where T: Debug {
    | 
@@ -598,7 +598,7 @@ LL |     enum BeeOutlivesAyTeeYooOutlivesAyIsDebugBee<'a, 'b: 'a, T, U: 'a + Deb
    |                                                        ^^^^        ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                        ____        _____     _____
 LL -     enum BeeOutlivesAyTeeYooOutlivesAyIsDebugBee<'a, 'b: 'a, T, U: 'a + Debug + 'b> {
 LL +     enum BeeOutlivesAyTeeYooOutlivesAyIsDebugBee<'a, 'b, T, U: Debug> {
    | 
@@ -610,7 +610,7 @@ LL |     enum BeeWhereAyTeeYooWhereOutlivesAyIsDebugBee<'a, 'b, T, U> where U: '
    |                                                                           ^^^^^     ^^^^^  ^^^^^^
    |
 help: remove these bounds
-   |
+   |                                                                           _____     _____  ______
 LL -     enum BeeWhereAyTeeYooWhereOutlivesAyIsDebugBee<'a, 'b, T, U> where U: 'a + Debug + 'b, 'b: 'a {
 LL +     enum BeeWhereAyTeeYooWhereOutlivesAyIsDebugBee<'a, 'b, T, U> where U: Debug,  {
    | 
@@ -622,7 +622,7 @@ LL |     union TeeOutlivesAyIsDebugBee<'a, 'b, T: 'a + Debug + 'b> {
    |                                              ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                              _____     _____
 LL -     union TeeOutlivesAyIsDebugBee<'a, 'b, T: 'a + Debug + 'b> {
 LL +     union TeeOutlivesAyIsDebugBee<'a, 'b, T: Debug> {
    | 
@@ -634,7 +634,7 @@ LL |     union TeeWhereOutlivesAyIsDebugBee<'a, 'b, T> where T: 'a + Debug + 'b 
    |                                                            ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                            _____     _____
 LL -     union TeeWhereOutlivesAyIsDebugBee<'a, 'b, T> where T: 'a + Debug + 'b {
 LL +     union TeeWhereOutlivesAyIsDebugBee<'a, 'b, T> where T: Debug {
    | 
@@ -646,7 +646,7 @@ LL |     union TeeYooOutlivesAyIsDebugBee<'a, 'b, T, U: 'a + Debug + 'b> {
    |                                                    ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                    _____     _____
 LL -     union TeeYooOutlivesAyIsDebugBee<'a, 'b, T, U: 'a + Debug + 'b> {
 LL +     union TeeYooOutlivesAyIsDebugBee<'a, 'b, T, U: Debug> {
    | 
@@ -658,7 +658,7 @@ LL |     union TeeOutlivesAyYooBeeIsDebug<'a, 'b, T: 'a, U: 'b + Debug> {
    |                                               ^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                               ____     _____
 LL -     union TeeOutlivesAyYooBeeIsDebug<'a, 'b, T: 'a, U: 'b + Debug> {
 LL +     union TeeOutlivesAyYooBeeIsDebug<'a, 'b, T, U: Debug> {
    | 
@@ -670,7 +670,7 @@ LL |     union TeeOutlivesAyYooIsDebugBee<'a, 'b, T: 'a, U: Debug + 'b> {
    |                                               ^^^^          ^^^^^
    |
 help: remove these bounds
-   |
+   |                                               ____          _____
 LL -     union TeeOutlivesAyYooIsDebugBee<'a, 'b, T: 'a, U: Debug + 'b> {
 LL +     union TeeOutlivesAyYooIsDebugBee<'a, 'b, T, U: Debug> {
    | 
@@ -682,7 +682,7 @@ LL |     union TeeOutlivesAyYooWhereBee<'a, 'b, T: 'a, U> where U: 'b {
    |                                             ^^^^    ^^^^^^^^^^^^
    |
 help: remove these bounds
-   |
+   |                                             ____    ____________
 LL -     union TeeOutlivesAyYooWhereBee<'a, 'b, T: 'a, U> where U: 'b {
 LL +     union TeeOutlivesAyYooWhereBee<'a, 'b, T, U> {
    | 
@@ -694,7 +694,7 @@ LL |     union TeeYooWhereOutlivesAyIsDebugBee<'a, 'b, T, U> where U: 'a + Debug
    |                                                                  ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                                  _____     _____
 LL -     union TeeYooWhereOutlivesAyIsDebugBee<'a, 'b, T, U> where U: 'a + Debug + 'b {
 LL +     union TeeYooWhereOutlivesAyIsDebugBee<'a, 'b, T, U> where U: Debug {
    | 
@@ -706,7 +706,7 @@ LL |     union TeeOutlivesAyYooWhereBeeIsDebug<'a, 'b, T: 'a, U> where U: 'b + D
    |                                                    ^^^^              ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                    ____              _____
 LL -     union TeeOutlivesAyYooWhereBeeIsDebug<'a, 'b, T: 'a, U> where U: 'b + Debug {
 LL +     union TeeOutlivesAyYooWhereBeeIsDebug<'a, 'b, T, U> where U: Debug {
    | 
@@ -718,7 +718,7 @@ LL |     union TeeOutlivesAyYooWhereIsDebugBee<'a, 'b, T: 'a, U> where U: Debug 
    |                                                    ^^^^                   ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                    ____                   _____
 LL -     union TeeOutlivesAyYooWhereIsDebugBee<'a, 'b, T: 'a, U> where U: Debug + 'b {
 LL +     union TeeOutlivesAyYooWhereIsDebugBee<'a, 'b, T, U> where U: Debug {
    | 
@@ -730,7 +730,7 @@ LL |     union TeeWhereOutlivesAyYooWhereBeeIsDebug<'a, 'b, T, U> where T: 'a, U
    |                                                                    ^^^^^^^   ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                                    _______   _____
 LL -     union TeeWhereOutlivesAyYooWhereBeeIsDebug<'a, 'b, T, U> where T: 'a, U: 'b + Debug {
 LL +     union TeeWhereOutlivesAyYooWhereBeeIsDebug<'a, 'b, T, U> where U: Debug {
    | 
@@ -742,7 +742,7 @@ LL |     union TeeWhereOutlivesAyYooWhereIsDebugBee<'a, 'b, T, U> where T: 'a, U
    |                                                                    ^^^^^^^        ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                                    _______        _____
 LL -     union TeeWhereOutlivesAyYooWhereIsDebugBee<'a, 'b, T, U> where T: 'a, U: Debug + 'b {
 LL +     union TeeWhereOutlivesAyYooWhereIsDebugBee<'a, 'b, T, U> where U: Debug {
    | 
@@ -754,7 +754,7 @@ LL |     union BeeOutlivesAyTeeBee<'a, 'b: 'a, T: 'b> {
    |                                     ^^^^   ^^^^
    |
 help: remove these bounds
-   |
+   |                                     ____   ____
 LL -     union BeeOutlivesAyTeeBee<'a, 'b: 'a, T: 'b> {
 LL +     union BeeOutlivesAyTeeBee<'a, 'b, T> {
    | 
@@ -766,7 +766,7 @@ LL |     union BeeOutlivesAyTeeAyBee<'a, 'b: 'a, T: 'a + 'b> {
    |                                       ^^^^   ^^^^^^^^^
    |
 help: remove these bounds
-   |
+   |                                       ____   _________
 LL -     union BeeOutlivesAyTeeAyBee<'a, 'b: 'a, T: 'a + 'b> {
 LL +     union BeeOutlivesAyTeeAyBee<'a, 'b, T> {
    | 
@@ -778,7 +778,7 @@ LL |     union BeeOutlivesAyTeeOutlivesAyIsDebugBee<'a, 'b: 'a, T: 'a + Debug + 
    |                                                      ^^^^     ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                      ____     _____     _____
 LL -     union BeeOutlivesAyTeeOutlivesAyIsDebugBee<'a, 'b: 'a, T: 'a + Debug + 'b> {
 LL +     union BeeOutlivesAyTeeOutlivesAyIsDebugBee<'a, 'b, T: Debug> {
    | 
@@ -790,7 +790,7 @@ LL |     union BeeWhereAyTeeWhereOutlivesAyIsDebugBee<'a, 'b, T> where 'b: 'a, T
    |                                                                   ^^^^^^^^   ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                                   ________   _____     _____
 LL -     union BeeWhereAyTeeWhereOutlivesAyIsDebugBee<'a, 'b, T> where 'b: 'a, T: 'a + Debug + 'b {
 LL +     union BeeWhereAyTeeWhereOutlivesAyIsDebugBee<'a, 'b, T> where T: Debug {
    | 
@@ -802,7 +802,7 @@ LL |     union BeeOutlivesAyTeeYooOutlivesAyIsDebugBee<'a, 'b: 'a, T, U: 'a + De
    |                                                         ^^^^        ^^^^^     ^^^^^
    |
 help: remove these bounds
-   |
+   |                                                         ____        _____     _____
 LL -     union BeeOutlivesAyTeeYooOutlivesAyIsDebugBee<'a, 'b: 'a, T, U: 'a + Debug + 'b> {
 LL +     union BeeOutlivesAyTeeYooOutlivesAyIsDebugBee<'a, 'b, T, U: Debug> {
    | 
@@ -814,7 +814,7 @@ LL |     union BeeWhereAyTeeYooWhereOutlivesAyIsDebugBee<'a, 'b, T, U> where U: 
    |                                                                            ^^^^^     ^^^^^  ^^^^^^
    |
 help: remove these bounds
-   |
+   |                                                                            _____     _____  ______
 LL -     union BeeWhereAyTeeYooWhereOutlivesAyIsDebugBee<'a, 'b, T, U> where U: 'a + Debug + 'b, 'b: 'a {
 LL +     union BeeWhereAyTeeYooWhereOutlivesAyIsDebugBee<'a, 'b, T, U> where U: Debug,  {
    | 

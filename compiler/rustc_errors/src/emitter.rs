@@ -1716,6 +1716,12 @@ impl EmitterWriter {
                     if show_diff {
                         // Colorize removal with red in diff format.
                         for i in span_start_pos..span_end_pos {
+                            buffer.putc(
+                                row_num - 3,
+                                (padding as isize + i as isize) as usize,
+                                '_',
+                                Style::Removal,
+                            );
                             buffer.set_style(
                                 row_num - 2,
                                 (padding as isize + i as isize) as usize,
