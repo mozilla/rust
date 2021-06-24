@@ -3,9 +3,13 @@
 
 use crate::transform::MirPass;
 use rustc_data_structures::fx::FxIndexMap;
+use rustc_index::bit_set::BitSet;
 use rustc_index::vec::IndexVec;
 use rustc_middle::mir::*;
 use rustc_middle::ty::{self, TyCtxt};
+
+const MAX_NUM_BLOCKS: usize = 800;
+const MAX_NUM_LOCALS: usize = 3000;
 
 pub struct NormalizeArrayLen;
 
@@ -14,6 +18,14 @@ impl<'tcx> MirPass<'tcx> for NormalizeArrayLen {
         // if tcx.sess.mir_opt_level() < 3 {
         //     return;
         // }
+
+        // early returns for edge cases of highly unrolled functions
+        if body.basic_blocks().len() > MAX_NUM_BLOCKS {
+            return;
+        }
+        if body.local_decls().len() > MAX_NUM_LOCALS {
+            return;
+        }
         normalize_array_len_calls(tcx, body)
     }
 }
@@ -21,9 +33,32 @@ impl<'tcx> MirPass<'tcx> for NormalizeArrayLen {
 pub fn normalize_array_len_calls<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
     let (basic_blocks, local_decls) = body.basic_blocks_and_local_decls_mut();
 
-    let mut state = IndexVec::from_elem_n(None, local_decls.len());
-    let mut patches_scratchpad = FxIndexMap::default();
-    let mut replacements_scratchpad = FxIndexMap::default();
+    // do a preliminary analysis to see if we ever have locals of type `[T;N]` or `&[T;N]`
+    let mut interesting_locals = BitSet::new_empty(local_decls.len());
+    for (local, decl) in local_decls.iter_enumerated() {
+        match decl.ty.kind() {
+            ty::Array(..) => {
+                interesting_locals.insert(local);
+            }
+            ty::Ref(.., ty, Mutability::Not) => match ty.kind() {
+                ty::Array(..) => {
+                    interesting_locals.insert(local);
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    if interesting_locals.is_empty() {
+        // we have found nothing to analyze
+        return;
+    }
+    let num_intesting_locals = interesting_locals.count();
+    let mut state = FxIndexMap::with_capacity_and_hasher(num_intesting_locals, Default::default());
+    let mut patches_scratchpad =
+        FxIndexMap::with_capacity_and_hasher(num_intesting_locals, Default::default());
+    let mut replacements_scratchpad =
+        FxIndexMap::with_capacity_and_hasher(num_intesting_locals, Default::default());
     for block in basic_blocks {
         // make length calls for arrays [T; N] not to decay into length calls for &[T]
         // that forbids constant propagation
@@ -31,13 +66,12 @@ pub fn normalize_array_len_calls<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>)
             tcx,
             block,
             local_decls,
+            &interesting_locals,
             &mut state,
             &mut patches_scratchpad,
             &mut replacements_scratchpad,
         );
-        for el in state.iter_mut() {
-            *el = None;
-        }
+        state.clear();
         patches_scratchpad.clear();
         replacements_scratchpad.clear();
     }
@@ -161,7 +195,8 @@ fn normalize_array_len_call<'tcx>(
     tcx: TyCtxt<'tcx>,
     block: &mut BasicBlockData<'tcx>,
     local_decls: &mut IndexVec<Local, LocalDecl<'tcx>>,
-    state: &mut IndexVec<Local, Option<usize>>,
+    interesting_locals: &BitSet<Local>,
+    state: &mut FxIndexMap<Local, usize>,
     patches_scratchpad: &mut FxIndexMap<usize, usize>,
     replacements_scratchpad: &mut FxIndexMap<usize, Local>,
 ) {
@@ -183,12 +218,15 @@ fn normalize_array_len_call<'tcx>(
                                     } else {
                                         return;
                                     };
+                                if !interesting_locals.contains(operand_local) {
+                                    return;
+                                }
                                 let operand_ty = local_decls[operand_local].ty;
                                 match (operand_ty.kind(), cast_ty.kind()) {
                                     (ty::Array(of_ty_src, ..), ty::Slice(of_ty_dst)) => {
                                         if of_ty_src == of_ty_dst {
                                             // this is a cast from [T; N] into [T], so we are good
-                                            state[local] = Some(statement_idx);
+                                            state.insert(local, statement_idx);
                                         }
                                     }
                                     // current way of patching doesn't allow to work with `mut`
@@ -205,7 +243,7 @@ fn normalize_array_len_call<'tcx>(
                                             (ty::Array(of_ty_src, ..), ty::Slice(of_ty_dst)) => {
                                                 if of_ty_src == of_ty_dst {
                                                     // this is a cast from [T; N] into [T], so we are good
-                                                    state[local] = Some(statement_idx);
+                                                    state.insert(local, statement_idx);
                                                 }
                                             }
                                             _ => {}
@@ -223,13 +261,13 @@ fn normalize_array_len_call<'tcx>(
                         } else {
                             return;
                         };
-                        if let Some(cast_statement_idx) = state[local] {
+                        if let Some(cast_statement_idx) = state.get(&local).copied() {
                             patches_scratchpad.insert(cast_statement_idx, statement_idx);
                         }
                     }
                     _ => {
                         // invalidate
-                        state[place.local] = None;
+                        state.remove(&place.local);
                     }
                 }
             }
