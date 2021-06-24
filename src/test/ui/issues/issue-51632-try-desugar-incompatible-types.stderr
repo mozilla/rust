@@ -7,7 +7,7 @@ LL |     missing_discourses()?
    = note: expected enum `Result<isize, ()>`
               found type `isize`
 help: try removing this `?`
-   |
+   |                         _
 LL -     missing_discourses()?
 LL +     missing_discourses()
    | 

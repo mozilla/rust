@@ -11,7 +11,7 @@ LL | use foo::self;
    |        ^^^^^^
    |
 help: consider importing the module directly
-   |
+   |        ______
 LL - use foo::self;
 LL + use foo;
    | 

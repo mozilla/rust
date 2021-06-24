@@ -12,7 +12,7 @@ note: the lint level is defined here
 LL | #![deny(single_use_lifetimes)]
    |         ^^^^^^^^^^^^^^^^^^^^
 help: elide the single-use lifetime
-   |
+   |     ____     ___
 LL - fn a<'a>(x: &'a u32) {
 LL + fn a(x: &u32) {
    | 
@@ -26,7 +26,7 @@ LL | fn center<'m>(_: Single<'m>) {}
    |           this lifetime...
    |
 help: elide the single-use lifetime
-   |
+   |          ____           __
 LL - fn center<'m>(_: Single<'m>) {}
 LL + fn center(_: Single<'_>) {}
    |                     ^^
@@ -38,7 +38,7 @@ LL | fn left<'x, 'y>(foo: Double<'x, 'y>) -> &'x u32 { foo.f }
    |             ^^ this lifetime... -- ...is used only here
    |
 help: elide the single-use lifetime
-   |
+   |           ____                  __
 LL - fn left<'x, 'y>(foo: Double<'x, 'y>) -> &'x u32 { foo.f }
 LL + fn left<'x>(foo: Double<'x, '_>) -> &'x u32 { foo.f }
    |                             ^^
@@ -50,7 +50,7 @@ LL | fn right<'x, 'y>(foo: Double<'x, 'y>) -> &'y u32 { foo.f }
    |          ^^ this lifetime... -- ...is used only here
    |
 help: elide the single-use lifetime
-   |
+   |          ____                __
 LL - fn right<'x, 'y>(foo: Double<'x, 'y>) -> &'y u32 { foo.f }
 LL + fn right<'y>(foo: Double<'_, 'y>) -> &'y u32 { foo.f }
    |                          ^^
