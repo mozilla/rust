@@ -12,7 +12,7 @@ LL | impl<X: ?Sized> T2<X> for S4<X> {
 help: consider relaxing the implicit `Sized` restriction
    |
 LL | trait T2<Z: ?Sized> {
-   |           ^^^^^^^^
+   |           ++++++++
 
 error: aborting due to previous error
 

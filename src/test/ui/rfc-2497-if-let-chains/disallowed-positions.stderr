@@ -7,7 +7,7 @@ LL |         true && let 1 = 1
 help: enclose the `const` expression in braces
    |
 LL |         { true && let 1 = 1 }
-   |         ^                   ^
+   |         +                   +
 
 error: `let` expressions are not supported here
   --> $DIR/disallowed-positions.rs:32:9
@@ -531,7 +531,7 @@ LL |     if x = let 0 = 0 {}
 help: you might have meant to compare for equality
    |
 LL |     if x == let 0 = 0 {}
-   |          ^^
+   |          ~~
 
 error[E0308]: mismatched types
   --> $DIR/disallowed-positions.rs:59:8
@@ -719,7 +719,7 @@ LL |     while x = let 0 = 0 {}
 help: you might have meant to compare for equality
    |
 LL |     while x == let 0 = 0 {}
-   |             ^^
+   |             ~~
 
 error[E0308]: mismatched types
   --> $DIR/disallowed-positions.rs:123:11

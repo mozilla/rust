@@ -10,7 +10,7 @@ LL |     if let Some(x) = a { true } else { false }
 help: you might have meant to return this value
    |
 LL |     if let Some(x) = a { return true; } else { false }
-   |                          ^^^^^^     ^
+   |                          ++++++     +
 
 error[E0308]: mismatched types
   --> $DIR/expr-as-stmt-2.rs:3:40
@@ -24,7 +24,7 @@ LL |     if let Some(x) = a { true } else { false }
 help: you might have meant to return this value
    |
 LL |     if let Some(x) = a { true } else { return false; }
-   |                                        ^^^^^^      ^
+   |                                        ++++++      +
 
 error[E0308]: mismatched types
   --> $DIR/expr-as-stmt-2.rs:6:5

@@ -50,7 +50,7 @@ LL | fn bap() -> Trait { Struct }
 help: use `impl Trait` as the return type, as all return paths are of type `Struct`, which implements `Trait`
    |
 LL | fn bap() -> impl Trait { Struct }
-   |             ^^^^^^^^^^
+   |             ~~~~~~~~~~
 
 error[E0746]: return type cannot have an unboxed trait object
   --> $DIR/dyn-trait-return-should-be-impl-trait.rs:15:13
@@ -62,7 +62,7 @@ LL | fn ban() -> dyn Trait { Struct }
 help: use `impl Trait` as the return type, as all return paths are of type `Struct`, which implements `Trait`
    |
 LL | fn ban() -> impl Trait { Struct }
-   |             ^^^^^^^^^^
+   |             ~~~~~~~~~~
 
 error[E0746]: return type cannot have an unboxed trait object
   --> $DIR/dyn-trait-return-should-be-impl-trait.rs:17:13
@@ -73,15 +73,15 @@ LL | fn bak() -> dyn Trait { unimplemented!() }
 help: use some type `T` that is `T: Sized` as the return type if all return paths have the same type
    |
 LL | fn bak() -> T { unimplemented!() }
-   |             ^
+   |             ~
 help: use `impl Trait` as the return type if all return paths have the same type but you want to expose only the trait in the signature
    |
 LL | fn bak() -> impl Trait { unimplemented!() }
-   |             ^^^^^^^^^^
+   |             ~~~~~~~~~~
 help: use a boxed trait object if all return paths implement trait `Trait`
    |
 LL | fn bak() -> Box<dyn Trait> { unimplemented!() }
-   |             ^^^^^^^^^^^^^^
+   |             ~~~~~~~~~~~~~~
 
 error[E0746]: return type cannot have an unboxed trait object
   --> $DIR/dyn-trait-return-should-be-impl-trait.rs:19:13
@@ -271,7 +271,7 @@ LL | fn bat() -> dyn Trait {
 help: use `impl Trait` as the return type, as all return paths are of type `{integer}`, which implements `Trait`
    |
 LL | fn bat() -> impl Trait {
-   |             ^^^^^^^^^^
+   |             ~~~~~~~~~~
 
 error[E0746]: return type cannot have an unboxed trait object
   --> $DIR/dyn-trait-return-should-be-impl-trait.rs:66:13
@@ -283,7 +283,7 @@ LL | fn bay() -> dyn Trait {
 help: use `impl Trait` as the return type, as all return paths are of type `{integer}`, which implements `Trait`
    |
 LL | fn bay() -> impl Trait {
-   |             ^^^^^^^^^^
+   |             ~~~~~~~~~~
 
 error: aborting due to 20 previous errors
 

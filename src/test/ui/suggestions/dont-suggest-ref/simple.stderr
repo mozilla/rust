@@ -348,11 +348,11 @@ LL |         &mut Either::Two(_t) => (),
 help: consider removing the `&mut`
    |
 LL |         Either::One(_t) => (),
-   |         ^^^^^^^^^^^^^^^
+   |         ~~~~~~~~~~~~~~~
 help: consider removing the `&mut`
    |
 LL |         Either::Two(_t) => (),
-   |         ^^^^^^^^^^^^^^^
+   |         ~~~~~~~~~~~~~~~
 
 error[E0507]: cannot move out of `rm.0` which is behind a mutable reference
   --> $DIR/simple.rs:228:11

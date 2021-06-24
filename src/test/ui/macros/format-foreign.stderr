@@ -12,7 +12,7 @@ LL |     println!("%.*3$s %s!\n", "Hello,", "World", 4);
 help: format specifiers use curly braces
    |
 LL |     println!("{:.2$} {}!\n", "Hello,", "World", 4);
-   |               ^^^^^^ ^^
+   |               ~~~~~~ ~~
 
 error: argument never used
   --> $DIR/format-foreign.rs:3:29
@@ -76,7 +76,7 @@ LL |     println!("$1 $0 $$ $NAME", 1, 2, NAME=3);
 help: format specifiers use curly braces
    |
 LL |     println!("{1} {0} $$ {NAME}", 1, 2, NAME=3);
-   |               ^^^ ^^^    ^^^^^^
+   |               ~~~ ~~~    ~~~~~~
 
 error: aborting due to 6 previous errors
 

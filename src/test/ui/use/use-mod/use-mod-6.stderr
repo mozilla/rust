@@ -12,7 +12,7 @@ LL + use foo::bar as abc;
 help: alternatively, use the multi-path `use` syntax to import `self`
    |
 LL | use foo::bar::{self as abc};
-   |               ^           ^
+   |               +           +
 
 error: aborting due to previous error
 

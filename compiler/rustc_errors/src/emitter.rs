@@ -1652,14 +1652,12 @@ impl EmitterWriter {
                         ),
                         Style::NoStyle,
                     );
-                }
-                // print the suggestion
-                if show_diff {
                     buffer.puts(row_num, max_line_num_len + 1, "+ ", Style::Addition);
                 } else {
                     draw_col_separator(&mut buffer, row_num, max_line_num_len + 1);
                 }
 
+                // print the suggestion
                 buffer.append(row_num, &replace_tabs(line), Style::NoStyle);
                 row_num += 1;
             }
@@ -1709,7 +1707,7 @@ impl EmitterWriter {
                         buffer.putc(
                             row_num,
                             (padding as isize + p) as usize,
-                            '^',
+                            if part.is_addition(&sm) { '+' } else { '~' },
                             Style::Addition,
                         );
                     }

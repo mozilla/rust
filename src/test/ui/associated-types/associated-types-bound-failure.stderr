@@ -10,7 +10,7 @@ LL |     ToInt::to_int(&g.get())
 help: consider further restricting the associated type
    |
 LL |     where G : GetToInt, <G as GetToInt>::R: ToInt
-   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |                       +++++++++++++++++++++++++++
 
 error: aborting due to previous error
 
