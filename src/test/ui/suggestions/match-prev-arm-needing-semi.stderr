@@ -24,7 +24,7 @@ LL | |     };
 help: consider `await`ing on the `Future`
    |
 LL |         false => async_dummy().await,
-   |                               ^^^^^^
+   |                               ++++++
 help: consider removing this semicolon
    |                          _
 LL -             async_dummy();
@@ -57,7 +57,7 @@ LL | |     };
 help: consider `await`ing on the `Future`
    |
 LL |         false => async_dummy2().await,
-   |                                ^^^^^^
+   |                                ++++++
 help: consider removing this semicolon and boxing the expressions
    |
 LL |             Box::new(async_dummy())

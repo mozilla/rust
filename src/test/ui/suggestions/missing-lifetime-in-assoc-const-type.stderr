@@ -7,7 +7,7 @@ LL |     const A: &str = "";
 help: consider using the `'static` lifetime
    |
 LL |     const A: &'static str = "";
-   |               ^^^^^^^
+   |               +++++++
 help: consider introducing a named lifetime parameter
    |
 LL | trait ZstAssert<'a>: Sized {
@@ -23,7 +23,7 @@ LL |     const B: S = S { s: &() };
 help: consider using the `'static` lifetime
    |
 LL |     const B: S<'static> = S { s: &() };
-   |               ^^^^^^^^^
+   |               +++++++++
 help: consider introducing a named lifetime parameter
    |
 LL | trait ZstAssert<'a>: Sized {
@@ -40,7 +40,7 @@ LL |     const C: &'_ str = "";
 help: consider using the `'static` lifetime
    |
 LL |     const C: &'static str = "";
-   |               ^^^^^^^
+   |               ~~~~~~~
 help: consider introducing a named lifetime parameter
    |
 LL | trait ZstAssert<'a>: Sized {
@@ -58,7 +58,7 @@ LL |     const D: T = T { a: &(), b: &() };
 help: consider using the `'static` lifetime
    |
 LL |     const D: T<'static, 'static> = T { a: &(), b: &() };
-   |               ^^^^^^^^^^^^^^^^^^
+   |               ++++++++++++++++++
 help: consider introducing a named lifetime parameter
    |
 LL | trait ZstAssert<'a>: Sized {

@@ -44,7 +44,7 @@ LL |     {2} + {2}
 help: you might have meant to return this value
    |
 LL |     {return 2;} + {2}
-   |      ^^^^^^  ^
+   |      ++++++  +
 
 error[E0308]: mismatched types
   --> $DIR/expr-as-stmt.rs:13:6
@@ -55,7 +55,7 @@ LL |     {2} + 2
 help: you might have meant to return this value
    |
 LL |     {return 2;} + 2
-   |      ^^^^^^  ^
+   |      ++++++  +
 
 error[E0308]: mismatched types
   --> $DIR/expr-as-stmt.rs:19:7
@@ -66,7 +66,7 @@ LL |     { 42 } + foo;
 help: you might have meant to return this value
    |
 LL |     { return 42; } + foo;
-   |       ^^^^^^   ^
+   |       ++++++   +
 
 error[E0308]: mismatched types
   --> $DIR/expr-as-stmt.rs:25:7
@@ -77,7 +77,7 @@ LL |     { 3 } * 3
 help: you might have meant to return this value
    |
 LL |     { return 3; } * 3
-   |       ^^^^^^  ^
+   |       ++++++  +
 
 error[E0614]: type `{integer}` cannot be dereferenced
   --> $DIR/expr-as-stmt.rs:25:11

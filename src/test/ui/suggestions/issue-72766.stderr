@@ -9,7 +9,7 @@ LL |     SadGirl {}.call()?;
 help: consider `await`ing on the `Future`
    |
 LL |     SadGirl {}.call().await?;
-   |                      ^^^^^^
+   |                      ++++++
 
 error: aborting due to previous error
 

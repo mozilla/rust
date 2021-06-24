@@ -17,7 +17,7 @@ LL |     1u32
 help: you could change the return type to be a boxed trait object
    |
 LL | fn foo() -> Box<dyn std::fmt::Display> {
-   |             ^^^^^^^                  ^
+   |             ~~~~~~~                  +
 help: if you change the return type to expect trait objects, box the returned expressions
    |
 LL |         return Box::new(0i32);
@@ -44,7 +44,7 @@ LL |         return 1u32;
 help: you could change the return type to be a boxed trait object
    |
 LL | fn bar() -> Box<dyn std::fmt::Display> {
-   |             ^^^^^^^                  ^
+   |             ~~~~~~~                  +
 help: if you change the return type to expect trait objects, box the returned expressions
    |
 LL |         return Box::new(0i32);
@@ -71,7 +71,7 @@ LL |         1u32
 help: you could change the return type to be a boxed trait object
    |
 LL | fn baz() -> Box<dyn std::fmt::Display> {
-   |             ^^^^^^^                  ^
+   |             ~~~~~~~                  +
 help: if you change the return type to expect trait objects, box the returned expressions
    |
 LL |         return Box::new(0i32);
@@ -94,7 +94,7 @@ LL | |     }
 help: you could change the return type to be a boxed trait object
    |
 LL | fn qux() -> Box<dyn std::fmt::Display> {
-   |             ^^^^^^^                  ^
+   |             ~~~~~~~                  +
 help: if you change the return type to expect trait objects, box the returned expressions
    |
 LL |         Box::new(0i32)
@@ -120,7 +120,7 @@ LL |         _ => 1u32,
 help: you could change the return type to be a boxed trait object
    |
 LL | fn bat() -> Box<dyn std::fmt::Display> {
-   |             ^^^^^^^                  ^
+   |             ~~~~~~~                  +
 help: if you change the return type to expect trait objects, box the returned expressions
    |
 LL |         0 => return Box::new(0i32),
@@ -147,7 +147,7 @@ LL | |     }
 help: you could change the return type to be a boxed trait object
    |
 LL | fn can() -> Box<dyn std::fmt::Display> {
-   |             ^^^^^^^                  ^
+   |             ~~~~~~~                  +
 help: if you change the return type to expect trait objects, box the returned expressions
    |
 LL |     Box::new(match 13 {
@@ -176,7 +176,7 @@ LL |             1u32
 help: you could change the return type to be a boxed trait object
    |
 LL | fn cat() -> Box<dyn std::fmt::Display> {
-   |             ^^^^^^^                  ^
+   |             ~~~~~~~                  +
 help: if you change the return type to expect trait objects, box the returned expressions
    |
 LL |             return Box::new(0i32);
@@ -200,7 +200,7 @@ LL | |     }
 help: you could change the return type to be a boxed trait object
    |
 LL | fn dog() -> Box<dyn std::fmt::Display> {
-   |             ^^^^^^^                  ^
+   |             ~~~~~~~                  +
 help: if you change the return type to expect trait objects, box the returned expressions
    |
 LL |         0 => Box::new(0i32),
@@ -222,7 +222,7 @@ LL | |     }
 help: you could change the return type to be a boxed trait object
    |
 LL | fn apt() -> Box<dyn std::fmt::Display> {
-   |             ^^^^^^^                  ^
+   |             ~~~~~~~                  +
 help: if you change the return type to expect trait objects, box the returned expressions
    |
 LL |         Box::new(0i32)

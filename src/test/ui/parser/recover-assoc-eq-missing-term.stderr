@@ -7,7 +7,7 @@ LL |     bar::<Item =   >();
 help: to constrain the associated type, add a type after `=`
    |
 LL |     bar::<Item = TheType>();
-   |                  ^^^^^^^
+   |                  +++++++
 help: remove the `=` if `Item` is a type
    |                ____
 LL -     bar::<Item =   >();

@@ -9,7 +9,7 @@ LL |     let _ : impl Copy;
 help: set the binding to a value for a concrete type to be resolved
    |
 LL |     let _ : impl Copy = /* value */;
-   |                       ^^^^^^^^^^^^^
+   |                       +++++++++++++
 
 error: aborting due to previous error
 
