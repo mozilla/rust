@@ -6,7 +6,7 @@ LL | pub type T<P: Send + Send + Send> = P;
    |
    = note: `#[warn(type_alias_bounds)]` on by default
 help: the bound will not be checked when the type alias is used, and should be removed
-   |             ____________________
+   |
 LL - pub type T<P: Send + Send + Send> = P;
 LL + pub type T<P> = P;
    | 

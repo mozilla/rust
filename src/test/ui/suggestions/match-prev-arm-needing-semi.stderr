@@ -26,7 +26,7 @@ help: consider `await`ing on the `Future`
 LL |         false => async_dummy().await,
    |                               ++++++
 help: consider removing this semicolon
-   |                          _
+   |
 LL -             async_dummy();
 LL +             async_dummy()
    | 

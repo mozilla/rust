@@ -6,10 +6,10 @@ LL |     use issue_59764::foo::{baz, makro};
    |
    = note: this could be because a macro annotated with `#[macro_export]` will be exported at the root of the crate instead of the module where it is defined
 help: a macro with this name exists at the root of the crate
-   |                      _        _______ _
+   |
 LL -     use issue_59764::foo::{baz, makro};
 LL +     use issue_59764::{makro, foo::{baz}};
-   |                      ~~~~~~~~~         ~~
+   | 
 
 error[E0432]: unresolved import `issue_59764::foo::makro`
   --> $DIR/issue-59764.rs:21:9
@@ -49,10 +49,10 @@ LL |     use issue_59764::foo::{baz, makro, foobar};
    |
    = note: this could be because a macro annotated with `#[macro_export]` will be exported at the root of the crate instead of the module where it is defined
 help: a macro with this name exists at the root of the crate
-   |                      _          _______       _
+   |
 LL -     use issue_59764::foo::{baz, makro, foobar};
 LL +     use issue_59764::{makro, foo::{baz, foobar}};
-   |                      ~~~~~~~~~                 ~~
+   | 
 
 error[E0432]: unresolved import `issue_59764::foo::makro`
   --> $DIR/issue-59764.rs:40:9
@@ -94,10 +94,10 @@ LL |     use issue_59764::{foobaz, foo::makro};
    |
    = note: this could be because a macro annotated with `#[macro_export]` will be exported at the root of the crate instead of the module where it is defined
 help: a macro with this name exists at the root of the crate
-   |                      _      ____________
+   |
 LL -     use issue_59764::{foobaz, foo::makro};
 LL +     use issue_59764::{makro, foobaz};
-   |                      ~~~~~~~
+   | 
 
 error[E0432]: unresolved import `issue_59764::foo::makro`
   --> $DIR/issue-59764.rs:59:42
@@ -107,10 +107,10 @@ LL |     use issue_59764::{foobaz, foo::{baz, makro}};
    |
    = note: this could be because a macro annotated with `#[macro_export]` will be exported at the root of the crate instead of the module where it is defined
 help: a macro with this name exists at the root of the crate
-   |                      _                 _______
+   |
 LL -     use issue_59764::{foobaz, foo::{baz, makro}};
 LL +     use issue_59764::{makro, foobaz, foo::{baz}};
-   |                      ~~~~~~~
+   | 
 
 error[E0432]: unresolved import `issue_59764::foo::makro`
   --> $DIR/issue-59764.rs:68:13
@@ -152,10 +152,10 @@ LL |     use issue_59764::{foobaz, foo::{baz, makro, barbaz::{barfoo}}};
    |
    = note: this could be because a macro annotated with `#[macro_export]` will be exported at the root of the crate instead of the module where it is defined
 help: a macro with this name exists at the root of the crate
-   |                      _                   _______
+   |
 LL -     use issue_59764::{foobaz, foo::{baz, makro, barbaz::{barfoo}}};
 LL +     use issue_59764::{makro, foobaz, foo::{baz, barbaz::{barfoo}}};
-   |                      ~~~~~~~
+   | 
 
 error[E0432]: unresolved import `issue_59764::foo::makro`
   --> $DIR/issue-59764.rs:93:13
@@ -193,10 +193,10 @@ LL |     use issue_59764::foo::{baz, makro as foobar};
    |
    = note: this could be because a macro annotated with `#[macro_export]` will be exported at the root of the crate instead of the module where it is defined
 help: a macro with this name exists at the root of the crate
-   |                      _        _________________ _
+   |
 LL -     use issue_59764::foo::{baz, makro as foobar};
 LL +     use issue_59764::{makro as foobar, foo::{baz}};
-   |                      ~~~~~~~~~~~~~~~~~~~         ~~
+   | 
 
 error[E0432]: unresolved import `issue_59764::foo::makro`
   --> $DIR/issue-59764.rs:120:17

@@ -11,7 +11,7 @@ LL | fn foo2(_: &dyn (Drop + AsRef<str>)) {}
    |                 ^                 ^
    |
 help: remove the parentheses
-   |                 _                 _
+   |
 LL - fn foo2(_: &dyn (Drop + AsRef<str>)) {}
 LL + fn foo2(_: &dyn Drop + AsRef<str>) {}
    | 

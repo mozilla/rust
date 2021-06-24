@@ -1702,24 +1702,20 @@ impl EmitterWriter {
                             Style::Addition,
                             true,
                         );
-                        // If this is a replacement, underline with `^`, if this is an addition
-                        // underline with `+`.
-                        buffer.putc(
-                            row_num,
-                            (padding as isize + p) as usize,
-                            if part.is_addition(&sm) { '+' } else { '~' },
-                            Style::Addition,
-                        );
+                        if !show_diff {
+                            // If this is a replacement, underline with `^`, if this is an addition
+                            // underline with `+`.
+                            buffer.putc(
+                                row_num,
+                                (padding as isize + p) as usize,
+                                if part.is_addition(&sm) { '+' } else { '~' },
+                                Style::Addition,
+                            );
+                        }
                     }
                     if show_diff {
                         // Colorize removal with red in diff format.
                         for i in span_start_pos..span_end_pos {
-                            buffer.putc(
-                                row_num - 3,
-                                (padding as isize + i as isize) as usize,
-                                '_',
-                                Style::Removal,
-                            );
                             buffer.set_style(
                                 row_num - 2,
                                 (padding as isize + i as isize) as usize,

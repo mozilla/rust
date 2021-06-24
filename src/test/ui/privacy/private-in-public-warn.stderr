@@ -335,7 +335,7 @@ LL |     pub type Alias<T: PrivTr> = T;
    |
    = note: `#[warn(type_alias_bounds)]` on by default
 help: the bound will not be checked when the type alias is used, and should be removed
-   |                     ________
+   |
 LL -     pub type Alias<T: PrivTr> = T;
 LL +     pub type Alias<T> = T;
    | 
@@ -347,7 +347,7 @@ LL |     pub type Alias<T> where T: PrivTr = T;
    |                             ^^^^^^^^^
    |
 help: the clause will not be checked when the type alias is used, and should be removed
-   |                       _______________
+   |
 LL -     pub type Alias<T> where T: PrivTr = T;
 LL +     pub type Alias<T>  = T;
    | 

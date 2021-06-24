@@ -32,7 +32,7 @@ LL | type Y where i32: Foo = ();
    |
    = note: `#[warn(type_alias_bounds)]` on by default
 help: the clause will not be checked when the type alias is used, and should be removed
-   |        ______________
+   |
 LL - type Y where i32: Foo = ();
 LL + type Y  = ();
    | 
