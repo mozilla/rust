@@ -6,7 +6,7 @@ LL |         let mut stream_reader = BufReader::new(&stream);
    |
    = note: required by `BufReader::<R>::new`
 help: consider removing the leading `&`-reference
-   |                                                _
+   |
 LL -         let mut stream_reader = BufReader::new(&stream);
 LL +         let mut stream_reader = BufReader::new(stream);
    | 

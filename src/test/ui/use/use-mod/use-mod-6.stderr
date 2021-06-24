@@ -5,7 +5,7 @@ LL | use foo::bar::self as abc;
    |             ^^^^^^
    |
 help: consider importing the module directly
-   |             ______
+   |
 LL - use foo::bar::self as abc;
 LL + use foo::bar as abc;
    | 

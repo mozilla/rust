@@ -44,7 +44,7 @@ LL | fn a() -> A + 'static {
    |           |
    |           expected this type to be a trait...
 help: if you meant to use a type and not a trait here, remove the bounds
-   |            __________
+   |
 LL - fn a() -> A + 'static {
 LL + fn a() -> A {
    | 
@@ -63,7 +63,7 @@ LL | fn b<'a,T,E>(iter: Iterator<Item=Result<T,E> + 'a>) {
    |                                  |
    |                                  expected this type to be a trait...
 help: if you meant to use a type and not a trait here, remove the bounds
-   |                                             _____
+   |
 LL - fn b<'a,T,E>(iter: Iterator<Item=Result<T,E> + 'a>) {
 LL + fn b<'a,T,E>(iter: Iterator<Item=Result<T,E>>) {
    | 
@@ -82,7 +82,7 @@ LL | fn c() -> 'static + A {
    |           |
    |           ...because of this bound
 help: if you meant to use a type and not a trait here, remove the bounds
-   |           __________
+   |
 LL - fn c() -> 'static + A {
 LL + fn c() -> A {
    | 
@@ -101,7 +101,7 @@ LL | fn d<'a,T,E>(iter: Iterator<Item='a + Result<T,E>>) {
    |                                  |
    |                                  ...because of this bound
 help: if you meant to use a type and not a trait here, remove the bounds
-   |                                  _____
+   |
 LL - fn d<'a,T,E>(iter: Iterator<Item='a + Result<T,E>>) {
 LL + fn d<'a,T,E>(iter: Iterator<Item=Result<T,E>>) {
    | 
@@ -120,7 +120,7 @@ LL | fn e() -> 'static + A + 'static {
    |                     |
    |                     expected this type to be a trait...
 help: if you meant to use a type and not a trait here, remove the bounds
-   |           __________ __________
+   |
 LL - fn e() -> 'static + A + 'static {
 LL + fn e() -> A {
    | 
@@ -139,7 +139,7 @@ LL | fn f<'a,T,E>(iter: Iterator<Item='a + Result<T,E> + 'a>) {
    |                                       |
    |                                       expected this type to be a trait...
 help: if you meant to use a type and not a trait here, remove the bounds
-   |                                  _____           _____
+   |
 LL - fn f<'a,T,E>(iter: Iterator<Item='a + Result<T,E> + 'a>) {
 LL + fn f<'a,T,E>(iter: Iterator<Item=Result<T,E>>) {
    | 
@@ -160,7 +160,7 @@ LL | fn g() -> Traitor + 'static {
    |           |
    |           expected this type to be a trait...
 help: if you meant to use a type and not a trait here, remove the bounds
-   |                  __________
+   |
 LL - fn g() -> Traitor + 'static {
 LL + fn g() -> Traitor {
    | 
