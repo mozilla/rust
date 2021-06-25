@@ -381,7 +381,7 @@ impl Definitions {
         // Create the definition.
         let def_id = LocalDefId { local_def_index: self.table.allocate(key, def_path_hash) };
 
-        if expn_id != ExpnId::root() {
+        if expn_id != ExpnId::ROOT {
             self.expansions_that_defined.insert(def_id, expn_id);
         }
 
@@ -409,7 +409,7 @@ impl Definitions {
     }
 
     pub fn expansion_that_defined(&self, id: LocalDefId) -> ExpnId {
-        self.expansions_that_defined.get(&id).copied().unwrap_or_else(ExpnId::root)
+        self.expansions_that_defined.get(&id).copied().unwrap_or(ExpnId::ROOT)
     }
 
     pub fn iter_local_def_id(&self) -> impl Iterator<Item = LocalDefId> + '_ {

@@ -344,7 +344,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                     parent_def_id,
                     node_id,
                     DefPathData::AnonConst,
-                    ExpnId::root(),
+                    ExpnId::ROOT,
                     arg.span,
                 );
 

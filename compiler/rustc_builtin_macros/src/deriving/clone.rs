@@ -37,7 +37,10 @@ pub fn expand_deriving_clone(
             ItemKind::Struct(_, Generics { ref params, .. })
             | ItemKind::Enum(_, Generics { ref params, .. }) => {
                 let container_id = cx.current_expansion.id.expn_data().parent;
-                if cx.resolver.has_derive_copy(container_id)
+                let has_derive_copy = container_id
+                    .as_local()
+                    .map_or(false, |container_id| cx.resolver.has_derive_copy(container_id));
+                if has_derive_copy
                     && !params
                         .iter()
                         .any(|param| matches!(param.kind, ast::GenericParamKind::Type { .. }))

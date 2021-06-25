@@ -173,23 +173,6 @@ impl ExpnId {
     /// Invariant: we do not create any ExpnId with local_id == 0 and krate != 0.
     pub const ROOT: ExpnId = ExpnId { krate: LOCAL_CRATE, local_id: 0 };
 
-    pub const fn root() -> ExpnId {
-        ExpnId::ROOT
-    }
-
-    pub fn fresh_empty() -> ExpnId {
-        LocalExpnId::fresh_empty().to_expn_id()
-    }
-
-    pub fn fresh(expn_data: ExpnData, ctx: impl HashStableContext) -> ExpnId {
-        LocalExpnId::fresh(expn_data, ctx).to_expn_id()
-    }
-
-    #[inline]
-    pub fn set_expn_data(self, expn_data: ExpnData, ctx: impl HashStableContext) {
-        self.expect_local().set_expn_data(expn_data, ctx)
-    }
-
     #[inline]
     pub fn expn_hash(self) -> ExpnHash {
         HygieneData::with(|data| data.expn_hash(self))
@@ -798,7 +781,7 @@ impl Span {
         transparency: Transparency,
         ctx: impl HashStableContext,
     ) -> Span {
-        let expn_id = ExpnId::fresh(expn_data, ctx);
+        let expn_id = LocalExpnId::fresh(expn_data, ctx).to_expn_id();
         HygieneData::with(|data| {
             self.with_ctxt(data.apply_mark(SyntaxContext::root(), expn_id, transparency))
         })
