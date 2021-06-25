@@ -1273,6 +1273,25 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
 
         // the "concrete opaque types" maps
         let concrete_opaque_types = &tcx.typeck(anon_owner_def_id).concrete_opaque_types;
+        let concrete_opaque_types: VecMap<_, _> = concrete_opaque_types
+            .iter()
+            .map(|(k, v)| {
+                let substs = tcx.fold_regions(k.substs, &mut false, |region, _| {
+                    // TODO: region is never `ReVar` at this point so this is useless
+                    if let ty::ReVar(..) = region {
+                        self.borrowck_context
+                            .universal_regions
+                            .indices
+                            .fold_to_region_vids(tcx, region)
+                    } else {
+                        region
+                    }
+                });
+
+                (OpaqueTypeKey { def_id: k.def_id, substs }, *v)
+            })
+            .collect();
+
         let mut opaque_type_values = VecMap::new();
 
         debug!("eq_opaque_type_and_type: mir_def_id={:?}", body.source.def_id());
@@ -1336,9 +1355,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                         // The revealed type computed by the earlier phase of type check.
                         // In our example, this would be `(U, u32)`. Note that this references
                         // the type parameter `U` from the definition of `Foo`.
-                        let concrete_ty = match concrete_opaque_types
-                            .get_value_matching(|(key, _)| key.def_id == opaque_type_key.def_id)
-                        {
+                        let concrete_ty = match concrete_opaque_types.get(&opaque_type_key) {
                             None => {
                                 if !concrete_is_opaque {
                                     tcx.sess.delay_span_bug(
