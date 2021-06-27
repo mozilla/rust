@@ -6,8 +6,8 @@ LL |     let _foo: Box<impl Copy + '_> = Box::new(());
    |
 help: consider introducing a named lifetime parameter
    |
-LL | pub fn run<'a>() {
-LL |     let _foo: Box<impl Copy + 'a> = Box::new(());
+LL ~ pub fn run<'a>() {
+LL ~     let _foo: Box<impl Copy + 'a> = Box::new(());
    |
 
 error: aborting due to previous error

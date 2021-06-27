@@ -26,11 +26,11 @@ LL | | )
    |
 help: change the delimiters to curly braces
    |
-LL | bar!{
+LL ~ bar!{
 LL |     blah
 LL |     blah
 LL |     blah
-LL | }
+LL + }
    |
 help: add a semicolon
    |

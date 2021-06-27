@@ -162,8 +162,8 @@ LL | |         as i32
    |
 help: try surrounding the expression in parentheses
    |
-LL |     let _ = (0
-LL |         as i32)
+LL ~     let _ = (0
+LL ~         as i32)
    |
 
 error: casts cannot be followed by indexing

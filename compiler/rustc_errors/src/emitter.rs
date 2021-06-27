@@ -1594,7 +1594,9 @@ impl EmitterWriter {
         let mut row_num = 2;
         draw_col_separator_no_space(&mut buffer, 1, max_line_num_len + 1);
         let mut notice_capitalization = false;
-        for (complete, parts, only_capitalization) in suggestions.iter().take(MAX_SUGGESTIONS) {
+        for (complete, parts, highlights, only_capitalization) in
+            suggestions.iter().take(MAX_SUGGESTIONS)
+        {
             notice_capitalization |= only_capitalization;
             // Only show underline if the suggestion spans a single line and doesn't cover the
             // entirety of the code output. If you have multiple replacements in the same line
@@ -1620,7 +1622,8 @@ impl EmitterWriter {
             let line_start = sm.lookup_char_pos(parts[0].span.lo()).line;
             draw_col_separator_no_space(&mut buffer, 1, max_line_num_len + 1);
             let mut lines = complete.lines();
-            for (line_pos, line) in lines.by_ref().take(MAX_SUGGESTION_HIGHLIGHT_LINES).enumerate()
+            for (line_pos, (line, parts)) in
+                lines.by_ref().zip(highlights).take(MAX_SUGGESTION_HIGHLIGHT_LINES).enumerate()
             {
                 // Print the span column to avoid confusion
                 buffer.puts(
@@ -1653,12 +1656,36 @@ impl EmitterWriter {
                         Style::NoStyle,
                     );
                     buffer.puts(row_num, max_line_num_len + 1, "+ ", Style::Addition);
+                } else if is_multiline {
+                    match &parts[..] {
+                        [(0, end)] if *end == line.len() => {
+                            buffer.puts(row_num, max_line_num_len + 1, "+ ", Style::Addition);
+                        }
+                        [] => {
+                            draw_col_separator(&mut buffer, row_num, max_line_num_len + 1);
+                        }
+                        _ => {
+                            buffer.puts(row_num, max_line_num_len + 1, "~ ", Style::Addition);
+                        }
+                    }
                 } else {
                     draw_col_separator(&mut buffer, row_num, max_line_num_len + 1);
                 }
 
                 // print the suggestion
                 buffer.append(row_num, &replace_tabs(line), Style::NoStyle);
+
+                if is_multiline {
+                    for (start, end) in parts {
+                        buffer.set_style_range(
+                            row_num,
+                            max_line_num_len + 3 + start,
+                            max_line_num_len + 3 + end,
+                            Style::Addition,
+                            true,
+                        );
+                    }
+                }
                 row_num += 1;
             }
 
@@ -1715,14 +1742,13 @@ impl EmitterWriter {
                     }
                     if show_diff {
                         // Colorize removal with red in diff format.
-                        for i in span_start_pos..span_end_pos {
-                            buffer.set_style(
-                                row_num - 2,
-                                (padding as isize + i as isize) as usize,
-                                Style::Removal,
-                                true,
-                            );
-                        }
+                        buffer.set_style_range(
+                            row_num - 2,
+                            (padding as isize + span_start_pos as isize) as usize,
+                            (padding as isize + span_end_pos as isize) as usize,
+                            Style::Removal,
+                            true,
+                        );
                     }
 
                     // length of the code after substitution

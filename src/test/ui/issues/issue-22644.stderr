@@ -53,9 +53,9 @@ LL |                    4);
    |
 help: try comparing the cast value
    |
-LL |     println!("{}", (a
-LL |                    as
-LL |                    usize)
+LL ~     println!("{}", (a
+LL +                    as
+LL +                    usize)
    |
 
 error: `<` is interpreted as a start of generic arguments for `usize`, not a comparison
@@ -68,12 +68,12 @@ LL |                    5);
    |
 help: try comparing the cast value
    |
-LL |     println!("{}", (a
-LL | 
-LL | 
-LL |                    as
-LL | 
-LL | 
+LL ~     println!("{}", (a
+LL + 
+LL + 
+LL +                    as
+LL + 
+LL + 
  ...
 
 error: `<` is interpreted as a start of generic arguments for `usize`, not a shift

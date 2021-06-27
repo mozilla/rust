@@ -38,9 +38,9 @@ LL | fn cat() -> Box<dyn ObjectSafe> {
    |             ~~~~~~~           +
 help: if you change the return type to expect trait objects, box the returned expressions
    |
-LL |         return Box::new(A);
+LL ~         return Box::new(A);
 LL |     }
-LL |     Box::new(B)
+LL ~     Box::new(B)
    |
 
 error: aborting due to 2 previous errors

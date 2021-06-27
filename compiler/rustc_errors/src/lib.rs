@@ -187,7 +187,10 @@ impl SubstitutionPart {
 impl CodeSuggestion {
     /// Returns the assembled code suggestions, whether they should be shown with an underline
     /// and whether the substitution only differs in capitalization.
-    pub fn splice_lines(&self, sm: &SourceMap) -> Vec<(String, Vec<SubstitutionPart>, bool)> {
+    pub fn splice_lines(
+        &self,
+        sm: &SourceMap,
+    ) -> Vec<(String, Vec<SubstitutionPart>, Vec<Vec<(usize, usize)>>, bool)> {
         use rustc_span::{CharPos, Pos};
 
         fn push_trailing(
@@ -195,21 +198,29 @@ impl CodeSuggestion {
             line_opt: Option<&Cow<'_, str>>,
             lo: &Loc,
             hi_opt: Option<&Loc>,
-        ) {
+        ) -> usize {
+            let mut count = 0;
             let (lo, hi_opt) = (lo.col.to_usize(), hi_opt.map(|hi| hi.col.to_usize()));
             if let Some(line) = line_opt {
                 if let Some(lo) = line.char_indices().map(|(i, _)| i).nth(lo) {
                     let hi_opt = hi_opt.and_then(|hi| line.char_indices().map(|(i, _)| i).nth(hi));
                     match hi_opt {
-                        Some(hi) if hi > lo => buf.push_str(&line[lo..hi]),
+                        Some(hi) if hi > lo => {
+                            count = line[lo..hi].matches('\n').count();
+                            buf.push_str(&line[lo..hi])
+                        }
                         Some(_) => (),
-                        None => buf.push_str(&line[lo..]),
+                        None => {
+                            count = line[lo..].matches('\n').count();
+                            buf.push_str(&line[lo..])
+                        }
                     }
                 }
                 if hi_opt.is_none() {
                     buf.push('\n');
                 }
             }
+            count
         }
 
         assert!(!self.substitutions.is_empty());
@@ -244,6 +255,7 @@ impl CodeSuggestion {
                     return None;
                 }
 
+                let mut highlights = vec![];
                 // To build up the result, we do this for each span:
                 // - push the line segment trailing the previous span
                 //   (at the beginning a "phantom" span pointing at the start of the line)
@@ -260,17 +272,29 @@ impl CodeSuggestion {
                     lines.lines.get(0).and_then(|line0| sf.get_line(line0.line_index));
                 let mut buf = String::new();
 
+                let mut line_highlight = vec![];
                 for part in &substitution.parts {
                     let cur_lo = sm.lookup_char_pos(part.span.lo());
                     if prev_hi.line == cur_lo.line {
-                        push_trailing(&mut buf, prev_line.as_ref(), &prev_hi, Some(&cur_lo));
+                        let mut count =
+                            push_trailing(&mut buf, prev_line.as_ref(), &prev_hi, Some(&cur_lo));
+                        while count > 0 {
+                            highlights.push(std::mem::take(&mut line_highlight));
+                            count -= 1;
+                        }
                     } else {
-                        push_trailing(&mut buf, prev_line.as_ref(), &prev_hi, None);
+                        highlights.push(std::mem::take(&mut line_highlight));
+                        let mut count = push_trailing(&mut buf, prev_line.as_ref(), &prev_hi, None);
+                        while count > 0 {
+                            highlights.push(std::mem::take(&mut line_highlight));
+                            count -= 1;
+                        }
                         // push lines between the previous and current span (if any)
                         for idx in prev_hi.line..(cur_lo.line - 1) {
                             if let Some(line) = sf.get_line(idx) {
                                 buf.push_str(line.as_ref());
                                 buf.push('\n');
+                                highlights.push(std::mem::take(&mut line_highlight));
                             }
                         }
                         if let Some(cur_line) = sf.get_line(cur_lo.line - 1) {
@@ -281,10 +305,21 @@ impl CodeSuggestion {
                             buf.push_str(&cur_line[..end]);
                         }
                     }
+                    // Add a whole line highlight per line in the snippet.
+                    line_highlight.push((
+                        cur_lo.col.0,
+                        cur_lo.col.0
+                            + part.snippet.split('\n').next().unwrap_or(&part.snippet).len(),
+                    ));
+                    for line in part.snippet.split('\n').skip(1) {
+                        highlights.push(std::mem::take(&mut line_highlight));
+                        line_highlight.push((0, line.len()));
+                    }
                     buf.push_str(&part.snippet);
                     prev_hi = sm.lookup_char_pos(part.span.hi());
                     prev_line = sf.get_line(prev_hi.line - 1);
                 }
+                highlights.push(std::mem::take(&mut line_highlight));
                 let only_capitalization = is_case_difference(sm, &buf, bounding_span);
                 // if the replacement already ends with a newline, don't print the next line
                 if !buf.ends_with('\n') {
@@ -294,7 +329,7 @@ impl CodeSuggestion {
                 while buf.ends_with('\n') {
                     buf.pop();
                 }
-                Some((buf, substitution.parts, only_capitalization))
+                Some((buf, substitution.parts, highlights, only_capitalization))
             })
             .collect()
     }
