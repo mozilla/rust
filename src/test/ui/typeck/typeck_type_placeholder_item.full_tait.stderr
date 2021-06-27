@@ -191,10 +191,10 @@ LL |     b: (_, _),
    |
 help: use type parameters instead
    |
-LL | struct Test10<T> {
-LL |     a: T,
+LL ~ struct Test10<T> {
+LL ~     a: T,
 LL |
-LL |     b: (T, T),
+LL ~     b: (T, T),
    |
 
 error: missing type for `static` item
@@ -316,10 +316,10 @@ LL |         b: (_, _),
    |
 help: use type parameters instead
    |
-LL |     struct FnTest10<T> {
-LL |         a: T,
+LL ~     struct FnTest10<T> {
+LL ~         a: T,
 LL |
-LL |         b: (T, T),
+LL ~         b: (T, T),
    |
 
 error[E0282]: type annotations needed

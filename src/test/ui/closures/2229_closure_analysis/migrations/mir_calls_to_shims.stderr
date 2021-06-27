@@ -17,11 +17,11 @@ LL | #![deny(disjoint_capture_migration)]
    = note: for more information, see <https://doc.rust-lang.org/nightly/edition-guide/rust-2021/disjoint-capture-in-closures.html>
 help: add a dummy let to cause `f` to be fully captured
    |
-LL |     let result = panic::catch_unwind(move || { let _ = &f; 
-LL |
-LL |
-LL |         f.0()
-LL |     });
+LL ~     let result = panic::catch_unwind(move || { let _ = &f; 
+LL +
+LL +
+LL +         f.0()
+LL ~     });
    |
 
 error: aborting due to previous error
