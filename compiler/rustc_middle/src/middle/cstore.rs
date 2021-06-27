@@ -13,8 +13,7 @@ use rustc_hir::definitions::{DefKey, DefPath, DefPathHash};
 use rustc_macros::HashStable;
 use rustc_session::search_paths::PathKind;
 use rustc_session::utils::NativeLibKind;
-use rustc_session::Session;
-use rustc_span::hygiene::{ExpnData, ExpnHash, ExpnId};
+use rustc_span::hygiene::{ExpnHash, ExpnId};
 use rustc_span::symbol::Symbol;
 use rustc_span::Span;
 use rustc_target::spec::Target;
@@ -190,7 +189,6 @@ pub type MetadataLoaderDyn = dyn MetadataLoader + Sync;
 /// during resolve)
 pub trait CrateStore: std::fmt::Debug {
     fn as_any(&self) -> &dyn Any;
-    fn decode_expn_data(&self, sess: &Session, expn_id: ExpnId) -> (ExpnData, ExpnHash);
 
     // resolve
     fn def_key(&self, def: DefId) -> DefKey;
@@ -203,6 +201,7 @@ pub trait CrateStore: std::fmt::Debug {
         index_guess: u32,
         hash: DefPathHash,
     ) -> Option<DefId>;
+    fn expn_hash_to_expn_id(&self, cnum: CrateNum, index_guess: u32, hash: ExpnHash) -> ExpnId;
 
     // "queries" used in resolve that aren't tracked for incremental compilation
     fn crate_name_untracked(&self, cnum: CrateNum) -> Symbol;
