@@ -418,6 +418,7 @@ impl<O: ForestObligation> ObligationForest<O> {
     /// be called in a loop until `outcome.stalled` is false.
     ///
     /// This _cannot_ be unrolled (presently, at least).
+    #[inline(never)]
     pub fn process_obligations<P, OUT>(&mut self, processor: &mut P) -> OUT
     where
         P: ObligationProcessor<Obligation = O>,

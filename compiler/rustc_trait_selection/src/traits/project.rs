@@ -273,7 +273,7 @@ where
     Normalized { value, obligations }
 }
 
-#[instrument(level = "debug", skip(selcx, param_env, cause, obligations))]
+#[instrument(level = "info", skip(selcx, param_env, cause, obligations))]
 pub fn normalize_with_depth_to<'a, 'b, 'tcx, T>(
     selcx: &'a mut SelectionContext<'b, 'tcx>,
     param_env: ty::ParamEnv<'tcx>,
@@ -963,7 +963,7 @@ impl<'tcx> Progress<'tcx> {
 ///
 /// IMPORTANT:
 /// - `obligation` must be fully normalized
-#[tracing::instrument(level = "debug", skip(selcx))]
+#[tracing::instrument(level = "info", skip(selcx))]
 fn project_type<'cx, 'tcx>(
     selcx: &mut SelectionContext<'cx, 'tcx>,
     obligation: &ProjectionTyObligation<'tcx>,
