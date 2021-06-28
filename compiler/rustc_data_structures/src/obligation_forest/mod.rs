@@ -672,6 +672,7 @@ impl<O: ForestObligation> ObligationForest<O> {
         self.reused_node_vec = node_rewrites;
     }
 
+    #[inline(never)]
     fn apply_rewrites(&mut self, node_rewrites: &[usize]) {
         let orig_nodes_len = node_rewrites.len();
 
