@@ -15,16 +15,14 @@ function pgo_perf_benchmark {
     local PERF=1e19fc4c6168d2f7596e512f42f358f245d8f09d
     local github_prefix=https://raw.githubusercontent.com/rust-lang/rustc-perf/$PERF
     local name=$1
-    local edition=$2
     curl -o /tmp/$name.rs $github_prefix/collector/benchmarks/$name/src/lib.rs
 
-    RUSTC_BOOTSTRAP=1 ./build/$PGO_HOST/stage2/bin/rustc --edition=$2 \
+    RUSTC_BOOTSTRAP=1 ./build/$PGO_HOST/stage2/bin/rustc --edition=2018 \
         --crate-type=lib /tmp/$name.rs
 }
 
-pgo_perf_benchmark externs 2018
-pgo_perf_benchmark ctfe-stress-4 2018
-pgo_perf_benchmark inflate 2015
+pgo_perf_benchmark externs
+pgo_perf_benchmark ctfe-stress-4
 
 cp -pri ../src/tools/cargo /tmp/cargo
 
