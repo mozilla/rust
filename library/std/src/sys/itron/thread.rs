@@ -445,7 +445,6 @@ mod detached_task_collector {
 #[cfg(target_os = "solid-asp3")]
 mod detached_task_collector {
     use super::*;
-    use crate::sys::solid::abi::exd_tsk;
 
     #[inline]
     pub fn init() -> io::Result<()> {
@@ -462,6 +461,6 @@ mod detached_task_collector {
     ///
     /// `deleted_task` must refer to the current task.
     pub unsafe fn request_terminate_and_delete_task(_deleted_task: abi::ID) {
-        expect_success_aborting(unsafe { exd_tsk() }, &"exd_tsk");
+        expect_success_aborting(unsafe { abi::exd_tsk() }, &"exd_tsk");
     }
 }
