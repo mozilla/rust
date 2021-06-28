@@ -207,8 +207,14 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expected_ty_expr: Option<&'tcx hir::Expr<'tcx>>,
     ) {
         let expr = expr.peel_blocks();
-        if let Some((sp, msg, suggestion, applicability)) = self.check_ref(expr, found, expected) {
-            err.span_suggestion(sp, msg, suggestion, applicability);
+        if let Some((sp, msg, suggestion, applicability, verbose)) =
+            self.check_ref(expr, found, expected)
+        {
+            if verbose {
+                err.span_suggestion_verbose(sp, msg, suggestion, applicability);
+            } else {
+                err.span_suggestion(sp, msg, suggestion, applicability);
+            }
         } else if let (ty::FnDef(def_id, ..), true) =
             (&found.kind(), self.suggest_fn_call(err, expr, expected, found))
         {
