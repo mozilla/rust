@@ -70,6 +70,19 @@ fn escaping_locals(body: &Body<'_>) -> FxHashSet<Local> {
                 self.super_rvalue(rvalue, location)
             }
         }
+
+        fn visit_terminator(&mut self, terminator: &Terminator<'tcx>, location: Location) {
+            if let TerminatorKind::Drop { .. } | TerminatorKind::DropAndReplace { .. } =
+                terminator.kind
+            {
+                // Raw pointers may be used to access anything inside the enclosing place.
+                self.escaping = true;
+                self.super_terminator(terminator, location);
+                self.escaping = false;
+            } else {
+                self.super_terminator(terminator, location);
+            }
+        }
     }
 }
 
