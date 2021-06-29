@@ -84,10 +84,10 @@ impl<'s> LintLevelsBuilder<'s> {
     }
 
     fn process_command_line(&mut self, sess: &Session, store: &LintStore) {
-        let mut specs = FxHashMap::default();
+        self.sets.list.push(LintSet::CommandLine { specs: FxHashMap::default() });
         self.sets.lint_cap = sess.opts.lint_cap.unwrap_or(Level::Forbid);
 
-        for &(ref lint_name, level) in &sess.opts.lint_opts {
+        for (position, &(ref lint_name, level)) in (0u32..).zip(sess.opts.lint_opts.iter()) {
             store.check_lint_name_cmdline(sess, &lint_name, Some(level));
             let orig_level = level;
 
@@ -97,15 +97,26 @@ impl<'s> LintLevelsBuilder<'s> {
             let level = cmp::min(level, self.sets.lint_cap);
 
             let lint_flag_val = Symbol::intern(lint_name);
+            let src = LintLevelSource::CommandLine(lint_flag_val, orig_level, position);
 
             let ids = match store.find_lints(&lint_name) {
                 Ok(ids) => ids,
                 Err(_) => continue, // errors handled in check_lint_name_cmdline above
             };
+
             for id in ids {
                 self.check_gated_lint(id, DUMMY_SP);
-                let src = LintLevelSource::CommandLine(lint_flag_val, orig_level);
-                specs.insert(id, (level, src));
+                let specs = match self.sets.list.last().unwrap() {
+                    LintSet::CommandLine { ref specs } => specs,
+                    _ => unreachable!(),
+                };
+                if self.check_before_insert_spec(specs, id, (level, src)) {
+                    let specs = match self.sets.list.last_mut().unwrap() {
+                        LintSet::CommandLine { ref mut specs } => specs,
+                        _ => unreachable!(),
+                    };
+                    specs.insert(id, (level, src));
+                }
             }
         }
 
@@ -118,19 +129,30 @@ impl<'s> LintLevelsBuilder<'s> {
                 self.sets.force_warns.extend(&lints);
             }
         }
-
-        self.sets.list.push(LintSet::CommandLine { specs });
     }
 
-    /// Attempts to insert the `id` to `level_src` map entry. If unsuccessful
-    /// (e.g. if a forbid was already inserted on the same scope), then emits a
-    /// diagnostic with no change to `specs`.
-    fn insert_spec(
-        &mut self,
-        specs: &mut FxHashMap<LintId, LevelAndSource>,
+    fn get_current_depth(&self) -> u32 {
+        let mut idx = self.cur;
+        let mut depth = 0;
+        loop {
+            match &self.sets.list[idx as usize] {
+                LintSet::CommandLine { .. } => {
+                    return depth;
+                }
+                LintSet::Node { parent, .. } => {
+                    depth += 1;
+                    idx = *parent;
+                }
+            }
+        }
+    }
+
+    fn check_before_insert_spec(
+        &self,
+        specs: &FxHashMap<LintId, LevelAndSource>,
         id: LintId,
         (level, src): LevelAndSource,
-    ) {
+    ) -> bool {
         // Setting to a non-forbid level is an error if the lint previously had
         // a forbid level. Note that this is not necessarily true even with a
         // `#[forbid(..)]` attribute present, as that is overriden by `--cap-lints`.
@@ -150,8 +172,8 @@ impl<'s> LintLevelsBuilder<'s> {
                 let id_name = id.lint.name_lower();
                 let fcw_warning = match old_src {
                     LintLevelSource::Default => false,
-                    LintLevelSource::Node(symbol, _, _) => self.store.is_lint_group(symbol),
-                    LintLevelSource::CommandLine(symbol, _) => self.store.is_lint_group(symbol),
+                    LintLevelSource::Node(symbol, ..) => self.store.is_lint_group(symbol),
+                    LintLevelSource::CommandLine(symbol, ..) => self.store.is_lint_group(symbol),
                     LintLevelSource::ForceWarn(_symbol) => {
                         bug!("forced warn lint returned a forbid lint level")
                     }
@@ -170,13 +192,13 @@ impl<'s> LintLevelsBuilder<'s> {
                                 id.to_string()
                             ));
                         }
-                        LintLevelSource::Node(_, forbid_source_span, reason) => {
+                        LintLevelSource::Node(_, forbid_source_span, reason, ..) => {
                             diag_builder.span_label(forbid_source_span, "`forbid` level set here");
                             if let Some(rationale) = reason {
                                 diag_builder.note(&rationale.as_str());
                             }
                         }
-                        LintLevelSource::CommandLine(_, _) => {
+                        LintLevelSource::CommandLine(..) => {
                             diag_builder.note("`forbid` lint level was set on command line");
                         }
                         _ => bug!("forced warn lint returned a forbid lint level"),
@@ -212,11 +234,25 @@ impl<'s> LintLevelsBuilder<'s> {
                 // issuing a FCW. In the FCW case, we want to
                 // respect the new setting.
                 if !fcw_warning {
-                    return;
+                    return false;
                 }
             }
         }
-        specs.insert(id, (level, src));
+        true
+    }
+
+    /// Attempts to insert the `id` to `level_src` map entry. If unsuccessful
+    /// (e.g. if a forbid was already inserted on the same scope), then emits a
+    /// diagnostic with no change to `specs`.
+    fn insert_spec(
+        &mut self,
+        specs: &mut FxHashMap<LintId, LevelAndSource>,
+        id: LintId,
+        (level, src): LevelAndSource,
+    ) {
+        if self.check_before_insert_spec(specs, id, (level, src)) {
+            specs.insert(id, (level, src));
+        }
     }
 
     /// Pushes a list of AST lint attributes onto this context.
@@ -242,7 +278,7 @@ impl<'s> LintLevelsBuilder<'s> {
         let mut specs = FxHashMap::default();
         let sess = self.sess;
         let bad_attr = |span| struct_span_err!(sess, span, E0452, "malformed lint attribute input");
-        for attr in attrs {
+        for (attr_pos, attr) in (0u32..).zip(attrs.iter()) {
             let level = match Level::from_symbol(attr.name_or_empty()) {
                 None => continue,
                 Some(lvl) => lvl,
@@ -353,7 +389,10 @@ impl<'s> LintLevelsBuilder<'s> {
                             meta_item.path.segments.last().expect("empty lint name").ident.name,
                             sp,
                             reason,
+                            self.get_current_depth(),
+                            attr_pos,
                         );
+
                         for &id in *ids {
                             self.check_gated_lint(id, attr.span);
                             self.insert_spec(&mut specs, id, (level, src));
@@ -368,6 +407,8 @@ impl<'s> LintLevelsBuilder<'s> {
                                     Symbol::intern(complete_name),
                                     sp,
                                     reason,
+                                    self.get_current_depth(),
+                                    attr_pos,
                                 );
                                 for id in ids {
                                     self.insert_spec(&mut specs, *id, (level, src));
@@ -404,6 +445,8 @@ impl<'s> LintLevelsBuilder<'s> {
                                     Symbol::intern(&new_lint_name),
                                     sp,
                                     reason,
+                                    self.get_current_depth(),
+                                    attr_pos,
                                 );
                                 for id in ids {
                                     self.insert_spec(&mut specs, *id, (level, src));
@@ -474,7 +517,13 @@ impl<'s> LintLevelsBuilder<'s> {
                     // Ignore any errors or warnings that happen because the new name is inaccurate
                     // NOTE: `new_name` already includes the tool name, so we don't have to add it again.
                     if let CheckLintNameResult::Ok(ids) = store.check_lint_name(&new_name, None) {
-                        let src = LintLevelSource::Node(Symbol::intern(&new_name), sp, reason);
+                        let src = LintLevelSource::Node(
+                            Symbol::intern(&new_name),
+                            sp,
+                            reason,
+                            self.get_current_depth(),
+                            attr_pos,
+                        );
                         for &id in ids {
                             self.check_gated_lint(id, attr.span);
                             self.insert_spec(&mut specs, id, (level, src));
@@ -493,7 +542,7 @@ impl<'s> LintLevelsBuilder<'s> {
                 }
 
                 let (lint_attr_name, lint_attr_span) = match *src {
-                    LintLevelSource::Node(name, span, _) => (name, span),
+                    LintLevelSource::Node(name, span, _, _, _) => (name, span),
                     _ => continue,
                 };
 
