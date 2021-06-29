@@ -49,15 +49,6 @@ pub const TA_INHERIT: ATR = 0x02;
 /// Activate the task on creation
 pub const TA_ACT: ATR = 0x01;
 
-/// The bit pattern for eventflag objects
-pub type FLGPTN = uint_t;
-
-/// The mode parameter type for [`wai_flg`]
-pub type MODE = uint_t;
-
-/// Wake up when any specified bits are set
-pub const TWF_ORW: MODE = 0x01;
-
 /// The maximum count of a semaphore
 pub const TMAX_MAXSEM: uint_t = uint_t::MAX;
 
@@ -100,13 +91,6 @@ pub struct T_CSEM {
     pub sematr: ATR,
     pub isemcnt: uint_t,
     pub maxsem: uint_t,
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-pub struct T_CFLG {
-    pub flgatr: ATR,
-    pub iflgptn: FLGPTN,
 }
 
 #[derive(Clone, Copy)]
@@ -156,10 +140,6 @@ extern "C" {
     pub fn del_dtq(tskid: ID) -> ER;
     pub fn rcv_dtq(dtqid: ID, p_data: *mut isize) -> ER;
     pub fn snd_dtq(dtqid: ID, data: isize) -> ER;
-    pub fn acre_flg(pk_cflg: *const T_CFLG) -> ER_ID;
-    pub fn del_flg(tskid: ID) -> ER;
-    pub fn set_flg(flgid: ID, setptn: FLGPTN) -> ER;
-    pub fn wai_flg(flgid: ID, waiptn: FLGPTN, wfmode: MODE, p_flgptn: *mut FLGPTN) -> ER;
     pub fn unl_cpu() -> ER;
     pub fn dis_dsp() -> ER;
     pub fn ena_dsp() -> ER;

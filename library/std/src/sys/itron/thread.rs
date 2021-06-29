@@ -8,24 +8,24 @@ use super::{
 };
 use crate::{
     cell::UnsafeCell,
+    convert::TryFrom,
     ffi::CStr,
-    io,
-    mem::{ManuallyDrop, MaybeUninit},
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
+    hint, io,
+    mem::ManuallyDrop,
+    sync::atomic::{AtomicUsize, Ordering},
     sys::thread_local_dtor::run_dtors,
     time::Duration,
 };
 
 pub struct Thread {
-    inner: ManuallyDrop<Arc<ThreadInner>>,
+    inner: ManuallyDrop<Box<ThreadInner>>,
 
     /// The ID of the underlying task.
     task: abi::ID,
 }
 
+/// State data shared between a parent thread and child thread. It's dropped on
+/// a transition to one of the final states.
 struct ThreadInner {
     /// This field is used on thread creation to pass a closure from
     /// `Thread::new` to the created task.
@@ -35,23 +35,34 @@ struct ThreadInner {
     /// source code.
     ///
     /// ```text
-    ///                         [DYING-ATTACHED]
     ///
-    ///          LIFECYCLE_INIT   ----------->  LIFECYCLE_DYING
+    ///    <P>: parent, <C>: child, (?): don't-care
     ///
-    ///                |                               |
-    /// [DETACH-LIVE]  |                               |  [DETACH-DYING]
-    ///                v                               v
+    ///       DETACHED (-1)  -------------------->  EXITED (?)
+    ///                        <C>finish/exd_tsk
+    ///          ^
+    ///          |
+    ///          | <P>detach
+    ///          |
     ///
-    ///        LIFECYCLE_DETACHED  --------->  LIFECYCLE_DYING |
-    ///                                       LIFECYCLE_DETACHED
-    ///                         [DYING-DETACHED]
-    /// ```
+    ///       INIT (0)  ----------------------->  FINISHED (-1)
+    ///                        <C>finish
+    ///          |                                    |
+    ///          | <P>join/slp_tsk                    | <P>join/del_tsk
+    ///          |                                    | <P>detach/del_tsk
+    ///          v                                    v
+    ///
+    ///       JOINING                              JOINED (?)
+    ///     (parent_tid)
+    ///                                            ^
+    ///             \                             /
+    ///              \  <C>finish/wup_tsk        / <P>slp_tsk-complete/ter_tsk
+    ///               \                         /                      & del_tsk
+    ///                \                       /
+    ///                 '--> JOIN_FINALIZE ---'
+    ///                          (-1)
+    ///
     lifecycle: AtomicUsize,
-
-    /// The ID of the eventflag object. The eventflag object is set when the
-    /// task's execution is complete and the task is safe to delete.
-    death_flag: Eventflag,
 }
 
 // Safety: The only `!Sync` field, `ThreadInner::start`, is only touched by
@@ -59,8 +70,12 @@ struct ThreadInner {
 unsafe impl Sync for ThreadInner {}
 
 const LIFECYCLE_INIT: usize = 0;
-const LIFECYCLE_DYING: usize = 1;
-const LIFECYCLE_DETACHED: usize = 2;
+const LIFECYCLE_FINISHED: usize = usize::MAX;
+const LIFECYCLE_DETACHED: usize = usize::MAX;
+const LIFECYCLE_JOIN_FINALIZE: usize = usize::MAX;
+const LIFECYCLE_DETACHED_OR_JOINED: usize = usize::MAX;
+const LIFECYCLE_EXITED_OR_FINISHED_OR_JOIN_FINALIZE: usize = usize::MAX;
+// there's no single value for `JOINING`
 
 pub const DEFAULT_MIN_STACK_SIZE: usize = 1024 * crate::mem::size_of::<usize>();
 
@@ -77,23 +92,14 @@ impl Thread {
         // lazily and escalating any errors occurred to panics
         detached_task_collector::init()?;
 
-        let death_flag = Eventflag(
-            // Safety: The passed pointer is valid
-            ItronError::err_if_negative(unsafe {
-                abi::acre_flg(&abi::T_CFLG { flgatr: 0, iflgptn: 0 })
-            })
-            .map_err(|e| e.as_io_error())?,
-        );
-
-        let inner = Arc::new(ThreadInner {
+        let inner = Box::new(ThreadInner {
             start: UnsafeCell::new(ManuallyDrop::new(p)),
             lifecycle: AtomicUsize::new(LIFECYCLE_INIT),
-            death_flag,
         });
 
         unsafe extern "C" fn trampoline(exinf: isize) {
-            // Safety: The ownership was transferred to us
-            let inner = unsafe { Arc::from_raw(exinf as *const ThreadInner) };
+            // Safety: `ThreadInner` is alive at this point
+            let inner = unsafe { &*(exinf as *const ThreadInner) };
 
             // Safety: Since `trampoline` is called only once for each
             //         `ThreadInner` and only `trampoline` touches `start`,
@@ -101,61 +107,79 @@ impl Thread {
             let p = unsafe { ManuallyDrop::take(&mut *inner.start.get()) };
             p();
 
-            // Fix the current thread's state just in case
+            // Fix the current thread's state just in case, so that the
+            // destructors won't abort
             // Safety: Not really unsafe
             let _ = unsafe { abi::unl_cpu() };
+            let _ = unsafe { abi::ena_dsp() };
 
             // Run TLS destructors now because they are not
             // called automatically for terminated tasks.
             unsafe { run_dtors() };
 
-            // Disable preemption throughout the following code section. This
-            // prevents `Thread::drop` from getting stuck waiting for
-            // `death_flag` to be set.
-            // Safety: Not really unsafe
-            let _ = unsafe { abi::dis_dsp() };
+            let old_lifecycle = inner
+                .lifecycle
+                .swap(LIFECYCLE_EXITED_OR_FINISHED_OR_JOIN_FINALIZE, Ordering::Release);
 
-            if inner.lifecycle.fetch_add(LIFECYCLE_DYING, Ordering::Release) == LIFECYCLE_DETACHED {
-                // [DYING-DETACHED]
-                // No one will ever join, so ask the collector task to delete the task
-                drop(inner);
+            match old_lifecycle {
+                LIFECYCLE_DETACHED => {
+                    // [DETACHED → EXITED]
+                    // No one will ever join, so we'll ask the collector task to
+                    // delete the task.
 
-                // Revert the effect of `dis_dsp` because `snd_dtq` would fail
-                // with `E_CTX` otherwise.
-                // Safety: Not really unsafe
-                unsafe { abi::ena_dsp() };
+                    // In this case, `inner`'s ownership has been moved to us,
+                    // And we are responsible for dropping it. The acquire
+                    // ordering is not necessary because the parent thread made
+                    // no memory acccess needing synchronization since the call
+                    // to `acre_tsk`.
+                    // Safety: See above.
+                    let _ = unsafe { Box::from_raw(inner as *const _ as *mut ThreadInner) };
 
-                let current_task = task::current_task_id_aborting();
+                    let current_task = task::current_task_id_aborting();
 
-                // Safety: There are no pinned references to the stack
-                unsafe { detached_task_collector::request_terminate_and_delete_task(current_task) };
-            } else {
-                // [DYING-ATTACHED]
-                // The task is still attached, so let the joiner delete this task.
-                //
-                // `death_flag` is guaranteed to exist until we set it because
-                // the joiner is supposed to wait on `death_flag` before dropping
-                // the `ThreadInner`.
-                let death_flag = inner.death_flag.0;
-                drop(inner);
+                    // Safety: There are no pinned references to the stack
+                    unsafe {
+                        detached_task_collector::request_terminate_and_delete_task(current_task)
+                    };
+                }
+                LIFECYCLE_INIT => {
+                    // [INIT → FINISHED]
+                    // The parent hasn't decided whether to join or detach this
+                    // thread yet. Whichever option the parent chooses,
+                    // it'll have to delete this task.
+                    // Since the parent might drop `*inner` as soon as it sees
+                    // `FINISHED`, the release ordering must be used in the
+                    // above `swap` call.
+                }
+                parent_tid => {
+                    // Since the parent might drop `*inner` and terminate us as
+                    // soon as it sees `JOIN_FINALIZE`, the release ordering
+                    // must be used in the above `swap` call.
 
-                // Set `death_flag`
-                expect_success_aborting(unsafe { abi::set_flg(death_flag, 1) }, &"set_flg");
+                    // [JOINING → JOIN_FINALIZE]
+                    // Wake up the parent task.
+                    expect_success(
+                        unsafe {
+                            let mut er = abi::wup_tsk(parent_tid as _);
+                            if er == abi::E_QOVR {
+                                // `E_QOVR` indicates there's already
+                                // a parking token
+                                er = abi::E_OK;
+                            }
+                            er
+                        },
+                        &"wup_tsk",
+                    );
+                }
             }
-
-            // The last statement (`request_terminate_and_delete_task` or
-            // `set_flg`) marks this task safe for deletion, so any code
-            // that follows is not guaranteed to execute. This is why we dropped
-            // `inner` earlier.
         }
 
-        let inner_ptr = Arc::into_raw(Arc::clone(&inner));
+        let inner_ptr = (&*inner) as *const ThreadInner;
 
         let new_task = ItronError::err_if_negative(unsafe {
             abi::acre_tsk(&abi::T_CTSK {
                 // Activate this task immediately
                 tskatr: abi::TA_ACT,
-                // Move `inner_ptr` to this task
                 exinf: inner_ptr as abi::EXINF,
                 // The entry point
                 task: Some(trampoline),
@@ -164,11 +188,6 @@ impl Thread {
                 // Let the kernel allocate the stack,
                 stk: crate::ptr::null_mut(),
             })
-        })
-        .map_err(|e| {
-            // Safety: The task could not be created, so we still own `inner_ptr`
-            let _ = unsafe { Arc::from_raw(inner_ptr) };
-            e
         })
         .map_err(|e| e.as_io_error())?;
 
@@ -190,57 +209,92 @@ impl Thread {
     }
 
     pub fn join(mut self) {
-        // Safety: We haven't called `join_inner` before for this `Thread`
-        unsafe { self.join_inner() };
+        let inner = &*self.inner;
+        // Get the current task ID. Panicking here would cause a resource leak,
+        // so just abort on failure.
+        let current_task = task::current_task_id_aborting();
+        debug_assert!(usize::try_from(current_task).is_ok());
+        debug_assert_ne!(current_task as usize, LIFECYCLE_INIT);
+        debug_assert_ne!(current_task as usize, LIFECYCLE_DETACHED);
 
-        // Skip the destructor, but drop `inner` correctly
-        // Safety: The contents of `self.inner` will not be accessed hereafter
-        let inner = unsafe { ManuallyDrop::take(&mut self.inner) };
-        crate::mem::forget(self);
-        drop(inner);
-    }
+        let current_task = current_task as usize;
 
-    /// Wait until `death_flag` is set and delete the task.
-    ///
-    /// # Safety
-    ///
-    /// This method can be called only once for each `Thread`.
-    unsafe fn join_inner(&mut self) {
-        expect_success(
-            unsafe {
-                abi::wai_flg(
-                    self.inner.death_flag.0,
-                    1,
-                    abi::TWF_ORW,
-                    // unused out parameter
-                    MaybeUninit::uninit().as_mut_ptr(),
-                )
-            },
-            &"wai_flg",
-        );
+        match inner.lifecycle.swap(current_task, Ordering::Acquire) {
+            LIFECYCLE_INIT => {
+                // [INIT → JOINING]
+                // The child task will transition the state to `JOIN_FINALIZE`
+                // and wake us up.
+                loop {
+                    expect_success_aborting(unsafe { abi::slp_tsk() }, &"slp_tsk");
+                    // To synchronize with the child task's memory accesses to
+                    // `inner` up to the point of the assignment of
+                    // `JOIN_FINALIZE`, `Ordering::Acquire` must be used for the
+                    // `load`.
+                    if inner.lifecycle.load(Ordering::Acquire) == LIFECYCLE_JOIN_FINALIZE {
+                        break;
+                    }
+                }
+
+                // [JOIN_FINALIZE → JOINED]
+            }
+            LIFECYCLE_FINISHED => {
+                // [FINISHED → JOINED]
+                // To synchronize with the child task's memory accesses to
+                // `inner` up to the point of the assignment of `FINISHED`,
+                // `Ordering::Acquire` must be used for the above `swap` call`.
+            }
+            _ => unsafe { hint::unreachable_unchecked() },
+        }
 
         // Terminate and delete the task
         // Safety: `self.task` still represents a task we own (because this
-        //         method is called only once for each `Thread`). The task
-        //         indicated that it's safe to delete by setting `death_flag`.
+        //         method or `detach_inner` is called only once for each
+        //         `Thread`). The task indicated that it's safe to delete by
+        //         entering the `FINISHED` or `JOIN_FINALIZE` state.
         unsafe { terminate_and_delete_task(self.task) };
+
+        // In either case, we are responsible for dropping `inner`.
+        // Safety: The contents of `self.inner` will not be accessed hereafter
+        let _inner = unsafe { ManuallyDrop::take(&mut self.inner) };
+
+        // Skip the destructor (because it would attempt to detach the thread)
+        crate::mem::forget(self);
     }
 }
 
 impl Drop for Thread {
     fn drop(&mut self) {
-        if self.inner.lifecycle.fetch_add(LIFECYCLE_DETACHED, Ordering::Relaxed) == LIFECYCLE_DYING
-        {
-            // [DETACH-DYING]
-            // The task has already decided that the joiner should
-            // delete the task.
+        // Detach the thread.
+        match self.inner.lifecycle.swap(LIFECYCLE_DETACHED_OR_JOINED, Ordering::Acquire) {
+            LIFECYCLE_INIT => {
+                // [INIT → DETACHED]
+                // When the time comes, the child will figure out that no
+                // one will ever join it.
+                // The ownership of `self.inner` is moved to the child thread.
+                // However, the release ordering is not necessary because we
+                // made no memory acccess needing synchronization since the call
+                // to `acre_tsk`.
+            }
+            LIFECYCLE_FINISHED => {
+                // [FINISHED → JOINED]
+                // The task has already decided that we should delete the task.
+                // To synchronize with the child task's memory accesses to
+                // `inner` up to the point of the assignment of `FINISHED`,
+                // the acquire ordering is required for the above `swap` call.
 
-            // Safety: We haven't called `join_inner` before for this `Thread`
-            unsafe { self.join_inner() };
-        } else {
-            // [DETACH-LIVE]
-            // When the time comes, the task will figure out that no one will
-            // ever join it
+                // Terminate and delete the task
+                // Safety: `self.task` still represents a task we own (because
+                //         this method or `join_inner` is called only once for
+                //         each `Thread`). The task  indicated that it's safe to
+                //         delete by entering the `FINISHED` state.
+                unsafe { terminate_and_delete_task(self.task) };
+
+                // Wwe are responsible for dropping `inner`.
+                // Safety: The contents of `self.inner` will not be accessed
+                //         hereafter
+                unsafe { ManuallyDrop::drop(&mut self.inner) };
+            }
+            _ => unsafe { hint::unreachable_unchecked() },
         }
     }
 }
@@ -257,7 +311,7 @@ pub mod guard {
 
 /// Terminate and delete the specified task.
 ///
-/// This function will panic if `id` is the calling task.
+/// This function will abort if `deleted_task` refers to the calling task.
 ///
 /// # Safety
 ///
@@ -277,15 +331,6 @@ unsafe fn terminate_and_delete_task(deleted_task: abi::ID) {
     // Delete the task
     // Safety: Upheld by the caller
     expect_success_aborting(unsafe { abi::del_tsk(deleted_task) }, &"del_tsk");
-}
-
-/// Smart pointer for eventflag objects.
-struct Eventflag(abi::ID);
-
-impl Drop for Eventflag {
-    fn drop(&mut self) {
-        unsafe { abi::del_flg(self.0) };
-    }
 }
 
 /// The task to clean up detached tasks
