@@ -166,7 +166,6 @@ define_handles! {
     Diagnostic,
 
     'interned:
-    Punct,
     Ident,
     Span,
 }
