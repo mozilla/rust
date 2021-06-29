@@ -283,14 +283,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             return;
         }
         let boxed_found = self.tcx.mk_box(found);
-        if let (true, Ok(snippet)) = (
-            self.can_coerce(boxed_found, expected),
-            self.sess().source_map().span_to_snippet(expr.span),
-        ) {
-            err.span_suggestion(
-                expr.span,
+        if self.can_coerce(boxed_found, expected) {
+            err.multipart_suggestion(
                 "store this in the heap by calling `Box::new`",
-                format!("Box::new({})", snippet),
+                vec![
+                    (expr.span.shrink_to_lo(), "Box::new(".to_string()),
+                    (expr.span.shrink_to_hi(), ")".to_string()),
+                ],
                 Applicability::MachineApplicable,
             );
             err.note(
@@ -357,19 +356,18 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         }
         let boxed_found = self.tcx.mk_box(found);
         let new_found = self.tcx.mk_lang_item(boxed_found, LangItem::Pin).unwrap();
-        if let (true, Ok(snippet)) = (
-            self.can_coerce(new_found, expected),
-            self.sess().source_map().span_to_snippet(expr.span),
-        ) {
+        if self.can_coerce(new_found, expected) {
             match found.kind() {
                 ty::Adt(def, _) if def.is_box() => {
                     err.help("use `Box::pin`");
                 }
                 _ => {
-                    err.span_suggestion(
-                        expr.span,
+                    err.multipart_suggestion(
                         "you need to pin and box this expression",
-                        format!("Box::pin({})", snippet),
+                        vec![
+                            (expr.span.shrink_to_lo(), "Box::pin(".to_string()),
+                            (expr.span.shrink_to_hi(), ")".to_string()),
+                        ],
                         Applicability::MachineApplicable,
                     );
                 }
@@ -543,7 +541,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let sp = self.tcx.sess.source_map().start_point(expr.span);
         if let Some(sp) = self.tcx.sess.parse_sess.ambiguous_block_expr_parse.borrow().get(&sp) {
             // `{ 42 } &&x` (#61475) or `{ 42 } && if x { 1 } else { 0 }`
-            self.tcx.sess.parse_sess.expr_parentheses_needed(err, *sp, None);
+            self.tcx.sess.parse_sess.expr_parentheses_needed(err, *sp);
         }
     }
 

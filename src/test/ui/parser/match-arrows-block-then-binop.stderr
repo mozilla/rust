@@ -7,7 +7,7 @@ LL |       } + 5
 help: parentheses are required to parse this as an expression
    |
 LL ~       0 => ({
-LL +         0
+LL |         0
 LL ~       }) + 5
    |
 
