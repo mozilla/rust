@@ -29,7 +29,7 @@ impl RWLock {
     fn raw(&self) -> abi::ID {
         match self.rwl.get_or_try_init(|| new_rwl().map(|id| (id, ()))) {
             Ok((id, ())) => id,
-            Err(e) => fail(e, &"acre_mtx"),
+            Err(e) => fail(e, &"rwl_acre_rwl"),
         }
     }
 
