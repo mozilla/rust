@@ -39,9 +39,6 @@ pub const TPRI_SELF: PRI = 0;
 /// Object attributes
 pub type ATR = uint_t;
 
-/// Sort waiters by priority
-pub const TA_TPRI: ATR = 0x01;
-
 /// Use the priority inheritance protocol
 #[cfg(target_os = "solid-asp3")]
 pub const TA_INHERIT: ATR = 0x02;
@@ -95,14 +92,6 @@ pub struct T_CSEM {
 
 #[derive(Clone, Copy)]
 #[repr(C)]
-pub struct T_CDTQ {
-    pub dtqatr: ATR,
-    pub dtqcnt: uint_t,
-    pub dtqmb: *mut isize,
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
 pub struct T_CMTX {
     pub mtxatr: ATR,
     pub ceilpri: PRI,
@@ -136,10 +125,6 @@ extern "C" {
     pub fn wai_sem(semid: ID) -> ER;
     pub fn pol_sem(semid: ID) -> ER;
     pub fn twai_sem(semid: ID, tmout: TMO) -> ER;
-    pub fn acre_dtq(pk_cdtq: *const T_CDTQ) -> ER_ID;
-    pub fn del_dtq(tskid: ID) -> ER;
-    pub fn rcv_dtq(dtqid: ID, p_data: *mut isize) -> ER;
-    pub fn snd_dtq(dtqid: ID, data: isize) -> ER;
     pub fn unl_cpu() -> ER;
     pub fn dis_dsp() -> ER;
     pub fn ena_dsp() -> ER;
@@ -151,9 +136,5 @@ extern "C" {
     pub fn ploc_mtx(mtxid: ID) -> ER;
     pub fn tloc_mtx(mtxid: ID, tmout: TMO) -> ER;
     pub fn unl_mtx(mtxid: ID) -> ER;
-}
-
-#[cfg(target_os = "solid-asp3")]
-extern "C" {
     pub fn exd_tsk() -> ER;
 }

@@ -1,5 +1,5 @@
-//! Thread implementation backed by μITRON tasks. Assumes `acre_tsk`,
-//! `acre_dtq`, and `acre_flg` are available.
+//! Thread implementation backed by μITRON tasks. Assumes `acre_tsk` and
+//! `exd_tsk` are available.
 use super::{
     abi,
     error::{expect_success, expect_success_aborting, ItronError},
@@ -88,10 +88,6 @@ impl Thread {
         let current_task = task::try_current_task_id().map_err(|e| e.as_io_error())?;
         let priority = task::try_task_priority(current_task).map_err(|e| e.as_io_error())?;
 
-        // Initialize the task collector ahead-of-time instead of doing it
-        // lazily and escalating any errors occurred to panics
-        detached_task_collector::init()?;
-
         let inner = Box::new(ThreadInner {
             start: UnsafeCell::new(ManuallyDrop::new(p)),
             lifecycle: AtomicUsize::new(LIFECYCLE_INIT),
@@ -135,12 +131,8 @@ impl Thread {
                     // Safety: See above.
                     let _ = unsafe { Box::from_raw(inner as *const _ as *mut ThreadInner) };
 
-                    let current_task = task::current_task_id_aborting();
-
                     // Safety: There are no pinned references to the stack
-                    unsafe {
-                        detached_task_collector::request_terminate_and_delete_task(current_task)
-                    };
+                    unsafe { terminate_and_delete_current_task() };
                 }
                 LIFECYCLE_INIT => {
                     // [INIT → FINISHED]
@@ -313,6 +305,11 @@ pub mod guard {
 ///
 /// This function will abort if `deleted_task` refers to the calling task.
 ///
+/// It is assumed that the specified task is solely managed by the caller -
+/// i.e., other threads must not "resuscitate" the specified task or delete it
+/// prematurely while this function is still in progress. It is allowed for the
+/// specified task to exit by its own.
+///
 /// # Safety
 ///
 /// The task must be safe to terminate. This is in general not true
@@ -333,134 +330,19 @@ unsafe fn terminate_and_delete_task(deleted_task: abi::ID) {
     expect_success_aborting(unsafe { abi::del_tsk(deleted_task) }, &"del_tsk");
 }
 
-/// The task to clean up detached tasks
-#[cfg(not(target_os = "solid-asp3"))]
-mod detached_task_collector {
-    use super::*;
-    use std::lazy::SyncOnceCell;
-
-    /// Smart pointer for data queue objects.
-    struct Dataqueue(abi::ID);
-
-    impl Drop for Dataqueue {
-        fn drop(&mut self) {
-            unsafe { abi::del_dtq(self.0) };
-        }
-    }
-
-    static DELETION_QUEUE: SyncOnceCell<Dataqueue> = SyncOnceCell::new();
-
-    /// Tentative value
-    const TASK_GC_TASK_STACK_SIZE: usize = 2048;
-
-    pub fn init() -> io::Result<()> {
-        DELETION_QUEUE
-            .get_or_try_init(|| {
-                // Safety: Passed pointers are valid
-                let deletion_queue = Dataqueue(
-                    ItronError::err_if_negative(unsafe {
-                        abi::acre_dtq(&abi::T_CDTQ {
-                            // Prioritize higher-priority senders
-                            dtqatr: abi::TA_TPRI,
-                            // Up to one element in the queue
-                            dtqcnt: 1,
-                            // Let the kernel allocate the storage
-                            dtqmb: crate::ptr::null_mut(),
-                        })
-                    })
-                    .map_err(|e| e.as_io_error())?,
-                );
-
-                // Start the detached task collector task
-                // Safety: Passed pointers are valid
-                ItronError::err_if_negative(unsafe {
-                    abi::acre_tsk(&abi::T_CTSK {
-                        // Activate this task immediately
-                        tskatr: abi::TA_ACT,
-                        // Pass the deletion queue to this task
-                        exinf: deletion_queue.0 as abi::EXINF,
-                        // The entry point
-                        task: Some(task_gc_task),
-                        // Highest priority. This task spends most of the time in
-                        // the kernel, so it will block other tasks anyway.
-                        // Choosing a lower priority is actually harmful because it
-                        // can lead to unbounded priority inversion and consequent
-                        // resource starvation. (Dataqueues have no priority
-                        // protection mechanisms.)
-                        itskpri: 1,
-                        stksz: TASK_GC_TASK_STACK_SIZE,
-                        stk: crate::ptr::null_mut(),
-                    })
-                })
-                .map_err(|e| e.as_io_error())?;
-
-                Ok(deletion_queue)
-            })
-            .map(|_| {})
-    }
-
-    /// Request the task collector to terminate and delete the specified task,
-    /// which must be the calling task.
-    ///
-    /// # Safety
-    ///
-    /// The task must be safe to terminate. This is in general not true
-    /// because there might be pinned references to the task's stack.
-    ///
-    /// `deleted_task` must refer to the current task.
-    pub unsafe fn request_terminate_and_delete_task(deleted_task: abi::ID) {
-        let deletion_queue = DELETION_QUEUE.get().unwrap().0;
-
-        // Send `deleted_task` to `queue`
-        //
-        // WARNING: This process must be atomic! To be precise, no other tasks
-        // must be able to preempt this process. If there were such tasks,
-        // they would be able to stall the GC of higher-priority tasks
-        // (unbounded priority inversion), causing resource starvation.
-        // Safety: Not really unsafe
-        expect_success_aborting(
-            unsafe { abi::snd_dtq(deletion_queue, deleted_task as isize) },
-            &"snd_dtq",
-        );
-    }
-
-    extern "C" fn task_gc_task(exinf: isize) {
-        let deletion_queue = exinf as abi::ID;
-
-        loop {
-            let payload = unsafe {
-                let mut out = MaybeUninit::uninit();
-                expect_success_aborting(abi::rcv_dtq(deletion_queue, out.as_mut_ptr()), "rcv_dtq");
-                out.assume_init()
-            };
-            let deleted_task = payload as abi::ID;
-
-            // Terminate and delete the task
-            // Safety: Upheld by the caller of `request_terminate_and_delete_task`
-            unsafe { terminate_and_delete_task(deleted_task) };
-        }
-    }
-}
-
-#[cfg(target_os = "solid-asp3")]
-mod detached_task_collector {
-    use super::*;
-
-    #[inline]
-    pub fn init() -> io::Result<()> {
-        Ok(())
-    }
-
-    /// Request the task collector to terminate and delete the specified task,
-    /// which must be the calling task.
-    ///
-    /// # Safety
-    ///
-    /// The task must be safe to terminate. This is in general not true
-    /// because there might be pinned references to the task's stack.
-    ///
-    /// `deleted_task` must refer to the current task.
-    pub unsafe fn request_terminate_and_delete_task(_deleted_task: abi::ID) {
-        expect_success_aborting(unsafe { abi::exd_tsk() }, &"exd_tsk");
-    }
+/// Terminate and delete the calling task.
+///
+/// Atomicity is not required - i.e., it can be assumed that other threads won't
+/// `ter_tsk` the calling task while this function is still in progress. (This
+/// property makes it easy to implement this operation on μITRON-derived kernels
+/// that don't support `exd_tsk`.)
+///
+/// # Safety
+///
+/// The task must be safe to terminate. This is in general not true
+/// because there might be pinned references to the task's stack.
+unsafe fn terminate_and_delete_current_task() -> ! {
+    expect_success_aborting(unsafe { abi::exd_tsk() }, &"exd_tsk");
+    // Safety: `exd_tsk` never returns on success
+    unsafe { crate::hint::unreachable_unchecked() };
 }
