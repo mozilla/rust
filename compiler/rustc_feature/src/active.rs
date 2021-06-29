@@ -684,6 +684,9 @@ declare_features! (
     /// Allows unnamed fields of struct and union type
     (incomplete, unnamed_fields, "1.53.0", Some(49804), None),
 
+    /// Allows converting enums to/from their repr.
+    (active, enum_as_repr, "1.54.0", Some(86772), None),
+
     /// Allows qualified paths in struct expressions, struct patterns and tuple struct patterns.
     (active, more_qualified_paths, "1.54.0", Some(80080), None),
 

@@ -265,6 +265,7 @@
 #![feature(duration_checked_float)]
 #![feature(duration_constants)]
 #![feature(edition_panic)]
+#![feature(enum_as_repr)]
 #![feature(exact_size_is_empty)]
 #![feature(exhaustive_patterns)]
 #![feature(extend_one)]
@@ -479,6 +480,9 @@ pub use core::u8;
 #[stable(feature = "rust1", since = "1.0.0")]
 #[allow(deprecated, deprecated_in_future)]
 pub use core::usize;
+
+#[unstable(feature = "enum_as_repr", issue = "86772")]
+pub use core::enums;
 
 pub mod f32;
 pub mod f64;
