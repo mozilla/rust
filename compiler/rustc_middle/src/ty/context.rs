@@ -1307,8 +1307,8 @@ impl<'tcx> TyCtxt<'tcx> {
             (self.crate_name, self.sess.local_crate_disambiguator())
         } else {
             (
-                self.cstore.crate_name_untracked(def_id.krate),
-                self.cstore.crate_disambiguator_untracked(def_id.krate),
+                self.cstore.crate_name(def_id.krate),
+                self.cstore.crate_disambiguator(def_id.krate),
             )
         };
 

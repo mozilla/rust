@@ -485,11 +485,11 @@ impl CrateStore for CStore {
         self
     }
 
-    fn crate_name_untracked(&self, cnum: CrateNum) -> Symbol {
+    fn crate_name(&self, cnum: CrateNum) -> Symbol {
         self.get_crate_data(cnum).root.name
     }
 
-    fn crate_disambiguator_untracked(&self, cnum: CrateNum) -> CrateDisambiguator {
+    fn crate_disambiguator(&self, cnum: CrateNum) -> CrateDisambiguator {
         self.get_crate_data(cnum).root.disambiguator
     }
 
