@@ -394,7 +394,7 @@ impl<'a> TraitDef<'a> {
         match *item {
             Annotatable::Item(ref item) => {
                 let is_packed = item.attrs.iter().any(|attr| {
-                    for r in attr::find_repr_attrs(&cx.sess, attr) {
+                    for r in attr::find_repr_attrs(&cx.sess.parse_sess, attr) {
                         if let attr::ReprPacked(_) = r {
                             return true;
                         }

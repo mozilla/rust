@@ -853,11 +853,11 @@ impl IntType {
 /// the same discriminant size that the corresponding C enum would or C
 /// structure layout, `packed` to remove padding, and `transparent` to elegate representation
 /// concerns to the only non-ZST field.
-pub fn find_repr_attrs(sess: &Session, attr: &Attribute) -> Vec<ReprAttr> {
+pub fn find_repr_attrs(sess: &ParseSess, attr: &Attribute) -> Vec<ReprAttr> {
     use ReprAttr::*;
 
     let mut acc = Vec::new();
-    let diagnostic = &sess.parse_sess.span_diagnostic;
+    let diagnostic = &sess.span_diagnostic;
     if attr.has_name(sym::repr) {
         if let Some(items) = attr.meta_item_list() {
             sess.mark_attr_used(attr);

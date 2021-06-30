@@ -220,7 +220,6 @@ pub struct Session {
     pub target_features: FxHashSet<Symbol>,
 
     known_attrs: Lock<MarkedAttrs>,
-    used_attrs: Lock<MarkedAttrs>,
 
     /// `Span`s for `if` conditions that we have suggested turning into `if let`.
     pub if_let_suggestions: Lock<FxHashSet<Span>>,
@@ -1122,11 +1121,11 @@ impl Session {
     }
 
     pub fn mark_attr_used(&self, attr: &Attribute) {
-        self.used_attrs.lock().mark(attr)
+        self.parse_sess.mark_attr_used(attr)
     }
 
     pub fn is_attr_used(&self, attr: &Attribute) -> bool {
-        self.used_attrs.lock().is_marked(attr)
+        self.parse_sess.is_attr_used(attr)
     }
 
     /// Returns `true` if the attribute's path matches the argument. If it
@@ -1431,7 +1430,6 @@ pub fn build_session(
         asm_arch,
         target_features: FxHashSet::default(),
         known_attrs: Lock::new(MarkedAttrs::new()),
-        used_attrs: Lock::new(MarkedAttrs::new()),
         if_let_suggestions: Default::default(),
     };
 
