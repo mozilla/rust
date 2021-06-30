@@ -1,5 +1,5 @@
 error[FIXME]: `AsRepr` can only be derived for enums
-  --> $DIR/deriving-enum-as-repr-bad.rs:10:10
+  --> $DIR/deriving-enum-as-repr-bad.rs:12:10
    |
 LL | #[derive(AsRepr)]
    |          ^^^^^^
@@ -7,7 +7,7 @@ LL | #[derive(AsRepr)]
    = note: this error originates in the derive macro `AsRepr` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[FIXME]: `AsRepr` can only be derived for enums with an explicit integer representation
-  --> $DIR/deriving-enum-as-repr-bad.rs:14:10
+  --> $DIR/deriving-enum-as-repr-bad.rs:16:10
    |
 LL | #[derive(AsRepr)]
    |          ^^^^^^
@@ -15,7 +15,7 @@ LL | #[derive(AsRepr)]
    = note: this error originates in the derive macro `AsRepr` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[FIXME]: `AsRepr` can only be derived for enums with an explicit integer representation
-  --> $DIR/deriving-enum-as-repr-bad.rs:22:10
+  --> $DIR/deriving-enum-as-repr-bad.rs:24:10
    |
 LL | #[derive(AsRepr)]
    |          ^^^^^^
@@ -23,7 +23,7 @@ LL | #[derive(AsRepr)]
    = note: this error originates in the derive macro `AsRepr` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[FIXME]: `AsRepr` can only be derived for data-free enums
-  --> $DIR/deriving-enum-as-repr-bad.rs:29:10
+  --> $DIR/deriving-enum-as-repr-bad.rs:31:10
    |
 LL | #[derive(AsRepr)]
    |          ^^^^^^
@@ -31,7 +31,7 @@ LL | #[derive(AsRepr)]
    = note: this error originates in the derive macro `AsRepr` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[FIXME]: `AsRepr` can only be derived for data-free enums
-  --> $DIR/deriving-enum-as-repr-bad.rs:37:10
+  --> $DIR/deriving-enum-as-repr-bad.rs:39:10
    |
 LL | #[derive(AsRepr)]
    |          ^^^^^^
@@ -39,7 +39,7 @@ LL | #[derive(AsRepr)]
    = note: this error originates in the derive macro `AsRepr` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[FIXME]: `AsRepr` can only be derived for data-free enums
-  --> $DIR/deriving-enum-as-repr-bad.rs:45:10
+  --> $DIR/deriving-enum-as-repr-bad.rs:47:10
    |
 LL | #[derive(AsRepr)]
    |          ^^^^^^
@@ -47,7 +47,7 @@ LL | #[derive(AsRepr)]
    = note: this error originates in the derive macro `AsRepr` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[FIXME]: `AsRepr` can only be derived for data-free enums
-  --> $DIR/deriving-enum-as-repr-bad.rs:53:10
+  --> $DIR/deriving-enum-as-repr-bad.rs:55:10
    |
 LL | #[derive(AsRepr)]
    |          ^^^^^^

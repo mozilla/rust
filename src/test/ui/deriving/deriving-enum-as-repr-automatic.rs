@@ -1,23 +1,23 @@
-// Test that AsRepr can be derived to convert an int-repr'd enum into its repr.
+// Test that AsRepr is automatically derived to convert an int-repr'd enum into its repr.
 
 // run-pass
+// AsRepr is not currently automatically derived because the trait doesn't exist in bootstrap yet.
+// ignore-test
 // gate-test-enum_as_repr
-// The trait is auto-derived in stage2
-// ignore-stage2
 
 #![feature(enum_as_repr)]
 
 use std::enums::AsRepr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-#[derive(AsRepr, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum PositiveNumber {
     Zero,
     One,
 }
 
-#[derive(AsRepr, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 #[repr(i8)]
 enum Number {
     MinusOne = -1,
@@ -28,7 +28,7 @@ enum Number {
 
 static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-#[derive(AsRepr, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 #[repr(usize)]
 enum DroppableNumber {
     Zero,

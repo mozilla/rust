@@ -4,8 +4,11 @@ use super::{AttrWrapper, FollowedByType, ForceCollect, Parser, PathStyle, Traili
 
 use rustc_ast::ast::*;
 use rustc_ast::ptr::P;
-use rustc_ast::token::{self, TokenKind};
-use rustc_ast::tokenstream::{DelimSpan, TokenStream, TokenTree};
+use rustc_ast::token::{self, DelimToken, Token, TokenKind};
+use rustc_ast::tokenstream::{
+    AttrAnnotatedTokenStream, AttrAnnotatedTokenTree, DelimSpan, LazyTokenStream, TokenStream,
+    TokenTree,
+};
 use rustc_ast::{self as ast, AttrVec, Attribute, DUMMY_NODE_ID};
 use rustc_ast::{Async, Const, Defaultness, IsAuto, Mutability, Unsafe, UseTree, UseTreeKind};
 use rustc_ast::{BindingMode, Block, FnDecl, FnSig, Param, SelfKind};
@@ -18,6 +21,10 @@ use rustc_span::edition::{Edition, LATEST_STABLE_EDITION};
 use rustc_span::source_map::{self, Span};
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
 
+use rustc_ast::attr::mk_attr_from_item;
+use rustc_ast::tokenstream::Spacing::{Alone, Joint};
+use rustc_attr::{find_repr_attrs, ReprAttr};
+use rustc_span::DUMMY_SP;
 use std::convert::TryFrom;
 use std::mem;
 use tracing::debug;
@@ -269,7 +276,7 @@ impl<'a> Parser<'a> {
             self.parse_type_alias(def())?
         } else if self.eat_keyword(kw::Enum) {
             // ENUM ITEM
-            self.parse_item_enum()?
+            self.parse_item_enum(attrs)?
         } else if self.eat_keyword(kw::Struct) {
             // STRUCT ITEM
             self.parse_item_struct()?
@@ -1096,7 +1103,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses an enum declaration.
-    fn parse_item_enum(&mut self) -> PResult<'a, ItemInfo> {
+    fn parse_item_enum(&mut self, attrs: &mut Vec<Attribute>) -> PResult<'a, ItemInfo> {
         let id = self.parse_ident()?;
         let mut generics = self.parse_generics()?;
         generics.where_clause = self.parse_where_clause()?;
@@ -1109,6 +1116,126 @@ impl<'a> Parser<'a> {
 
         let enum_definition =
             EnumDef { variants: variants.into_iter().filter_map(|v| v).collect() };
+
+        // Implicitly add a #[derive(core::enums::AsRepr)] attribute to all fieldless enums with an
+        // explicit repr.
+        //
+        // This is currently cfg!(not(bootstrap)) gated because `core::enums::AsRepr` does not exist on bootstrap,
+        // and so generating a derive for it leads to errors. It's also gated on is_cheat() because
+        // bootstrap rustdoc appears to not fully respect not(bootstrap).
+        // Both gates can be removed when that trait exists on beta.
+        let should_generate_as_repr = cfg!(not(bootstrap))
+            && !self.sess.unstable_features.is_cheat()
+            && enum_definition.is_fieldless()
+            && find_repr_attrs(self.sess, attrs.iter(), false)
+                .into_iter()
+                .filter(|repr| match repr {
+                    ReprAttr::ReprInt(_) => true,
+                    ReprAttr::ReprC
+                    | ReprAttr::ReprPacked(..)
+                    | ReprAttr::ReprSimd
+                    | ReprAttr::ReprTransparent
+                    | ReprAttr::ReprAlign(..)
+                    | ReprAttr::ReprNoNiche => false,
+                })
+                .count()
+                == 1;
+        if should_generate_as_repr {
+            let derive_path_tokens = vec![
+                (
+                    Token { kind: TokenKind::Ident(Symbol::intern("core"), false), span: DUMMY_SP },
+                    Joint,
+                ),
+                (Token { kind: TokenKind::ModSep, span: DUMMY_SP }, Alone),
+                (
+                    Token {
+                        kind: TokenKind::Ident(Symbol::intern("enums"), false),
+                        span: DUMMY_SP,
+                    },
+                    Joint,
+                ),
+                (Token { kind: TokenKind::ModSep, span: DUMMY_SP }, Alone),
+                (
+                    Token {
+                        kind: TokenKind::Ident(Symbol::intern("AsRepr"), false),
+                        span: DUMMY_SP,
+                    },
+                    Alone,
+                ),
+            ];
+            let derive_path_token_stream = TokenStream::new(
+                derive_path_tokens
+                    .iter()
+                    .cloned()
+                    .map(|(token, spacing)| (TokenTree::Token(token), spacing))
+                    .collect(),
+            );
+
+            let tokenstream = AttrAnnotatedTokenStream::new(vec![
+                (
+                    AttrAnnotatedTokenTree::Token(Token { kind: TokenKind::Pound, span: DUMMY_SP }),
+                    Alone,
+                ),
+                (
+                    AttrAnnotatedTokenTree::Delimited(
+                        DelimSpan::dummy(),
+                        DelimToken::Bracket,
+                        AttrAnnotatedTokenStream::new(vec![
+                            (
+                                AttrAnnotatedTokenTree::Token(Token {
+                                    kind: TokenKind::Ident(sym::derive, false),
+                                    span: DUMMY_SP,
+                                }),
+                                Alone,
+                            ),
+                            (
+                                AttrAnnotatedTokenTree::Delimited(
+                                    DelimSpan::dummy(),
+                                    DelimToken::Paren,
+                                    AttrAnnotatedTokenStream::new(
+                                        derive_path_tokens
+                                            .iter()
+                                            .map(|(token, spacing)| {
+                                                (
+                                                    AttrAnnotatedTokenTree::Token(token.clone()),
+                                                    spacing.clone(),
+                                                )
+                                            })
+                                            .collect(),
+                                    ),
+                                ),
+                                Alone,
+                            ),
+                        ]),
+                    ),
+                    Alone,
+                ),
+            ]);
+
+            let attr = mk_attr_from_item(
+                AttrItem {
+                    path: Path {
+                        span: DUMMY_SP,
+                        segments: vec![PathSegment::from_ident(Ident::with_dummy_span(
+                            sym::derive,
+                        ))],
+                        tokens: None,
+                    },
+                    args: MacArgs::Delimited(
+                        DelimSpan::dummy(),
+                        MacDelimiter::Parenthesis,
+                        derive_path_token_stream,
+                    ),
+                    tokens: None,
+                },
+                Some(LazyTokenStream::new(tokenstream)),
+                AttrStyle::Outer,
+                DUMMY_SP,
+            );
+
+            attrs.push(attr);
+        }
+
         Ok((id, ItemKind::Enum(enum_definition, generics)))
     }
 

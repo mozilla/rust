@@ -162,7 +162,7 @@ impl NonCamelCaseTypes {
 impl EarlyLintPass for NonCamelCaseTypes {
     fn check_item(&mut self, cx: &EarlyContext<'_>, it: &ast::Item) {
         let has_repr_c =
-            attr::find_repr_attrs(&cx.sess.parse_sess, &it.attrs).contains(&attr::ReprC);
+            attr::find_repr_attrs(&cx.sess.parse_sess, &it.attrs, true).contains(&attr::ReprC);
 
         if has_repr_c {
             return;

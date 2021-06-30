@@ -103,6 +103,13 @@ impl UnstableFeatures {
             UnstableFeatures::Disallow => false,
         }
     }
+
+    pub fn is_cheat(&self) -> bool {
+        match *self {
+            UnstableFeatures::Cheat => true,
+            _ => false,
+        }
+    }
 }
 
 fn find_lang_feature_issue(feature: Symbol) -> Option<NonZeroU32> {

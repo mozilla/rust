@@ -1,6 +1,8 @@
 // Test that AsRepr cannot be derived other than for enums with an explicit int repr and no data.
 
 // gate-test-enum_as_repr
+// The trait is auto-derived in stage2
+// ignore-stage2
 
 #![feature(enum_as_repr)]
 #![allow(unused)]

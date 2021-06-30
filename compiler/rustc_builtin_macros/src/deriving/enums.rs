@@ -37,6 +37,12 @@ pub fn expand_as_repr(
     item: &Annotatable,
     push: &mut dyn FnMut(Annotatable),
 ) {
+    if let Some(features) = cx.ecfg.features {
+        if !features.enabled(sym::enum_as_repr) {
+            return;
+        }
+    }
+
     let ctx = Ctx::extract(cx, item);
 
     match ctx {
@@ -93,7 +99,7 @@ fn extract_repr(
     annitem: &P<Item>,
     def: &EnumDef,
 ) -> Result<Symbol, &'static str> {
-    let reprs: Vec<_> = find_repr_attrs(&cx.sess.parse_sess, &annitem.attrs)
+    let reprs: Vec<_> = find_repr_attrs(&cx.sess.parse_sess, &annitem.attrs, true)
         .into_iter()
         .filter_map(|r| {
             use rustc_attr::*;

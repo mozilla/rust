@@ -856,6 +856,7 @@ impl IntType {
 pub fn find_repr_attrs<'a, I: IntoIterator<Item = &'a Attribute>>(
     sess: &ParseSess,
     attrs: I,
+    error_if_invalid: bool,
 ) -> Vec<ReprAttr> {
     use ReprAttr::*;
 
@@ -897,14 +898,16 @@ pub fn find_repr_attrs<'a, I: IntoIterator<Item = &'a Attribute>>(
                             };
                         }
                         if let Some(literal_error) = literal_error {
-                            struct_span_err!(
-                                diagnostic,
-                                item.span(),
-                                E0589,
-                                "invalid `repr(align)` attribute: {}",
-                                literal_error
-                            )
-                            .emit();
+                            if error_if_invalid {
+                                struct_span_err!(
+                                    diagnostic,
+                                    item.span(),
+                                    E0589,
+                                    "invalid `repr(align)` attribute: {}",
+                                    literal_error
+                                )
+                                .emit();
+                            }
                         }
                     } else if let Some(meta_item) = item.meta_item() {
                         if meta_item.has_name(sym::align) {
@@ -935,11 +938,13 @@ pub fn find_repr_attrs<'a, I: IntoIterator<Item = &'a Attribute>>(
                                     }
                                     _ => {}
                                 }
-                                err.emit();
+                                if error_if_invalid {
+                                    err.emit();
+                                }
                             }
                         }
                     }
-                    if !recognised {
+                    if !recognised && error_if_invalid {
                         // Not a word we recognize
                         diagnostic.delay_span_bug(item.span(), "unrecognized representation hint");
                     }
