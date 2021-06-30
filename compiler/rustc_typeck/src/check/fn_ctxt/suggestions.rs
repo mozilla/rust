@@ -234,29 +234,36 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             None // do not suggest code that is already there (#53348)
                         } else {
                             let method_call_list = [".to_vec()", ".to_string()"];
-                            let sugg = if receiver.ends_with(".clone()")
+                            let mut sugg = if receiver.ends_with(".clone()")
                                 && method_call_list.contains(&method_call.as_str())
                             {
                                 let max_len = receiver.rfind('.').unwrap();
-                                format!("{}{}", &receiver[..max_len], method_call)
+                                vec![(
+                                    expr.span,
+                                    format!("{}{}", &receiver[..max_len], method_call),
+                                )]
                             } else {
                                 if expr.precedence().order() < ExprPrecedence::MethodCall.order() {
-                                    format!("({}){}", receiver, method_call)
+                                    vec![
+                                        (expr.span.shrink_to_lo(), "(".to_string()),
+                                        (expr.span.shrink_to_hi(), format!("){}", method_call)),
+                                    ]
                                 } else {
-                                    format!("{}{}", receiver, method_call)
+                                    vec![(expr.span.shrink_to_hi(), method_call)]
                                 }
                             };
-                            Some(if is_struct_pat_shorthand_field {
-                                format!("{}: {}", receiver, sugg)
-                            } else {
-                                sugg
-                            })
+                            if is_struct_pat_shorthand_field {
+                                sugg.insert(
+                                    0,
+                                    (expr.span.shrink_to_lo(), format!("{}: ", receiver)),
+                                );
+                            }
+                            Some(sugg)
                         }
                     })
                     .peekable();
                 if suggestions.peek().is_some() {
-                    err.span_suggestions(
-                        expr.span,
+                    err.multipart_suggestions(
                         "try using a conversion method",
                         suggestions,
                         Applicability::MaybeIncorrect,
