@@ -1453,32 +1453,27 @@ impl ReprOptions {
         let mut size = None;
         let mut max_align: Option<Align> = None;
         let mut min_pack: Option<Align> = None;
-        for attr in tcx.get_attrs(did).iter() {
-            for r in attr::find_repr_attrs(&tcx.sess.parse_sess, attr) {
-                flags.insert(match r {
-                    attr::ReprC => ReprFlags::IS_C,
-                    attr::ReprPacked(pack) => {
-                        let pack = Align::from_bytes(pack as u64).unwrap();
-                        min_pack = Some(if let Some(min_pack) = min_pack {
-                            min_pack.min(pack)
-                        } else {
-                            pack
-                        });
-                        ReprFlags::empty()
-                    }
-                    attr::ReprTransparent => ReprFlags::IS_TRANSPARENT,
-                    attr::ReprNoNiche => ReprFlags::HIDE_NICHE,
-                    attr::ReprSimd => ReprFlags::IS_SIMD,
-                    attr::ReprInt(i) => {
-                        size = Some(i);
-                        ReprFlags::empty()
-                    }
-                    attr::ReprAlign(align) => {
-                        max_align = max_align.max(Some(Align::from_bytes(align as u64).unwrap()));
-                        ReprFlags::empty()
-                    }
-                });
-            }
+        for r in attr::find_repr_attrs(&tcx.sess.parse_sess, tcx.get_attrs(did)) {
+            flags.insert(match r {
+                attr::ReprC => ReprFlags::IS_C,
+                attr::ReprPacked(pack) => {
+                    let pack = Align::from_bytes(pack as u64).unwrap();
+                    min_pack =
+                        Some(if let Some(min_pack) = min_pack { min_pack.min(pack) } else { pack });
+                    ReprFlags::empty()
+                }
+                attr::ReprTransparent => ReprFlags::IS_TRANSPARENT,
+                attr::ReprNoNiche => ReprFlags::HIDE_NICHE,
+                attr::ReprSimd => ReprFlags::IS_SIMD,
+                attr::ReprInt(i) => {
+                    size = Some(i);
+                    ReprFlags::empty()
+                }
+                attr::ReprAlign(align) => {
+                    max_align = max_align.max(Some(Align::from_bytes(align as u64).unwrap()));
+                    ReprFlags::empty()
+                }
+            });
         }
 
         // This is here instead of layout because the choice must make it into metadata.
