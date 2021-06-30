@@ -185,10 +185,8 @@ provide! { <'tcx> tcx, def_id, other, cdata,
     }
     native_libraries => { Lrc::new(cdata.get_native_libraries(tcx.sess)) }
     foreign_modules => { cdata.get_foreign_modules(tcx) }
-    crate_disambiguator => { cdata.root.disambiguator }
     crate_hash => { cdata.root.hash }
     crate_host_hash => { cdata.host_hash }
-    crate_name => { cdata.root.name }
 
     extra_filename => { cdata.root.extra_filename.clone() }
 

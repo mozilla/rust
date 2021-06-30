@@ -1233,10 +1233,6 @@ rustc_queries! {
     query proc_macro_decls_static(_: ()) -> Option<LocalDefId> {
         desc { "looking up the derive registrar for a crate" }
     }
-    query crate_disambiguator(_: CrateNum) -> CrateDisambiguator {
-        eval_always
-        desc { "looking up the disambiguator a crate" }
-    }
     // The macro which defines `rustc_metadata::provide_extern` depends on this query's name.
     // Changing the name should cause a compiler error, but in case that changes, be aware.
     query crate_hash(_: CrateNum) -> Svh {
@@ -1339,10 +1335,6 @@ rustc_queries! {
     query dep_kind(_: CrateNum) -> CrateDepKind {
         eval_always
         desc { "fetching what a dependency looks like" }
-    }
-    query crate_name(_: CrateNum) -> Symbol {
-        eval_always
-        desc { "fetching what a crate is named" }
     }
     query item_children(def_id: DefId) -> &'tcx [Export<hir::HirId>] {
         desc { |tcx| "collecting child items of `{}`", tcx.def_path_str(def_id) }
