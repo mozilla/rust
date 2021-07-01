@@ -161,13 +161,20 @@ pub struct SubstitutionPart {
     pub snippet: String,
 }
 
+/// Used to translate between `Span`s and byte positions within a single output line in highlighted
+/// code of structured suggestions.
+#[derive(Debug, Clone, Copy)]
+pub struct SubstitutionHighlight {
+    start: usize,
+    end: usize,
+}
+
 impl SubstitutionPart {
     pub fn is_addition(&self, sm: &SourceMap) -> bool {
-        self.snippet.len() != 0
+        !self.snippet.is_empty()
             && sm
                 .span_to_snippet(self.span)
-                .map(|snippet| snippet.trim().len() == 0)
-                .unwrap_or(self.span.lo() == self.span.hi())
+                .map_or(self.span.is_empty(), |snippet| snippet.trim().len() == 0)
     }
 
     pub fn is_deletion(&self) -> bool {
@@ -175,11 +182,10 @@ impl SubstitutionPart {
     }
 
     pub fn is_replacement(&self, sm: &SourceMap) -> bool {
-        self.snippet.len() != 0
+        !self.snippet.is_empty()
             && sm
                 .span_to_snippet(self.span)
-                .map(|snippet| snippet.trim().len() != 0)
-                .unwrap_or(self.span.lo() != self.span.hi())
+                .map_or(!self.span.is_empty(), |snippet| !snippet.trim().is_empty())
     }
 }
 
@@ -189,28 +195,34 @@ impl CodeSuggestion {
     pub fn splice_lines(
         &self,
         sm: &SourceMap,
-    ) -> Vec<(String, Vec<SubstitutionPart>, Vec<Vec<(usize, usize)>>, bool)> {
+    ) -> Vec<(String, Vec<SubstitutionPart>, Vec<Vec<SubstitutionHighlight>>, bool)> {
+        // For the `Vec<Vec<SubstitutionHighlight>>` value, the first level of the vector
+        // corresponds to the output snippet's lines, while the second level corresponds to the
+        // substrings within that line that should be highlighted.
+
         use rustc_span::{CharPos, Pos};
 
+        /// Append to a buffer the remainder of the line of existing source code, and return the
+        /// count of lines that have been added for accurate highlighting.
         fn push_trailing(
             buf: &mut String,
             line_opt: Option<&Cow<'_, str>>,
             lo: &Loc,
             hi_opt: Option<&Loc>,
         ) -> usize {
-            let mut count = 0;
+            let mut line_count = 0;
             let (lo, hi_opt) = (lo.col.to_usize(), hi_opt.map(|hi| hi.col.to_usize()));
             if let Some(line) = line_opt {
                 if let Some(lo) = line.char_indices().map(|(i, _)| i).nth(lo) {
                     let hi_opt = hi_opt.and_then(|hi| line.char_indices().map(|(i, _)| i).nth(hi));
                     match hi_opt {
                         Some(hi) if hi > lo => {
-                            count = line[lo..hi].matches('\n').count();
+                            line_count = line[lo..hi].matches('\n').count();
                             buf.push_str(&line[lo..hi])
                         }
                         Some(_) => (),
                         None => {
-                            count = line[lo..].matches('\n').count();
+                            line_count = line[lo..].matches('\n').count();
                             buf.push_str(&line[lo..])
                         }
                     }
@@ -219,7 +231,7 @@ impl CodeSuggestion {
                     buf.push('\n');
                 }
             }
-            count
+            line_count
         }
 
         assert!(!self.substitutions.is_empty());
@@ -305,14 +317,14 @@ impl CodeSuggestion {
                         }
                     }
                     // Add a whole line highlight per line in the snippet.
-                    line_highlight.push((
-                        cur_lo.col.0,
-                        cur_lo.col.0
+                    line_highlight.push(SubstitutionHighlight {
+                        start: cur_lo.col.0,
+                        end: cur_lo.col.0
                             + part.snippet.split('\n').next().unwrap_or(&part.snippet).len(),
-                    ));
+                    });
                     for line in part.snippet.split('\n').skip(1) {
                         highlights.push(std::mem::take(&mut line_highlight));
-                        line_highlight.push((0, line.len()));
+                        line_highlight.push(SubstitutionHighlight { start: 0, end: line.len() });
                     }
                     buf.push_str(&part.snippet);
                     prev_hi = sm.lookup_char_pos(part.span.hi());

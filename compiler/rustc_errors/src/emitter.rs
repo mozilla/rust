@@ -15,7 +15,10 @@ use rustc_span::{MultiSpan, SourceFile, Span};
 
 use crate::snippet::{Annotation, AnnotationType, Line, MultilineAnnotation, Style, StyledString};
 use crate::styled_buffer::StyledBuffer;
-use crate::{CodeSuggestion, Diagnostic, DiagnosticId, Level, SubDiagnostic, SuggestionStyle};
+use crate::{
+    CodeSuggestion, Diagnostic, DiagnosticId, Level, SubDiagnostic, SubstitutionHighlight,
+    SuggestionStyle,
+};
 
 use rustc_lint_defs::pluralize;
 
@@ -1658,7 +1661,7 @@ impl EmitterWriter {
                     buffer.puts(row_num, max_line_num_len + 1, "+ ", Style::Addition);
                 } else if is_multiline {
                     match &parts[..] {
-                        [(0, end)] if *end == line.len() => {
+                        [SubstitutionHighlight { start: 0, end }] if *end == line.len() => {
                             buffer.puts(row_num, max_line_num_len + 1, "+ ", Style::Addition);
                         }
                         [] => {
@@ -1676,7 +1679,7 @@ impl EmitterWriter {
                 buffer.append(row_num, &replace_tabs(line), Style::NoStyle);
 
                 if is_multiline {
-                    for (start, end) in parts {
+                    for SubstitutionHighlight { start, end } in parts {
                         buffer.set_style_range(
                             row_num,
                             max_line_num_len + 3 + start,
@@ -1695,7 +1698,6 @@ impl EmitterWriter {
             // Only show an underline in the suggestions if the suggestion is not the
             // entirety of the code being shown and the displayed code is not multiline.
             if show_underline {
-                let padding: usize = max_line_num_len + 3;
                 draw_col_separator(&mut buffer, row_num, max_line_num_len + 1);
                 for part in parts {
                     let span_start_pos = sm.lookup_char_pos(part.span.lo()).col_display;
@@ -1721,6 +1723,7 @@ impl EmitterWriter {
                     let underline_start = (span_start_pos + start) as isize + offset;
                     let underline_end = (span_start_pos + start + sub_len) as isize + offset;
                     assert!(underline_start >= 0 && underline_end >= 0);
+                    let padding: usize = max_line_num_len + 3;
                     for p in underline_start..underline_end {
                         // Colorize addition/replacements with green.
                         buffer.set_style(
