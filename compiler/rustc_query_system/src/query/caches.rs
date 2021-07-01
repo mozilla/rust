@@ -221,3 +221,88 @@ where
         }
     }
 }
+
+pub struct SingletonCacheSelector;
+
+impl<K: Eq + Hash, V: Clone> CacheSelector<K, V> for SingletonCacheSelector {
+    type Cache = SingletonCache<K, V>;
+}
+
+pub struct SingletonCache<K, V>(PhantomData<(K, V)>);
+
+impl<K, V> Default for SingletonCache<K, V> {
+    fn default() -> Self {
+        SingletonCache(PhantomData)
+    }
+}
+
+impl<K, V> SingletonCache<K, V> {
+    const KEY_IS_ZST: () = {
+        if std::mem::size_of::<K>() != 0 {
+            panic!("Key must be a ZST");
+        }
+    };
+}
+
+impl<K: Eq + Hash, V: Clone + Debug> QueryStorage for SingletonCache<K, V> {
+    type Value = V;
+    type Stored = V;
+
+    #[inline]
+    fn store_nocache(&self, value: Self::Value) -> Self::Stored {
+        // We have no dedicated storage
+        value
+    }
+}
+
+impl<K, V> QueryCache for SingletonCache<K, V>
+where
+    K: Eq + Hash + Copy + Clone + Debug,
+    V: Clone + Debug,
+{
+    type Key = K;
+    type Sharded = Option<(K, V, DepNodeIndex)>;
+
+    #[inline(always)]
+    fn lookup<'s, R, OnHit>(
+        &self,
+        state: &'s QueryCacheStore<Self>,
+        _key: &K,
+        on_hit: OnHit,
+    ) -> Result<R, QueryLookup>
+    where
+        OnHit: FnOnce(&V, DepNodeIndex) -> R,
+    {
+        let _ = Self::KEY_IS_ZST;
+
+        let lock = state.shards.get_shard_by_index(0).lock();
+        if let Some((_key, val, dep_node)) = &*lock {
+            Ok(on_hit(&val, *dep_node))
+        } else {
+            Err(QueryLookup { key_hash: 0, shard: 0 })
+        }
+    }
+
+    #[inline]
+    fn complete(
+        &self,
+        lock_sharded_storage: &mut Self::Sharded,
+        key: K,
+        value: V,
+        index: DepNodeIndex,
+    ) -> Self::Stored {
+        *lock_sharded_storage = Some((key, value.clone(), index));
+        value
+    }
+
+    fn iter(
+        &self,
+        shards: &Sharded<Self::Sharded>,
+        f: &mut dyn FnMut(&Self::Key, &Self::Value, DepNodeIndex),
+    ) {
+        let lock = shards.get_shard_by_index(0).lock();
+        if let Some((key, val, dep_node)) = &*lock {
+            f(&key, &val, *dep_node);
+        }
+    }
+}

@@ -117,7 +117,7 @@ macro_rules! query_storage {
     ([storage($ty:ty) $($rest:tt)*][$K:ty, $V:ty]) => {
         <$ty as CacheSelector<$K, $V>>::Cache
     };
-    ([$other:ident $(($($other_args:tt)*))* $(, $($modifiers:tt)*)*][$($args:tt)*]) => {
+    ([$other:ident $(($($other_args:tt)*))* $(, $($modifiers:tt)*)?][$($args:tt)*]) => {
         query_storage!([$($($modifiers)*)*][$($args)*])
     };
 }
