@@ -6,6 +6,7 @@ use crate::infer::at::At;
 use crate::infer::canonical::OriginalQueryValues;
 use crate::infer::{InferCtxt, InferOk};
 use crate::traits::error_reporting::InferCtxtExt;
+use crate::traits::project::needs_normalization;
 use crate::traits::{Obligation, ObligationCause, PredicateObligation, Reveal};
 use rustc_data_structures::sso::SsoHashMap;
 use rustc_data_structures::stack::ensure_sufficient_stack;
@@ -49,7 +50,7 @@ impl<'cx, 'tcx> AtExt<'tcx> for At<'cx, 'tcx> {
             value,
             self.param_env,
         );
-        if !value.has_projections() {
+        if !needs_normalization(&value, self.param_env.reveal()) {
             return Ok(Normalized { value, obligations: vec![] });
         }
 
@@ -64,7 +65,7 @@ impl<'cx, 'tcx> AtExt<'tcx> for At<'cx, 'tcx> {
         };
 
         let result = value.fold_with(&mut normalizer);
-        debug!(
+        info!(
             "normalize::<{}>: result={:?} with {} obligations",
             std::any::type_name::<T>(),
             result,
@@ -100,7 +101,7 @@ impl<'cx, 'tcx> TypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
 
     #[instrument(level = "debug", skip(self))]
     fn fold_ty(&mut self, ty: Ty<'tcx>) -> Ty<'tcx> {
-        if !ty.has_projections() {
+        if !needs_normalization(&ty, self.param_env.reveal()) {
             return ty;
         }
 
@@ -108,14 +109,25 @@ impl<'cx, 'tcx> TypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
             return ty;
         }
 
-        let ty = ty.super_fold_with(self);
+        // N.b. while we want to call `super_fold_with(self)` on `ty` before
+        // normalization, we wait until we know whether we need to normalize the
+        // current type. If we do, then we only fold the ty *after* replacing bound
+        // vars with placeholders. This means that nested types don't need to replace
+        // bound vars at the current binder level or above. A key assumption here is
+        // that folding the type can't introduce new bound vars.
+
+        // Wrap this in a closure so we don't accidentally return from the outer function
         let res = (|| match *ty.kind() {
-            ty::Opaque(def_id, substs) if !substs.has_escaping_bound_vars() => {
+            ty::Opaque(def_id, substs) => {
                 // Only normalize `impl Trait` after type-checking, usually in codegen.
                 match self.param_env.reveal() {
-                    Reveal::UserFacing => ty,
+                    Reveal::UserFacing => ty.super_fold_with(self),
 
                     Reveal::All => {
+                        // N.b. there is an assumption here all this code can handle
+                        // escaping bound vars.
+
+                        let substs = substs.super_fold_with(self);
                         let recursion_limit = self.tcx().sess.recursion_limit();
                         if !recursion_limit.value_within_limit(self.anon_depth) {
                             let obligation = Obligation::with_depth(
@@ -147,20 +159,12 @@ impl<'cx, 'tcx> TypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
                 }
             }
 
-            ty::Projection(data) if !data.has_escaping_bound_vars() => {
-                // This is kind of hacky -- we need to be able to
-                // handle normalization within binders because
-                // otherwise we wind up a need to normalize when doing
-                // trait matching (since you can have a trait
-                // obligation like `for<'a> T::B: Fn(&'a i32)`), but
-                // we can't normalize with bound regions in scope. So
-                // far now we just ignore binders but only normalize
-                // if all bound regions are gone (and then we still
-                // have to renormalize whenever we instantiate a
-                // binder). It would be better to normalize in a
-                // binding-aware fashion.
-
+            ty::Projection(data) => {
                 let tcx = self.infcx.tcx;
+                let infcx = self.infcx;
+                let (data, mapped_regions, mapped_types, mapped_consts) =
+                    crate::traits::project::BoundVarReplacer::replace_bound_vars(infcx, data);
+                let data = data.super_fold_with(self);
 
                 let mut orig_values = OriginalQueryValues::default();
                 // HACK(matthewjasper) `'static` is special-cased in selection,
@@ -170,7 +174,7 @@ impl<'cx, 'tcx> TypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
                     .canonicalize_hr_query_hack(self.param_env.and(data), &mut orig_values);
                 debug!("QueryNormalizer: c_data = {:#?}", c_data);
                 debug!("QueryNormalizer: orig_values = {:#?}", orig_values);
-                match tcx.normalize_projection_ty(c_data) {
+                let normalized_ty = match tcx.normalize_projection_ty(c_data) {
                     Ok(result) => {
                         // We don't expect ambiguity.
                         if result.is_ambiguous() {
@@ -202,10 +206,17 @@ impl<'cx, 'tcx> TypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
                         self.error = true;
                         ty
                     }
-                }
+                };
+                crate::traits::project::PlaceholderReplacer::replace_placeholders(
+                    infcx,
+                    mapped_regions,
+                    mapped_types,
+                    mapped_consts,
+                    normalized_ty,
+                )
             }
 
-            _ => ty,
+            _ => ty.super_fold_with(self),
         })();
         self.cache.insert(ty, res);
         res

@@ -1,0 +1,11 @@
+error: implementation of `MyTrait` is not general enough
+  --> $DIR/issue-70120.rs:26:5
+   |
+LL |     meow(struc, |foo| {
+   |     ^^^^ implementation of `MyTrait` is not general enough
+   |
+   = note: `MyStruct` must implement `MyTrait<'0>`, for any lifetime `'0`...
+   = note: ...but it actually implements `MyTrait<'1>`, for some specific lifetime `'1`
+
+error: aborting due to previous error
+

@@ -1,5 +1,7 @@
 //! Code for projecting associated types out of trait references.
 
+use std::collections::BTreeMap;
+
 use super::specialization_graph;
 use super::translate_substs;
 use super::util;
@@ -271,7 +273,7 @@ where
     Normalized { value, obligations }
 }
 
-#[instrument(level = "debug", skip(selcx, param_env, cause, obligations))]
+#[instrument(level = "info", skip(selcx, param_env, cause, obligations))]
 pub fn normalize_with_depth_to<'a, 'b, 'tcx, T>(
     selcx: &'a mut SelectionContext<'b, 'tcx>,
     param_env: ty::ParamEnv<'tcx>,
@@ -283,11 +285,24 @@ pub fn normalize_with_depth_to<'a, 'b, 'tcx, T>(
 where
     T: TypeFoldable<'tcx>,
 {
+    debug!(obligations.len = obligations.len());
     let mut normalizer = AssocTypeNormalizer::new(selcx, param_env, cause, depth, obligations);
     let result = ensure_sufficient_stack(|| normalizer.fold(value));
     debug!(?result, obligations.len = normalizer.obligations.len());
     debug!(?normalizer.obligations,);
     result
+}
+
+pub(crate) fn needs_normalization<'tcx, T: TypeFoldable<'tcx>>(value: &T, reveal: Reveal) -> bool {
+    match reveal {
+        Reveal::UserFacing => value
+            .has_type_flags(ty::TypeFlags::HAS_TY_PROJECTION | ty::TypeFlags::HAS_CT_PROJECTION),
+        Reveal::All => value.has_type_flags(
+            ty::TypeFlags::HAS_TY_PROJECTION
+                | ty::TypeFlags::HAS_TY_OPAQUE
+                | ty::TypeFlags::HAS_CT_PROJECTION,
+        ),
+    }
 }
 
 struct AssocTypeNormalizer<'a, 'b, 'tcx> {
@@ -311,8 +326,13 @@ impl<'a, 'b, 'tcx> AssocTypeNormalizer<'a, 'b, 'tcx> {
 
     fn fold<T: TypeFoldable<'tcx>>(&mut self, value: T) -> T {
         let value = self.selcx.infcx().resolve_vars_if_possible(value);
+        debug!(?value);
 
-        if !value.has_projections() { value } else { value.fold_with(self) }
+        if !needs_normalization(&value, self.param_env.reveal()) {
+            value
+        } else {
+            value.fold_with(self)
+        }
     }
 }
 
@@ -322,28 +342,28 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
     }
 
     fn fold_ty(&mut self, ty: Ty<'tcx>) -> Ty<'tcx> {
-        if !ty.has_projections() {
+        if !needs_normalization(&ty, self.param_env.reveal()) {
             return ty;
         }
-        // We don't want to normalize associated types that occur inside of region
-        // binders, because they may contain bound regions, and we can't cope with that.
-        //
-        // Example:
-        //
-        //     for<'a> fn(<T as Foo<&'a>>::A)
-        //
-        // Instead of normalizing `<T as Foo<&'a>>::A` here, we'll
-        // normalize it when we instantiate those bound regions (which
-        // should occur eventually).
 
-        let ty = ty.super_fold_with(self);
+        // N.b. while we want to call `super_fold_with(self)` on `ty` before
+        // normalization, we wait until we know whether we need to normalize the
+        // current type. If we do, then we only fold the ty *after* replacing bound
+        // vars with placeholders. This means that nested types don't need to replace
+        // bound vars at the current binder level or above. A key assumption here is
+        // that folding the type can't introduce new bound vars.
+
         match *ty.kind() {
-            ty::Opaque(def_id, substs) if !substs.has_escaping_bound_vars() => {
+            ty::Opaque(def_id, substs) => {
                 // Only normalize `impl Trait` after type-checking, usually in codegen.
                 match self.param_env.reveal() {
-                    Reveal::UserFacing => ty,
+                    Reveal::UserFacing => ty.super_fold_with(self),
 
                     Reveal::All => {
+                        // N.b. there is an assumption here all this code can handle
+                        // escaping bound vars.
+
+                        let substs = substs.super_fold_with(self);
                         let recursion_limit = self.tcx().sess.recursion_limit();
                         if !recursion_limit.value_within_limit(self.depth) {
                             let obligation = Obligation::with_depth(
@@ -365,19 +385,11 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
                 }
             }
 
-            ty::Projection(data) if !data.has_escaping_bound_vars() => {
-                // This is kind of hacky -- we need to be able to
-                // handle normalization within binders because
-                // otherwise we wind up a need to normalize when doing
-                // trait matching (since you can have a trait
-                // obligation like `for<'a> T::B: Fn(&'a i32)`), but
-                // we can't normalize with bound regions in scope. So
-                // far now we just ignore binders but only normalize
-                // if all bound regions are gone (and then we still
-                // have to renormalize whenever we instantiate a
-                // binder). It would be better to normalize in a
-                // binding-aware fashion.
-
+            ty::Projection(data) => {
+                let infcx = self.selcx.infcx();
+                let (data, mapped_regions, mapped_types, mapped_consts) =
+                    BoundVarReplacer::replace_bound_vars(infcx, data);
+                let data = data.super_fold_with(self);
                 let normalized_ty = normalize_projection_type(
                     self.selcx,
                     self.param_env,
@@ -385,6 +397,13 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
                     self.cause.clone(),
                     self.depth,
                     &mut self.obligations,
+                );
+                let normalized_ty = PlaceholderReplacer::replace_placeholders(
+                    infcx,
+                    mapped_regions,
+                    mapped_types,
+                    mapped_consts,
+                    normalized_ty,
                 );
                 debug!(
                     ?self.depth,
@@ -396,7 +415,7 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
                 normalized_ty
             }
 
-            _ => ty,
+            _ => ty.super_fold_with(self),
         }
     }
 
@@ -406,6 +425,226 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
         } else {
             let constant = constant.super_fold_with(self);
             constant.eval(self.selcx.tcx(), self.param_env)
+        }
+    }
+}
+
+pub struct BoundVarReplacer<'me, 'tcx> {
+    pub infcx: &'me InferCtxt<'me, 'tcx>,
+    pub mapped_regions: BTreeMap<ty::PlaceholderRegion, ty::BoundRegion>,
+    pub mapped_types: BTreeMap<ty::PlaceholderType, ty::BoundTy>,
+    pub mapped_consts: BTreeMap<ty::PlaceholderConst<'tcx>, ty::BoundVar>,
+    pub universes: BTreeMap<ty::DebruijnIndex, ty::UniverseIndex>,
+    pub current_index: ty::DebruijnIndex,
+}
+
+impl<'me, 'tcx> BoundVarReplacer<'me, 'tcx> {
+    pub fn replace_bound_vars<T: TypeFoldable<'tcx>>(
+        infcx: &'me InferCtxt<'me, 'tcx>,
+        value: T,
+    ) -> (
+        T,
+        BTreeMap<ty::PlaceholderRegion, ty::BoundRegion>,
+        BTreeMap<ty::PlaceholderType, ty::BoundTy>,
+        BTreeMap<ty::PlaceholderConst<'tcx>, ty::BoundVar>,
+    ) {
+        let mapped_regions: BTreeMap<ty::PlaceholderRegion, ty::BoundRegion> = BTreeMap::new();
+        let mapped_types: BTreeMap<ty::PlaceholderType, ty::BoundTy> = BTreeMap::new();
+        let mapped_consts: BTreeMap<ty::PlaceholderConst<'tcx>, ty::BoundVar> = BTreeMap::new();
+
+        let mut replacer = BoundVarReplacer {
+            infcx,
+            mapped_regions,
+            mapped_types,
+            mapped_consts,
+            universes: BTreeMap::new(),
+            current_index: ty::INNERMOST,
+        };
+
+        let value = value.super_fold_with(&mut replacer);
+
+        (value, replacer.mapped_regions, replacer.mapped_types, replacer.mapped_consts)
+    }
+}
+
+impl TypeFolder<'tcx> for BoundVarReplacer<'_, 'tcx> {
+    fn tcx<'b>(&'b self) -> TyCtxt<'tcx> {
+        self.infcx.tcx
+    }
+
+    fn fold_binder<T: TypeFoldable<'tcx>>(
+        &mut self,
+        t: ty::Binder<'tcx, T>,
+    ) -> ty::Binder<'tcx, T> {
+        self.current_index.shift_in(1);
+        let t = t.super_fold_with(self);
+        self.current_index.shift_out(1);
+        t
+    }
+
+    fn fold_region(&mut self, r: ty::Region<'tcx>) -> ty::Region<'tcx> {
+        match *r {
+            ty::ReLateBound(debruijn, br) => {
+                let infcx = self.infcx;
+                let placeholder_db_index =
+                    ty::DebruijnIndex::from_u32(self.current_index.as_u32() - debruijn.as_u32());
+                let universe = *self
+                    .universes
+                    .entry(placeholder_db_index)
+                    .or_insert_with(|| infcx.create_next_universe());
+                let p = ty::PlaceholderRegion { universe, name: br.kind };
+                self.mapped_regions.insert(p.clone(), br);
+                self.infcx.tcx.mk_region(ty::RePlaceholder(p))
+            }
+            _ => r,
+        }
+    }
+
+    fn fold_ty(&mut self, t: Ty<'tcx>) -> Ty<'tcx> {
+        match *t.kind() {
+            ty::Bound(debruijn, bound_ty) => {
+                let infcx = self.infcx;
+                let placeholder_db_index =
+                    ty::DebruijnIndex::from_u32(self.current_index.as_u32() - debruijn.as_u32());
+                let universe = *self
+                    .universes
+                    .entry(placeholder_db_index)
+                    .or_insert_with(|| infcx.create_next_universe());
+                let p = ty::PlaceholderType { universe, name: bound_ty.var };
+                self.mapped_types.insert(p.clone(), bound_ty);
+                self.infcx.tcx.mk_ty(ty::Placeholder(p))
+            }
+            _ if t.has_vars_bound_at_or_above(self.current_index) => t.super_fold_with(self),
+            _ => t,
+        }
+    }
+
+    fn fold_const(&mut self, ct: &'tcx ty::Const<'tcx>) -> &'tcx ty::Const<'tcx> {
+        match *ct {
+            ty::Const { val: ty::ConstKind::Bound(debruijn, bound_const), ty } => {
+                let infcx = self.infcx;
+                let placeholder_db_index =
+                    ty::DebruijnIndex::from_u32(self.current_index.as_u32() - debruijn.as_u32());
+                let universe = *self
+                    .universes
+                    .entry(placeholder_db_index)
+                    .or_insert_with(|| infcx.create_next_universe());
+                let p = ty::PlaceholderConst {
+                    universe,
+                    name: ty::BoundConst { var: bound_const, ty },
+                };
+                self.mapped_consts.insert(p.clone(), bound_const);
+                self.infcx.tcx.mk_const(ty::Const { val: ty::ConstKind::Placeholder(p), ty })
+            }
+            _ if ct.has_vars_bound_at_or_above(self.current_index) => ct.super_fold_with(self),
+            _ => ct,
+        }
+    }
+}
+
+pub struct PlaceholderReplacer<'me, 'tcx> {
+    pub infcx: &'me InferCtxt<'me, 'tcx>,
+    pub mapped_regions: BTreeMap<ty::PlaceholderRegion, ty::BoundRegion>,
+    pub mapped_types: BTreeMap<ty::PlaceholderType, ty::BoundTy>,
+    pub mapped_consts: BTreeMap<ty::PlaceholderConst<'tcx>, ty::BoundVar>,
+    pub current_index: ty::DebruijnIndex,
+}
+
+impl<'me, 'tcx> PlaceholderReplacer<'me, 'tcx> {
+    pub fn replace_placeholders<T: TypeFoldable<'tcx>>(
+        infcx: &'me InferCtxt<'me, 'tcx>,
+        mapped_regions: BTreeMap<ty::PlaceholderRegion, ty::BoundRegion>,
+        mapped_types: BTreeMap<ty::PlaceholderType, ty::BoundTy>,
+        mapped_consts: BTreeMap<ty::PlaceholderConst<'tcx>, ty::BoundVar>,
+        value: T,
+    ) -> T {
+        let mut replacer = PlaceholderReplacer {
+            infcx,
+            mapped_regions,
+            mapped_types,
+            mapped_consts,
+            current_index: ty::INNERMOST,
+        };
+        value.super_fold_with(&mut replacer)
+    }
+}
+
+impl TypeFolder<'tcx> for PlaceholderReplacer<'_, 'tcx> {
+    fn tcx<'b>(&'b self) -> TyCtxt<'tcx> {
+        self.infcx.tcx
+    }
+
+    fn fold_binder<T: TypeFoldable<'tcx>>(
+        &mut self,
+        t: ty::Binder<'tcx, T>,
+    ) -> ty::Binder<'tcx, T> {
+        if !t.has_placeholders() && !t.has_infer_regions() {
+            return t;
+        }
+        self.current_index.shift_in(1);
+        let t = t.super_fold_with(self);
+        self.current_index.shift_out(1);
+        t
+    }
+
+    fn fold_region(&mut self, r0: ty::Region<'tcx>) -> ty::Region<'tcx> {
+        let r1 = match r0 {
+            ty::ReVar(_) => self
+                .infcx
+                .inner
+                .borrow_mut()
+                .unwrap_region_constraints()
+                .opportunistic_resolve_region(self.infcx.tcx, r0),
+            _ => r0,
+        };
+
+        let r2 = match *r1 {
+            ty::RePlaceholder(p) => {
+                let replace_var = self.mapped_regions.get(&p);
+                match replace_var {
+                    Some(replace_var) => {
+                        self.tcx().mk_region(ty::ReLateBound(self.current_index, *replace_var))
+                    }
+                    None => r1,
+                }
+            }
+            _ => r1,
+        };
+
+        debug!(?r0, ?r1, ?r2, "fold_region");
+
+        r2
+    }
+
+    fn fold_ty(&mut self, ty: Ty<'tcx>) -> Ty<'tcx> {
+        match *ty.kind() {
+            ty::Placeholder(p) => {
+                let replace_var = self.mapped_types.get(&p);
+                match replace_var {
+                    Some(replace_var) => {
+                        self.tcx().mk_ty(ty::Bound(self.current_index, *replace_var))
+                    }
+                    None => ty,
+                }
+            }
+
+            _ if ty.has_placeholders() || ty.has_infer_regions() => ty.super_fold_with(self),
+            _ => ty,
+        }
+    }
+
+    fn fold_const(&mut self, ct: &'tcx ty::Const<'tcx>) -> &'tcx ty::Const<'tcx> {
+        if let ty::Const { val: ty::ConstKind::Placeholder(p), ty } = *ct {
+            let replace_var = self.mapped_consts.get(&p);
+            match replace_var {
+                Some(replace_var) => self.tcx().mk_const(ty::Const {
+                    val: ty::ConstKind::Bound(self.current_index, *replace_var),
+                    ty,
+                }),
+                None => ct,
+            }
+        } else {
+            ct.super_fold_with(self)
         }
     }
 }
@@ -487,7 +726,7 @@ fn opt_normalize_projection_type<'a, 'b, 'tcx>(
 
     let cache_result = infcx.inner.borrow_mut().projection_cache().try_start(cache_key);
     match cache_result {
-        Ok(()) => {}
+        Ok(()) => debug!("no cache"),
         Err(ProjectionCacheEntry::Ambiguous) => {
             // If we found ambiguity the last time, that means we will continue
             // to do so until some type in the key changes (and we know it
@@ -514,6 +753,7 @@ fn opt_normalize_projection_type<'a, 'b, 'tcx>(
             return Err(InProgress);
         }
         Err(ProjectionCacheEntry::Recur) => {
+            debug!("recur cache");
             return Err(InProgress);
         }
         Err(ProjectionCacheEntry::NormalizedTy(ty)) => {
@@ -552,6 +792,9 @@ fn opt_normalize_projection_type<'a, 'b, 'tcx>(
             // re-normalize it
 
             debug!(?projected_ty, ?depth, ?projected_obligations);
+
+            let projected_ty = selcx.infcx().resolve_vars_if_possible(projected_ty);
+            debug!(?projected_ty);
 
             let result = if projected_ty.has_projections() {
                 let mut normalizer = AssocTypeNormalizer::new(
@@ -720,12 +963,11 @@ impl<'tcx> Progress<'tcx> {
 ///
 /// IMPORTANT:
 /// - `obligation` must be fully normalized
+#[tracing::instrument(level = "info", skip(selcx))]
 fn project_type<'cx, 'tcx>(
     selcx: &mut SelectionContext<'cx, 'tcx>,
     obligation: &ProjectionTyObligation<'tcx>,
 ) -> Result<ProjectedTy<'tcx>, ProjectionTyError<'tcx>> {
-    debug!(?obligation, "project_type");
-
     if !selcx.tcx().sess.recursion_limit().value_within_limit(obligation.recursion_depth) {
         debug!("project: overflow!");
         // This should really be an immediate error, but some existing code

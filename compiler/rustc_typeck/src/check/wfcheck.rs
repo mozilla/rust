@@ -379,14 +379,13 @@ fn check_param_wf(tcx: TyCtxt<'_>, param: &hir::GenericParam<'_>) {
     }
 }
 
+#[tracing::instrument(level = "debug", skip(tcx, span, sig_if_method))]
 fn check_associated_item(
     tcx: TyCtxt<'_>,
     item_id: hir::HirId,
     span: Span,
     sig_if_method: Option<&hir::FnSig<'_>>,
 ) {
-    debug!("check_associated_item: {:?}", item_id);
-
     let code = ObligationCauseCode::MiscObligation;
     for_id(tcx, item_id, span).with_fcx(|fcx| {
         let item = fcx.tcx.associated_item(fcx.tcx.hir().local_def_id(item_id));
@@ -406,7 +405,6 @@ fn check_associated_item(
             }
             ty::AssocKind::Fn => {
                 let sig = fcx.tcx.fn_sig(item.def_id);
-                let sig = fcx.normalize_associated_types_in(span, sig);
                 let hir_sig = sig_if_method.expect("bad signature for method");
                 check_fn_or_method(
                     fcx,
@@ -611,7 +609,6 @@ fn check_item_fn(
     for_id(tcx, item_id, span).with_fcx(|fcx| {
         let def_id = tcx.hir().local_def_id(item_id);
         let sig = tcx.fn_sig(def_id);
-        let sig = fcx.normalize_associated_types_in(span, sig);
         let mut implied_bounds = vec![];
         check_fn_or_method(fcx, ident.span, sig, decl, def_id.to_def_id(), &mut implied_bounds);
         implied_bounds
@@ -647,14 +644,13 @@ fn check_item_type(tcx: TyCtxt<'_>, item_id: hir::HirId, ty_span: Span, allow_fo
     });
 }
 
+#[tracing::instrument(level = "debug", skip(tcx, ast_self_ty, ast_trait_ref))]
 fn check_impl<'tcx>(
     tcx: TyCtxt<'tcx>,
     item: &'tcx hir::Item<'tcx>,
     ast_self_ty: &hir::Ty<'_>,
     ast_trait_ref: &Option<hir::TraitRef<'_>>,
 ) {
-    debug!("check_impl: {:?}", item);
-
     for_item(tcx, item).with_fcx(|fcx| {
         match *ast_trait_ref {
             Some(ref ast_trait_ref) => {
@@ -672,6 +668,7 @@ fn check_impl<'tcx>(
                     ast_trait_ref.path.span,
                     Some(item),
                 );
+                debug!(?obligations);
                 for obligation in obligations {
                     fcx.register_predicate(obligation);
                 }
@@ -902,8 +899,8 @@ fn check_fn_or_method<'fcx, 'tcx>(
     def_id: DefId,
     implied_bounds: &mut Vec<Ty<'tcx>>,
 ) {
-    let sig = fcx.normalize_associated_types_in(span, sig);
     let sig = fcx.tcx.liberate_late_bound_regions(def_id, sig);
+    let sig = fcx.normalize_associated_types_in(span, sig);
 
     for (&input_ty, ty) in iter::zip(sig.inputs(), hir_decl.inputs) {
         fcx.register_wf_obligation(input_ty.into(), ty.span, ObligationCauseCode::MiscObligation);
@@ -1081,20 +1078,20 @@ fn check_method_receiver<'fcx, 'tcx>(
     let span = fn_sig.decl.inputs[0].span;
 
     let sig = fcx.tcx.fn_sig(method.def_id);
-    let sig = fcx.normalize_associated_types_in(span, sig);
     let sig = fcx.tcx.liberate_late_bound_regions(method.def_id, sig);
+    let sig = fcx.normalize_associated_types_in(span, sig);
 
     debug!("check_method_receiver: sig={:?}", sig);
 
-    let self_ty = fcx.normalize_associated_types_in(span, self_ty);
     let self_ty =
         fcx.tcx.liberate_late_bound_regions(method.def_id, ty::Binder::bind(self_ty, fcx.tcx));
+    let self_ty = fcx.normalize_associated_types_in(span, self_ty);
 
     let receiver_ty = sig.inputs()[0];
 
-    let receiver_ty = fcx.normalize_associated_types_in(span, receiver_ty);
     let receiver_ty =
         fcx.tcx.liberate_late_bound_regions(method.def_id, ty::Binder::bind(receiver_ty, fcx.tcx));
+    let receiver_ty = fcx.normalize_associated_types_in(span, receiver_ty);
 
     if fcx.tcx.features().arbitrary_self_types {
         if !receiver_is_valid(fcx, span, receiver_ty, self_ty, true) {
