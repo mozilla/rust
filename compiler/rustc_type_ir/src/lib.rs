@@ -1,4 +1,5 @@
 #![feature(min_specialization)]
+#![feature(rustc_attrs)]
 
 #[macro_use]
 extern crate bitflags;
@@ -7,8 +8,118 @@ extern crate rustc_macros;
 
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_data_structures::unify::{EqUnifyValue, UnifyKey};
+//use rustc_serialize::{Decodable, Encodable};
+use smallvec::SmallVec;
 use std::fmt;
+use std::fmt::Debug;
+use std::hash::Hash;
 use std::mem::discriminant;
+
+pub mod codec;
+pub mod sty;
+
+pub use codec::*;
+pub use sty::*;
+
+extern crate self as rustc_type_ir;
+
+pub trait Interner {
+    type AdtDef: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+    type SubstsRef: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+    type DefId: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+    type Ty: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+    type Const: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+    type Region: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+    type TypeAndMut: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+    type Mutability: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+    type Movability: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+    type PolyFnSig: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+    type ListBinderExistentialPredicate: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+    type BinderListTy: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+    type ProjectionTy: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+    type ParamTy: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+    type BoundTy: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+    type PlaceholderType: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+    type InferTy: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+    type DelaySpanBugEmitted: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+    type PredicateKind: Clone + Debug + Hash + PartialEq + Eq;
+    type AllocId: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+}
+
+pub trait InternAs<T: ?Sized, R> {
+    type Output;
+    fn intern_with<F>(self, f: F) -> Self::Output
+    where
+        F: FnOnce(&T) -> R;
+}
+
+impl<I, T, R, E> InternAs<[T], R> for I
+where
+    E: InternIteratorElement<T, R>,
+    I: Iterator<Item = E>,
+{
+    type Output = E::Output;
+    fn intern_with<F>(self, f: F) -> Self::Output
+    where
+        F: FnOnce(&[T]) -> R,
+    {
+        E::intern_with(self, f)
+    }
+}
+
+pub trait InternIteratorElement<T, R>: Sized {
+    type Output;
+    fn intern_with<I: Iterator<Item = Self>, F: FnOnce(&[T]) -> R>(iter: I, f: F) -> Self::Output;
+}
+
+impl<T, R> InternIteratorElement<T, R> for T {
+    type Output = R;
+    fn intern_with<I: Iterator<Item = Self>, F: FnOnce(&[T]) -> R>(iter: I, f: F) -> Self::Output {
+        f(&iter.collect::<SmallVec<[_; 8]>>())
+    }
+}
+
+impl<'a, T, R> InternIteratorElement<T, R> for &'a T
+where
+    T: Clone + 'a,
+{
+    type Output = R;
+    fn intern_with<I: Iterator<Item = Self>, F: FnOnce(&[T]) -> R>(iter: I, f: F) -> Self::Output {
+        f(&iter.cloned().collect::<SmallVec<[_; 8]>>())
+    }
+}
+
+impl<T, R, E> InternIteratorElement<T, R> for Result<T, E> {
+    type Output = Result<R, E>;
+    fn intern_with<I: Iterator<Item = Self>, F: FnOnce(&[T]) -> R>(
+        mut iter: I,
+        f: F,
+    ) -> Self::Output {
+        // This code is hot enough that it's worth specializing for the most
+        // common length lists, to avoid the overhead of `SmallVec` creation.
+        // The match arms are in order of frequency. The 1, 2, and 0 cases are
+        // typically hit in ~95% of cases. We assume that if the upper and
+        // lower bounds from `size_hint` agree they are correct.
+        Ok(match iter.size_hint() {
+            (1, Some(1)) => {
+                let t0 = iter.next().unwrap()?;
+                assert!(iter.next().is_none());
+                f(&[t0])
+            }
+            (2, Some(2)) => {
+                let t0 = iter.next().unwrap()?;
+                let t1 = iter.next().unwrap()?;
+                assert!(iter.next().is_none());
+                f(&[t0, t1])
+            }
+            (0, Some(0)) => {
+                assert!(iter.next().is_none());
+                f(&[])
+            }
+            _ => f(&iter.collect::<Result<SmallVec<[_; 8]>, _>>()?),
+        })
+    }
+}
 
 bitflags! {
     /// Flags that we track on types. These flags are propagated upwards

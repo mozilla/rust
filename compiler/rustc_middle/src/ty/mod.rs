@@ -51,6 +51,7 @@ use std::{fmt, ptr, str};
 
 pub use crate::ty::diagnostics::*;
 pub use rustc_type_ir::InferTy::*;
+pub use rustc_type_ir::TyKind::*;
 pub use rustc_type_ir::*;
 
 pub use self::binding::BindingMode;
@@ -59,13 +60,12 @@ pub use self::consts::{Const, ConstInt, ConstKind, InferConst, ScalarInt, Uneval
 pub use self::context::{
     tls, CanonicalUserType, CanonicalUserTypeAnnotation, CanonicalUserTypeAnnotations,
     CtxtInterners, DelaySpanBugEmitted, FreeRegionInfo, GeneratorInteriorTypeCause, GlobalCtxt,
-    Lift, TyCtxt, TypeckResults, UserType, UserTypeAnnotationIndex,
+    Lift, TyCtxt, TyInterner, TypeckResults, UserType, UserTypeAnnotationIndex,
 };
 pub use self::instance::{Instance, InstanceDef};
 pub use self::list::List;
 pub use self::sty::BoundRegionKind::*;
 pub use self::sty::RegionKind::*;
-pub use self::sty::TyKind::*;
 pub use self::sty::{
     Binder, BoundRegion, BoundRegionKind, BoundTy, BoundTyKind, BoundVar, BoundVariableKind,
     CanonicalPolyFnSig, ClosureSubsts, ClosureSubstsParts, ConstVid, EarlyBoundRegion,

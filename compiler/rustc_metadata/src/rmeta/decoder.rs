@@ -244,10 +244,6 @@ impl<'a: 'x, 'tcx: 'x, 'x, T: Decodable<DecodeContext<'a, 'tcx>>> Lazy<[T]> {
 }
 
 impl<'a, 'tcx> DecodeContext<'a, 'tcx> {
-    fn tcx(&self) -> TyCtxt<'tcx> {
-        self.tcx.expect("missing TyCtxt in DecodeContext")
-    }
-
     fn cdata(&self) -> CrateMetadataRef<'a> {
         self.cdata.expect("missing CrateMetadata in DecodeContext")
     }
