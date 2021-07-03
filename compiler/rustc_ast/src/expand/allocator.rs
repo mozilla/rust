@@ -1,6 +1,6 @@
 use rustc_span::symbol::{sym, Symbol};
 
-#[derive(Clone, Debug, Copy, HashStable_Generic)]
+#[derive(Clone, Debug, Copy, Eq, PartialEq, HashStable_Generic)]
 pub enum AllocatorKind {
     Global,
     Default,
@@ -9,7 +9,7 @@ pub enum AllocatorKind {
 impl AllocatorKind {
     pub fn fn_name(&self, base: Symbol) -> String {
         match *self {
-            AllocatorKind::Global => format!("__rg_{}", base),
+            AllocatorKind::Global => format!("__rust_{}", base),
             AllocatorKind::Default => format!("__rdl_{}", base),
         }
     }

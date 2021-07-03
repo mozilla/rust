@@ -43,7 +43,7 @@ pub fn expand(
 
     // Generate a bunch of new items using the AllocFnFactory
     let span = ecx.with_def_site_ctxt(item.span);
-    let f = AllocFnFactory { span, kind: AllocatorKind::Global, global: item.ident, cx: ecx };
+    let f = AllocFnFactory { span, global: item.ident, cx: ecx };
 
     // Generate item statements for the allocator methods.
     let stmts = ALLOCATOR_METHODS.iter().map(|method| f.allocator_fn(method)).collect();
@@ -64,7 +64,6 @@ pub fn expand(
 
 struct AllocFnFactory<'a, 'b> {
     span: Span,
-    kind: AllocatorKind,
     global: Ident,
     cx: &'b ExtCtxt<'a>,
 }
@@ -99,7 +98,7 @@ impl AllocFnFactory<'_, '_> {
             ItemKind::Fn(box FnKind(ast::Defaultness::Final, sig, Generics::default(), block));
         let item = self.cx.item(
             self.span,
-            Ident::from_str_and_span(&self.kind.fn_name(method.name), self.span),
+            Ident::from_str_and_span(&AllocatorKind::Global.fn_name(method.name), self.span),
             self.attrs(),
             kind,
         );
@@ -118,7 +117,7 @@ impl AllocFnFactory<'_, '_> {
     }
 
     fn attrs(&self) -> Vec<Attribute> {
-        let special = sym::rustc_std_internal_symbol;
+        let special = sym::no_mangle;
         let special = self.cx.meta_word(self.span, special);
         vec![self.cx.attribute(special)]
     }
