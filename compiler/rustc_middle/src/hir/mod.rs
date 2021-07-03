@@ -29,6 +29,14 @@ pub struct IndexedHir<'hir> {
     /// Map from each owner to its parent's HirId inside another owner.
     // This map is separate from `map` to eventually allow for per-owner indexing.
     parenting: FxHashMap<LocalDefId, HirId>,
+    /// Hash of the content of HIR.
+    nodes_hash: Fingerprint,
+}
+
+impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for IndexedHir<'tcx> {
+    fn hash_stable(&self, hcx: &mut StableHashingContext<'a>, hasher: &mut StableHasher) {
+        self.nodes_hash.hash_stable(hcx, hasher)
+    }
 }
 
 /// Top-level HIR node for current owner. This only contains the node for which

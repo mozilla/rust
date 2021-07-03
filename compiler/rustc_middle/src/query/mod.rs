@@ -36,7 +36,6 @@ rustc_queries! {
     /// Avoid calling this query directly.
     query index_hir(_: ()) -> &'tcx crate::hir::IndexedHir<'tcx> {
         eval_always
-        no_hash
         desc { "index HIR" }
     }
 

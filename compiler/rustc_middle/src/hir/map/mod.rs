@@ -1,6 +1,6 @@
 use self::collector::NodeCollector;
 
-use crate::hir::{AttributeMap, IndexedHir};
+use crate::hir::IndexedHir;
 use crate::middle::cstore::CrateStore;
 use crate::ty::TyCtxt;
 use rustc_ast as ast;
@@ -961,28 +961,7 @@ pub(super) fn crate_hash(tcx: TyCtxt<'_>, crate_num: CrateNum) -> Svh {
     // We can access untracked state since we are an eval_always query.
     let mut hcx = tcx.create_stable_hashing_context();
 
-    let mut hir_body_nodes: Vec<_> = tcx
-        .index_hir(())
-        .map
-        .iter_enumerated()
-        .filter_map(|(def_id, hod)| {
-            let def_path_hash = tcx.untracked_resolutions.definitions.def_path_hash(def_id);
-            let mut hasher = StableHasher::new();
-            hod.as_ref()?.hash_stable(&mut hcx, &mut hasher);
-            AttributeMap { map: &tcx.untracked_crate.attrs, prefix: def_id }
-                .hash_stable(&mut hcx, &mut hasher);
-            Some((def_path_hash, hasher.finish()))
-        })
-        .collect();
-    hir_body_nodes.sort_unstable_by_key(|bn| bn.0);
-
-    let node_hashes = hir_body_nodes.iter().fold(
-        Fingerprint::ZERO,
-        |combined_fingerprint, &(def_path_hash, fingerprint)| {
-            combined_fingerprint.combine(def_path_hash.0.combine(fingerprint))
-        },
-    );
-
+    let hir_hash = tcx.index_hir(()).nodes_hash;
     let upstream_crates = upstream_crates(&*tcx.untracked_resolutions.cstore);
 
     // We hash the final, remapped names of all local source files so we
@@ -1002,12 +981,11 @@ pub(super) fn crate_hash(tcx: TyCtxt<'_>, crate_num: CrateNum) -> Svh {
     source_file_names.sort_unstable();
 
     let mut stable_hasher = StableHasher::new();
-    node_hashes.hash_stable(&mut hcx, &mut stable_hasher);
+    hir_hash.hash_stable(&mut hcx, &mut stable_hasher);
     upstream_crates.hash_stable(&mut hcx, &mut stable_hasher);
     source_file_names.hash_stable(&mut hcx, &mut stable_hasher);
     tcx.sess.opts.dep_tracking_hash(true).hash_stable(&mut hcx, &mut stable_hasher);
     tcx.sess.local_stable_crate_id().hash_stable(&mut hcx, &mut stable_hasher);
-    tcx.untracked_crate.non_exported_macro_attrs.hash_stable(&mut hcx, &mut stable_hasher);
 
     let crate_hash: Fingerprint = stable_hasher.finish();
     Svh::new(crate_hash.to_smaller_hash())

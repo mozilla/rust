@@ -1,18 +1,17 @@
 use crate::arena::Arena;
 use crate::hir::map::Map;
-use crate::hir::{IndexedHir, OwnerNodes, ParentedNode};
+use crate::hir::{AttributeMap, IndexedHir, OwnerNodes, ParentedNode};
 use crate::ich::StableHashingContext;
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_hir as hir;
-use rustc_hir::def_id::LocalDefId;
-use rustc_hir::def_id::CRATE_DEF_INDEX;
 use rustc_hir::definitions;
 use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_hir::*;
 use rustc_index::vec::{Idx, IndexVec};
 use rustc_session::Session;
+use rustc_span::def_id::{DefPathHash, LocalDefId, CRATE_DEF_INDEX};
 use rustc_span::source_map::SourceMap;
 use rustc_span::{Span, DUMMY_SP};
 
@@ -119,13 +118,34 @@ impl<'a, 'hir> NodeCollector<'a, 'hir> {
         collector
     }
 
-    pub(super) fn finalize_and_compute_crate_hash(mut self) -> IndexedHir<'hir> {
+    pub(super) fn finalize_and_compute_crate_hash(self) -> IndexedHir<'hir> {
+        let NodeCollector { krate, mut map, parenting, mut hcx, definitions, .. } = self;
+
         // Insert bodies into the map
-        for (id, body) in self.krate.bodies.iter() {
-            let bodies = &mut self.map[id.hir_id.owner].as_mut().unwrap().bodies;
+        for (id, body) in krate.bodies.iter() {
+            let bodies = &mut map[id.hir_id.owner].as_mut().unwrap().bodies;
             assert!(bodies.insert(id.hir_id.local_id, body).is_none());
         }
-        IndexedHir { map: self.map, parenting: self.parenting }
+
+        let mut hir_body_nodes: Vec<(DefPathHash, Fingerprint)> = map
+            .iter_enumerated()
+            .filter_map(|(def_id, hod)| {
+                let def_path_hash = definitions.def_path_hash(def_id);
+                let mut hasher = StableHasher::new();
+                hod.as_ref()?.hash_stable(&mut hcx, &mut hasher);
+                AttributeMap { map: &krate.attrs, prefix: def_id }
+                    .hash_stable(&mut hcx, &mut hasher);
+                Some((def_path_hash, hasher.finish()))
+            })
+            .collect();
+        hir_body_nodes.sort_unstable_by_key(|bn| bn.0);
+
+        let mut stable_hasher = StableHasher::new();
+        hir_body_nodes.hash_stable(&mut hcx, &mut stable_hasher);
+        krate.non_exported_macro_attrs.hash_stable(&mut hcx, &mut stable_hasher);
+        let nodes_hash = stable_hasher.finish();
+
+        IndexedHir { map, parenting, nodes_hash }
     }
 
     fn insert_entry(&mut self, id: HirId, entry: Entry<'hir>, hash: Fingerprint) {
