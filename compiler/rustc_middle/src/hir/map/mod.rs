@@ -941,6 +941,7 @@ pub(super) fn index_hir<'tcx>(tcx: TyCtxt<'tcx>, (): ()) -> &'tcx IndexedHir<'tc
     let _prof_timer = tcx.sess.prof.generic_activity("build_hir_map");
 
     // We can access untracked state since we are an eval_always query.
+    // Do not call the hir_crate query since its hashing code calls index_hir.
     let hcx = tcx.create_stable_hashing_context();
     let mut collector = NodeCollector::root(
         tcx.sess,

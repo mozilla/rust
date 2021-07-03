@@ -19,6 +19,13 @@ use rustc_index::vec::{Idx, IndexVec};
 use rustc_span::DUMMY_SP;
 use std::collections::BTreeMap;
 
+impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for rustc_hir::Crate<'tcx> {
+    fn hash_stable(&self, hcx: &mut StableHashingContext<'a>, hasher: &mut StableHasher) {
+        crate::ty::tls::with(|tcx| tcx.index_hir(()).nodes_hash).hash_stable(hcx, hasher);
+        self.modules.hash_stable(hcx, hasher);
+    }
+}
+
 /// Result of HIR indexing.
 #[derive(Debug)]
 pub struct IndexedHir<'hir> {
