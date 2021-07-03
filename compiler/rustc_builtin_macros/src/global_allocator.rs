@@ -82,7 +82,17 @@ impl AllocFnFactory<'_, '_> {
         let result = self.call_allocator(method.name, args);
         let (output_ty, output_expr) = self.ret_ty(&method.output, result);
         let decl = self.cx.fn_decl(abi_args, ast::FnRetTy::Ty(output_ty));
-        let header = FnHeader { unsafety: Unsafe::Yes(self.span), ..FnHeader::default() };
+        let header = FnHeader {
+            unsafety: Unsafe::Yes(self.span),
+            ext: ast::Extern::from_abi(Some(ast::StrLit {
+                style: ast::StrStyle::Cooked,
+                symbol: sym::C,
+                suffix: None,
+                span: self.span,
+                symbol_unescaped: sym::C,
+            })),
+            ..FnHeader::default()
+        };
         let sig = FnSig { decl, header, span: self.span };
         let block = Some(self.cx.block_expr(output_expr));
         let kind =
