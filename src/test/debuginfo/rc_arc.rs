@@ -34,5 +34,7 @@ fn main() {
     let a1 = Arc::clone(&a);
     let w2 = Arc::downgrade(&a);
 
-    print!(""); // #break
+    zzz(); // #break
 }
+
+fn zzz() { () }
