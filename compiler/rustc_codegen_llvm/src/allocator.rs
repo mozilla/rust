@@ -1,6 +1,8 @@
 use crate::attributes;
 use libc::c_uint;
-use rustc_ast::expand::allocator::{AllocatorKind, AllocatorTy, ALLOCATOR_METHODS};
+use rustc_ast::expand::allocator::{
+    default_fn_name, AllocatorKind, AllocatorTy, ALLOCATOR_METHODS,
+};
 use rustc_middle::bug;
 use rustc_middle::ty::TyCtxt;
 
@@ -65,7 +67,7 @@ pub(crate) unsafe fn codegen(
                 attributes::emit_uwtable(llfn, true);
             }
 
-            let callee = AllocatorKind::Default.fn_name(method.name);
+            let callee = default_fn_name(method.name);
             let callee =
                 llvm::LLVMRustGetOrInsertFunction(llmod, callee.as_ptr().cast(), callee.len(), ty);
             llvm::LLVMRustSetVisibility(callee, llvm::Visibility::Hidden);
