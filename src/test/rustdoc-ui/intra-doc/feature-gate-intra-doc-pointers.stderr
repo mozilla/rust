@@ -1,4 +1,4 @@
-warning: documentation for `<unknown>` links to item `pointer::add` which will not have documentation generated
+warning: documentation for `feature_gate_intra_doc_pointers` links to item `pointer::add` which will not have documentation generated
   --> $DIR/feature-gate-intra-doc-pointers.rs:1:6
    |
 LL | //! [pointer::add]
@@ -17,7 +17,7 @@ LL | //! [pointer::add]
    = help: add `#![feature(intra_doc_pointers)]` to the crate attributes to enable
    = note: rustdoc does not allow disambiguating between `*const` and `*mut`, and pointers are unstable until it does
 
-warning: documentation for `<unknown>` links to item `pointer::wrapping_add` which will not have documentation generated
+warning: documentation for `feature_gate_intra_doc_pointers` links to item `pointer::wrapping_add` which will not have documentation generated
   --> $DIR/feature-gate-intra-doc-pointers.rs:3:6
    |
 LL | //! [pointer::wrapping_add]

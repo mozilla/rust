@@ -4,7 +4,7 @@ warning: documentation for `f` links to item `S::fmt` which will not have docume
 LL |     /// Link to [`S::fmt`]
    |                  ^^^^^^^^ this item is will not be documented
    |
-   = note: `#[warn(private_intra_doc_links)]` on by default
+   = note: `#[warn(rustdoc::private_intra_doc_links)]` on by default
    = note: `S::fmt` may be in a private module with all re-exports marked as `#[doc(no_inline)]`
 
 warning: documentation for `f` links to item `S::fmt` which will not have documentation generated

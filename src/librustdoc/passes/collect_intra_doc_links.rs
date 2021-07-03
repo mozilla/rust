@@ -32,13 +32,11 @@ use std::ops::Range;
 
 use crate::core::DocContext;
 use crate::fold::DocFolder;
+use crate::html::format::HrefError;
 use crate::html::markdown::{markdown_links, MarkdownLink};
 use crate::lint::{BROKEN_INTRA_DOC_LINKS, PRIVATE_INTRA_DOC_LINKS};
 use crate::passes::Pass;
-use crate::{
-    clean::{self, utils::find_nearest_parent_module, Crate, Item, ItemLink, PrimitiveType},
-    html::render::cache::ExternalLocation,
-};
+use crate::clean::{self, utils::find_nearest_parent_module, Crate, Item, ItemLink, PrimitiveType};
 
 crate const COLLECT_INTRA_DOC_LINKS: Pass = Pass {
     name: "collect-intra-doc-links",
@@ -1259,8 +1257,11 @@ impl LinkCollector<'_, '_> {
             // Even if the item exists and is public, it may not have documentation generated
             // (e.g. if it's marked with `doc(hidden)`, or in a dependency with `--no-deps`).
             // Give a warning if so.
-            if !had_error && crate::html::format::href_inner(id, &self.cx.cache, &[]).is_none() {
-                missing_docs_for_link(self.cx, &item, id, &path_str, &diag_info);
+            if had_error {
+                return Some(());
+            }
+            if let Err(missing) = crate::html::format::href_inner(id, &self.cx.cache, &[]) {
+                missing_docs_for_link(self.cx, &item, id, missing, &path_str, &diag_info);
             }
 
             Some(())
@@ -2125,9 +2126,16 @@ fn missing_docs_for_link(
     cx: &DocContext<'_>,
     item: &Item,
     destination_id: DefId,
+    why: HrefError,
     path_str: &str,
     diag_info: &DiagnosticInfo<'_>,
 ) {
+    // FIXME: this is a bug, rustdoc should load all items into the cache before doing this check.
+    //   Otherwise, there will be false negatives where rustdoc doesn't warn but should.
+    if why == HrefError::NotInExternalCache {
+        return;
+    }
+
     let sym;
     let item_name = match item.name {
         Some(name) => {
@@ -2149,10 +2157,7 @@ fn missing_docs_for_link(
             diag.span_label(sp, "this item is will not be documented");
         }
 
-        if matches!(
-            cx.cache.extern_locations.get(&destination_id.krate),
-            Some(ExternalLocation::Unknown)
-        ) {
+        if why == HrefError::DocumentationNotBuilt {
             diag.note(&format!(
                 "`{}` is in the crate `{}`, which will not be documented",
                 path_str,
@@ -2160,6 +2165,9 @@ fn missing_docs_for_link(
             ));
             return;
         }
+
+        // shouldn't be possible to resolve private items
+        assert_ne!(why, HrefError::Private, "{:?}", destination_id);
 
         if let Some(attr) =
             cx.tcx.get_attrs(destination_id).lists(sym::doc).get_word_attr(sym::hidden)

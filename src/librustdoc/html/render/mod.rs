@@ -869,7 +869,7 @@ fn render_assoc_item(
 
                 href(did.expect_real(), cx)
                     .map(|p| format!("{}#{}.{}", p.0, ty, name))
-                    .unwrap_or_else(|| format!("#{}.{}", ty, name))
+                    .unwrap_or_else(|_| format!("#{}.{}", ty, name))
             }
         };
         let vis = meth.visibility.print_with_space(meth.def_id, cx).to_string();

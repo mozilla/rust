@@ -473,18 +473,31 @@ impl clean::GenericArgs {
     }
 }
 
-crate fn href(did: DefId, cx: &Context<'_>) -> Option<(String, ItemType, Vec<String>)> {
+// Possible errors when computing href link source for a `DefId`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+crate enum HrefError {
+    /// This item is known to rustdoc, but from a crate that does not have documentation generated.
+    ///
+    /// This can only happen for non-local items.
+    DocumentationNotBuilt,
+    /// This can only happen for non-local items, and only when `--document-private-items` is not passed.
+    Private,
+    // Not in external cache, href link should be in same page
+    NotInExternalCache,
+}
+
+crate fn href(did: DefId, cx: &Context<'_>) -> Result<(String, ItemType, Vec<String>), HrefError> {
     href_inner(did, cx.cache(), &cx.current)
 }
 
-crate fn href_inner(did: DefId, cache: &Cache, relative_to: &[String]) -> Option<(String, ItemType, Vec<String>)> {
+crate fn href_inner(did: DefId, cache: &Cache, relative_to: &[String]) -> Result<(String, ItemType, Vec<String>), HrefError> {
     fn to_module_fqp(shortty: ItemType, fqp: &[String]) -> &[String] {
         if shortty == ItemType::Module { &fqp[..] } else { &fqp[..fqp.len() - 1] }
     }
 
     trace!("calculating href for {:?}", did);
     if !did.is_local() && !cache.access_levels.is_public(did) && !cache.document_private {
-        return None;
+        return Err(HrefError::Private);
     }
 
     let (fqp, shortty, mut url_parts) = match cache.paths.get(&did) {
@@ -493,22 +506,29 @@ crate fn href_inner(did: DefId, cache: &Cache, relative_to: &[String]) -> Option
             href_relative_parts(module_fqp, relative_to)
         }),
         None => {
-            let &(ref fqp, shortty) = cache.external_paths.get(&did)?;
-            let module_fqp = to_module_fqp(shortty, fqp);
-            (
-                fqp,
-                shortty,
-                match cache.extern_locations.get(&did.krate)? {
-                    ExternalLocation::Remote(ref s) => {
-                        let s = s.trim_end_matches('/');
-                        let mut s = vec![&s[..]];
-                        s.extend(module_fqp[..].iter().map(String::as_str));
-                        s
-                    }
-                    ExternalLocation::Local => href_relative_parts(module_fqp, relative_to),
-                    ExternalLocation::Unknown => return None,
-                },
-            )
+            if let Some(&(ref fqp, shortty)) = cache.external_paths.get(&did) {
+                let module_fqp = to_module_fqp(shortty, fqp);
+                let location = match cache.extern_locations.get(&did.krate) {
+                    Some(l) => l,
+                    None => return Err(HrefError::NotInExternalCache),
+                };
+                (
+                    fqp,
+                    shortty,
+                    match location {
+                        ExternalLocation::Remote(ref s) => {
+                            let s = s.trim_end_matches('/');
+                            let mut s = vec![&s[..]];
+                            s.extend(module_fqp[..].iter().map(String::as_str));
+                            s
+                        }
+                        ExternalLocation::Local => href_relative_parts(module_fqp, relative_to),
+                        ExternalLocation::Unknown => return Err(HrefError::DocumentationNotBuilt),
+                    },
+                )
+            } else {
+                return Err(HrefError::NotInExternalCache);
+            }
         }
     };
     let last = &fqp.last().unwrap()[..];
@@ -522,7 +542,7 @@ crate fn href_inner(did: DefId, cache: &Cache, relative_to: &[String]) -> Option
             url_parts.push(&filename);
         }
     }
-    Some((url_parts.join("/"), shortty, fqp.to_vec()))
+    Ok((url_parts.join("/"), shortty, fqp.to_vec()))
 }
 
 /// Both paths should only be modules.
@@ -571,7 +591,7 @@ fn resolved_path<'a, 'cx: 'a>(
         write!(w, "{}{:#}", &last.name, last.args.print(cx))?;
     } else {
         let path = if use_absolute {
-            if let Some((_, _, fqp)) = href(did, cx) {
+            if let Ok((_, _, fqp)) = href(did, cx) {
                 format!(
                     "{}::{}",
                     fqp[..fqp.len() - 1].join("::"),
@@ -679,7 +699,7 @@ crate fn anchor<'a, 'cx: 'a>(
 ) -> impl fmt::Display + 'a {
     let parts = href(did.into(), cx);
     display_fn(move |f| {
-        if let Some((url, short_ty, fqp)) = parts {
+        if let Ok((url, short_ty, fqp)) = parts {
             write!(
                 f,
                 r#"<a class="{}" href="{}" title="{} {}">{}</a>"#,
@@ -911,7 +931,7 @@ fn fmt_type<'cx>(
                 //        look at).
                 box clean::ResolvedPath { did, .. } => {
                     match href(did.into(), cx) {
-                        Some((ref url, _, ref path)) if !f.alternate() => {
+                        Ok((ref url, _, ref path)) if !f.alternate() => {
                             write!(
                                 f,
                                 "<a class=\"type\" href=\"{url}#{shortty}.{name}\" \
