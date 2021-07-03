@@ -1057,8 +1057,7 @@ fn global_allocator_spans(sess: &Session, krate: &ast::Crate) -> Vec<Span> {
     }
     impl<'ast, 'a> visit::Visitor<'ast> for Finder<'a> {
         fn visit_item(&mut self, item: &'ast ast::Item) {
-            if item.ident.name == self.name
-                && self.sess.contains_name(&item.attrs, sym::rustc_std_internal_symbol)
+            if item.ident.name == self.name && self.sess.contains_name(&item.attrs, sym::no_mangle)
             {
                 self.spans.push(item.span);
             }
