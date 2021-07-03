@@ -30,7 +30,7 @@ use std::mem;
 use std::rc::Rc;
 
 use crate::clean::inline::build_external_trait;
-use crate::clean::{self, FakeDefId, TraitWithExtraInfo};
+use crate::clean::{self, Crate, FakeDefId, TraitWithExtraInfo};
 use crate::config::{Options as RustdocOptions, OutputFormat, RenderOptions};
 use crate::formats::cache::Cache;
 use crate::passes::{self, Condition::*, ConditionalPass};
@@ -514,10 +514,11 @@ crate fn run_global_ctxt(
         }
     }
 
-    let passes = passes::defaults(default_passes).iter().copied().chain(manual_passes);
+    let (passes_before_cache, passes_after_cache) = passes::defaults(default_passes);
+    let passes_after_cache = passes_after_cache.iter().copied().chain(manual_passes);
     info!("Executing passes");
 
-    for p in passes {
+    let run_pass = |p: ConditionalPass, krate: Crate, ctxt: &mut DocContext<'_>| {
         let run = match p.condition {
             Always => true,
             WhenDocumentPrivate => ctxt.render_options.document_private,
@@ -526,22 +527,27 @@ crate fn run_global_ctxt(
         };
         if run {
             debug!("running pass {}", p.pass.name);
-            krate = ctxt.tcx.sess.time(p.pass.name, || (p.pass.run)(krate, &mut ctxt));
+            ctxt.tcx.sess.time(p.pass.name, || (p.pass.run)(krate, ctxt))
+        } else {
+            krate
         }
+    };
+    for &p in passes_before_cache {
+        krate = run_pass(p, krate, &mut ctxt);
+    }
+    krate = tcx.sess.time("create_format_cache", || {
+        ctxt.cache.populate(krate, tcx, &ctxt.render_options.extern_html_root_urls, &ctxt.render_options.output)
+    });
+    for p in passes_after_cache {
+        krate = run_pass(p, krate, &mut ctxt);
     }
 
     ctxt.sess().abort_if_errors();
 
-    let render_options = ctxt.render_options;
-    let mut cache = ctxt.cache;
-    krate = tcx.sess.time("create_format_cache", || {
-        cache.populate(krate, tcx, &render_options.extern_html_root_urls, &render_options.output)
-    });
-
     // The main crate doc comments are always collapsed.
     krate.collapsed = true;
 
-    (krate, render_options, cache)
+    (krate, ctxt.render_options, ctxt.cache)
 }
 
 /// Due to <https://github.com/rust-lang/rust/pull/73566>,
