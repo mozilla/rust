@@ -80,16 +80,18 @@ struct LintExpectationChecker<'a, 'tcx> {
     sess: &'a Session,
     store: &'a LintStore,
     emitted_lints: Vec<LintIdEmission>,
+    crate_attrs: &'tcx [ast::Attribute],
 }
 
 impl<'a, 'tcx> LintExpectationChecker<'a, 'tcx> {
     fn new(tcx: TyCtxt<'tcx>, sess: &'a Session, store: &'a LintStore) -> Self {
         let mut expect_lint_emissions = tcx.sess.diagnostic().steal_expect_lint_emissions();
+        let crate_attrs = tcx.hir().attrs(hir::CRATE_HIR_ID);
         let emitted_lints = expect_lint_emissions
             .drain(..)
             .filter_map(|emission| {
                 if let CheckLintNameResult::Ok(&[id]) =
-                    store.check_lint_name(&emission.lint_name, None)
+                    store.check_lint_name(sess, &emission.lint_name, None, crate_attrs)
                 {
                     Some(LintIdEmission::new(id, emission.lint_span))
                 } else {
@@ -98,7 +100,7 @@ impl<'a, 'tcx> LintExpectationChecker<'a, 'tcx> {
             })
             .collect();
 
-        Self { tcx, sess, store, emitted_lints }
+        Self { tcx, sess, store, emitted_lints, crate_attrs }
     }
 
     fn check_item_with_attrs<F>(&mut self, id: hir::HirId, scope: Span, f: F)
@@ -175,7 +177,7 @@ impl<'a, 'tcx> LintExpectationChecker<'a, 'tcx> {
 
                 // Checking the lint name
                 let name = pprust::path_to_string(&meta_item.path);
-                match &self.store.check_lint_name(&name, tool_name) {
+                match &self.store.check_lint_name(self.sess, &name, tool_name, self.crate_attrs) {
                     CheckLintNameResult::Ok(ids) => {
                         lints.extend_from_slice(ids);
                     }
@@ -202,12 +204,14 @@ impl<'a, 'tcx> LintExpectationChecker<'a, 'tcx> {
 
                         // NOTE: `new_name` already includes the tool name, so we don't have to add it again.
                         if let CheckLintNameResult::Ok(ids) =
-                            self.store.check_lint_name(&new_name, None)
+                            self.store.check_lint_name(self.sess, &new_name, None, self.crate_attrs)
                         {
                             lints.extend_from_slice(ids);
                         }
                     }
-                    CheckLintNameResult::Warning(_, _) | CheckLintNameResult::NoLint(_) => {
+                    CheckLintNameResult::Warning(_, _)
+                    | CheckLintNameResult::NoLint(_)
+                    | CheckLintNameResult::NoTool => {
                         // The `LintLevelMapBuilder` will issue a message about this.
                         continue;
                     }
@@ -264,7 +268,7 @@ impl<'a, 'tcx> LintExpectationChecker<'a, 'tcx> {
             // the start. It would therefore not be included in the backlog.
             let expect_lint_name = builtin::UNFULFILLED_LINT_EXPECTATION.name.to_ascii_lowercase();
             if let CheckLintNameResult::Ok(&[expect_lint_id]) =
-                self.store.check_lint_name(&expect_lint_name, None)
+                self.store.check_lint_name(self.sess, &expect_lint_name, None, self.crate_attrs)
             {
                 self.emitted_lints.push(LintIdEmission::new(expect_lint_id, span.into()));
             } else {

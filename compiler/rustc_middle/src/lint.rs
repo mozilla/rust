@@ -246,7 +246,7 @@ pub fn struct_lint_level<'s, 'd>(
                 // We can also not save the diagnostic here right away as it could for instance
                 // still be cancelled in the decorate closure. All of this means that we simply
                 // create a `DiagnosticBuilder` and continue as we would for warnings.
-                sess.struct_allow("")
+                sess.struct_expect("")
             }
             (Level::Warn, Some(span)) => sess.struct_span_warn(span, ""),
             (Level::Warn, None) => sess.struct_warn(""),
@@ -281,11 +281,11 @@ pub fn struct_lint_level<'s, 'd>(
         let name = lint.name_lower();
 
         // Lint diagnostics that are covered by the expect level will not be emitted outside
-        // the compiler. It is therefor not necessary to add any information for the user to
-        // it. This will therefor directly call the decorate function which will intern emit
+        // the compiler. It is therefore not necessary to add any information for the user to
+        // it. This will therefore directly call the decorate function which will intern emit
         // the `Diagnostic`.
         if level == Level::Expect {
-            err.code(DiagnosticId::Lint { name, has_future_breakage });
+            err.code(DiagnosticId::Lint { name, has_future_breakage, is_force_warn: false });
             decorate(LintDiagnosticBuilder::new(err));
             return;
         }
@@ -305,7 +305,9 @@ pub fn struct_lint_level<'s, 'd>(
                     Level::Forbid => "-F",
                     Level::Allow => "-A",
                     Level::ForceWarn => "--force-warns",
-                    Level::Expect => unreachable!("lints with the level of `expect` should not run this code"),
+                    Level::Expect => {
+                        unreachable!("lints with the level of `expect` should not run this code")
+                    }
                 };
                 let hyphen_case_lint_name = name.replace("_", "-");
                 if lint_flag_val.as_str() == name {

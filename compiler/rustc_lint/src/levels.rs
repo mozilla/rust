@@ -608,7 +608,7 @@ pub(crate) fn try_parse_reason_metadata(
     ParseLintReasonResult::NotFound
 }
 
-fn is_known_lint_tool(m_item: Symbol, sess: &Session, attrs: &[ast::Attribute]) -> bool {
+pub fn is_known_lint_tool(m_item: Symbol, sess: &Session, attrs: &[ast::Attribute]) -> bool {
     if [sym::clippy, sym::rustc, sym::rustdoc].contains(&m_item) {
         return true;
     }
