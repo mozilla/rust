@@ -187,6 +187,13 @@ a {
 a.test-arrow {
 	color: #dedede;
 }
+.copy-code {
+	filter: invert(50%);
+	color: #999;
+}
+.copy-code:hover {
+	filter: invert(65%);
+}
 
 details.rustdoc-toggle > summary.hideme > span,
 details.rustdoc-toggle > summary::before,
