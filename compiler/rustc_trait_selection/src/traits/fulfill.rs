@@ -1,4 +1,5 @@
 use crate::infer::{InferCtxt, TyOrConstInferVar};
+use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::obligation_forest::ProcessResult;
 use rustc_data_structures::obligation_forest::{Error, ForestObligation, Outcome};
 use rustc_data_structures::obligation_forest::{ObligationForest, ObligationProcessor};
@@ -52,6 +53,9 @@ pub struct FulfillmentContext<'tcx> {
     // A list of all obligations that have been registered with this
     // fulfillment context.
     predicates: ObligationForest<PendingPredicateObligation<'tcx>>,
+
+    relationships: FxHashMap<ty::TyVid, ty::FoundRelationships>,
+
     // Should this fulfillment context register type-lives-for-region
     // obligations on its parent infcx? In some cases, region
     // obligations are either already known to hold (normalization) or
@@ -96,6 +100,7 @@ impl<'a, 'tcx> FulfillmentContext<'tcx> {
     pub fn new() -> FulfillmentContext<'tcx> {
         FulfillmentContext {
             predicates: ObligationForest::new(),
+            relationships: FxHashMap::default(),
             register_region_obligations: true,
             usable_in_snapshot: false,
         }
@@ -104,6 +109,7 @@ impl<'a, 'tcx> FulfillmentContext<'tcx> {
     pub fn new_in_snapshot() -> FulfillmentContext<'tcx> {
         FulfillmentContext {
             predicates: ObligationForest::new(),
+            relationships: FxHashMap::default(),
             register_region_obligations: true,
             usable_in_snapshot: true,
         }
@@ -112,6 +118,7 @@ impl<'a, 'tcx> FulfillmentContext<'tcx> {
     pub fn new_ignoring_regions() -> FulfillmentContext<'tcx> {
         FulfillmentContext {
             predicates: ObligationForest::new(),
+            relationships: FxHashMap::default(),
             register_region_obligations: false,
             usable_in_snapshot: false,
         }
@@ -210,6 +217,8 @@ impl<'tcx> TraitEngine<'tcx> for FulfillmentContext<'tcx> {
 
         assert!(!infcx.is_in_snapshot() || self.usable_in_snapshot);
 
+        super::relationships::update(self, infcx, &obligation);
+
         self.predicates
             .register_obligation(PendingPredicateObligation { obligation, stalled_on: vec![] });
     }
@@ -239,6 +248,10 @@ impl<'tcx> TraitEngine<'tcx> for FulfillmentContext<'tcx> {
 
     fn pending_obligations(&self) -> Vec<PredicateObligation<'tcx>> {
         self.predicates.map_pending_obligations(|o| o.obligation.clone())
+    }
+
+    fn relationships(&mut self) -> &mut FxHashMap<ty::TyVid, ty::FoundRelationships> {
+        &mut self.relationships
     }
 }
 
