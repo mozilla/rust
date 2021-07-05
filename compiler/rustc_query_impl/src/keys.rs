@@ -398,8 +398,9 @@ impl<'tcx> Key for (DefId, Ty<'tcx>, SubstsRef<'tcx>, ty::ParamEnv<'tcx>) {
 }
 
 impl<'tcx> Key for (ty::Predicate<'tcx>, HirId) {
-    fn query_crate(&self) -> CrateNum {
-        LOCAL_CRATE
+    #[inline(always)]
+    fn query_crate_is_local(&self) -> bool {
+        true
     }
 
     fn default_span(&self, _tcx: TyCtxt<'_>) -> Span {
