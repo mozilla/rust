@@ -65,8 +65,8 @@ crate fn render_with_highlighting<'a>(
     }
 
     write_header(out, class, extra_content);
-    write_code(out, src, edition);
-    write_footer(out, playground_button);
+    let expand = write_code(out, src, edition);
+    write_footer(out, playground_button, expand);
 }
 
 fn write_header(out: &mut Buffer, class: Option<&str>, extra_content: Option<Buffer>) {
@@ -81,46 +81,50 @@ fn write_header(out: &mut Buffer, class: Option<&str>, extra_content: Option<Buf
     }
 }
 
-fn write_code<'a>(out: &mut Buffer, src: impl Iterator<Item = Line<'a>>, edition: Edition) {
+fn write_code<'a>(out: &mut Buffer, src: impl Iterator<Item = Line<'a>>, edition: Edition) -> bool {
     let mut iter = src.peekable();
+    let mut expand = false;
 
     // For each `Line`, we replace DOS backlines with '\n'. This replace allows to fix how the code
     // source with DOS backline characters is displayed.
     while let Some(line) = iter.next() {
-        match line {
+        let (before, text, after) = match line {
             Line::Hidden(text) => {
-                write!(
-                    out,
-                    "<span class=\"hidden\">{}{}</span>",
-                    Escape(&text.replace("\r\n", "\n")),
-                    if iter.peek().is_some() && !text.ends_with('\n') { "\n" } else { "" },
-                );
+                expand = true;
+                ("<span class=\"hidden\">", text.replace("\r\n", "\n"), "</span>")
             }
-            Line::Shown(text) => {
-                Classifier::new(&text.replace("\r\n", "\n"), edition).highlight(&mut |highlight| {
-                    match highlight {
-                        Highlight::Token { text, class } => string(out, Escape(text), class),
-                        Highlight::EnterSpan { class } => enter_span(out, class),
-                        Highlight::ExitSpan => exit_span(out),
-                    };
-                });
-                if iter.peek().is_some() && !text.ends_with('\n') {
-                    write!(out, "\n");
-                }
-            }
+            Line::Shown(text) => ("", text.replace("\r\n", "\n"), ""),
+        };
+        if !before.is_empty() {
+            out.push_str(before);
+        }
+        Classifier::new(&text, edition).highlight(&mut |highlight| {
+            match highlight {
+                Highlight::Token { text, class } => string(out, Escape(text), class),
+                Highlight::EnterSpan { class } => enter_span(out, class),
+                Highlight::ExitSpan => exit_span(out),
+            };
+        });
+        if iter.peek().is_some() && !text.ends_with('\n') {
+            out.push_str("\n");
+        }
+        if !after.is_empty() {
+            out.push_str(after);
         }
     }
+    expand
 }
 
-fn write_footer(out: &mut Buffer, playground_button: Option<&str>) {
+fn write_footer(out: &mut Buffer, playground_button: Option<&str>, expand: bool) {
     writeln!(
         out,
         "</pre>\
          <div class=\"code-buttons\">\
-             {}<button class=\"copy-code\" onclick=\"copyCode(this)\"></button>\
+             {}{}<button class=\"copy-code\" onclick=\"copyCode(this)\"></button>\
          </div>\
         </div>",
-        playground_button.unwrap_or_default()
+        playground_button.unwrap_or_default(),
+        if expand { "<button class=\"expand\" onclick=\"expandCode(this)\"></button>" } else { "" },
     );
 }
 
