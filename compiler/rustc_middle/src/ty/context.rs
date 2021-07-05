@@ -53,6 +53,7 @@ use rustc_middle::ty::OpaqueTypeKey;
 use rustc_serialize::opaque::{FileEncodeResult, FileEncoder};
 use rustc_session::config::{BorrowckMode, CrateType, OutputFilenames};
 use rustc_session::lint::{Level, Lint};
+use rustc_session::CrateDisambiguator;
 use rustc_session::Session;
 use rustc_span::def_id::StableCrateId;
 use rustc_span::source_map::MultiSpan;
@@ -1298,6 +1299,22 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     #[inline]
+    pub fn crate_name(self, crate_num: CrateNum) -> Symbol {
+        // Note: Changing the local crate name will invalidate the incremental caches
+        if crate_num == LOCAL_CRATE { self.crate_name } else { self.cstore.crate_name(crate_num) }
+    }
+
+    #[inline]
+    pub fn crate_disambiguator(self, crate_num: CrateNum) -> CrateDisambiguator {
+        if crate_num == LOCAL_CRATE {
+            // Note: Changing the local crate disambiguator will invalidate the incremental caches
+            self.sess.local_crate_disambiguator()
+        } else {
+            self.cstore.crate_disambiguator(crate_num)
+        }
+    }
+
+    #[inline]
     pub fn stable_crate_id(self, cnum: CrateNum) -> StableCrateId {
         self.def_path_hash(cnum.as_def_id()).stable_crate_id()
     }
@@ -1310,10 +1327,7 @@ impl<'tcx> TyCtxt<'tcx> {
         let (crate_name, crate_disambiguator) = if def_id.is_local() {
             (self.crate_name, self.sess.local_crate_disambiguator())
         } else {
-            (
-                self.cstore.crate_name_untracked(def_id.krate),
-                self.cstore.crate_disambiguator_untracked(def_id.krate),
-            )
+            (self.cstore.crate_name(def_id.krate), self.cstore.crate_disambiguator(def_id.krate))
         };
 
         format!(
@@ -2801,10 +2815,6 @@ fn ptr_eq<T, U>(t: *const T, u: *const U) -> bool {
 pub fn provide(providers: &mut ty::query::Providers) {
     providers.in_scope_traits_map = |tcx, id| tcx.hir_crate(()).trait_map.get(&id);
     providers.module_exports = |tcx, id| tcx.gcx.export_map.get(&id).map(|v| &v[..]);
-    providers.crate_name = |tcx, id| {
-        assert_eq!(id, LOCAL_CRATE);
-        tcx.crate_name
-    };
     providers.maybe_unused_trait_import = |tcx, id| tcx.maybe_unused_trait_imports.contains(&id);
     providers.maybe_unused_extern_crates = |tcx, ()| &tcx.maybe_unused_extern_crates[..];
     providers.names_imported_by_glob_use =

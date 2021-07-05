@@ -203,9 +203,12 @@ pub trait CrateStore {
         hash: DefPathHash,
     ) -> Option<DefId>;
 
+    // These don't need to be tracked as changing either will change the identity of the
+    // `CrateNum`.
+    fn crate_name(&self, cnum: CrateNum) -> Symbol;
+    fn crate_disambiguator(&self, cnum: CrateNum) -> CrateDisambiguator;
+
     // "queries" used in resolve that aren't tracked for incremental compilation
-    fn crate_name_untracked(&self, cnum: CrateNum) -> Symbol;
-    fn crate_disambiguator_untracked(&self, cnum: CrateNum) -> CrateDisambiguator;
     fn crate_hash_untracked(&self, cnum: CrateNum) -> Svh;
 
     // This is basically a 1-based range of ints, which is a little
