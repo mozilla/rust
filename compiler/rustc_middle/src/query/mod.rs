@@ -1489,6 +1489,7 @@ rustc_queries! {
     query is_private_dep(c: CrateNum) -> bool {
         eval_always
         desc { "check whether crate {} is a private dependency", c }
+        separate_provide_extern
     }
     query allocator_kind(_: ()) -> Option<AllocatorKind> {
         eval_always

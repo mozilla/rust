@@ -271,11 +271,11 @@ macro_rules! hash_result {
 
 macro_rules! get_provider {
     ([][$tcx:expr, $name:ident, $key:expr]) => {{
+        let _ = $key; // Suppress unused variable warning
         $tcx.queries.local_providers.$name
     }};
     ([(separate_provide_extern) $($rest:tt)*][$tcx:expr, $name:ident, $key:expr]) => {{
-        let is_local = $key.query_crate() == LOCAL_CRATE;
-        if is_local {
+        if $key.query_crate_is_local() {
             $tcx.queries.local_providers.$name
         } else {
             $tcx.queries.extern_providers.$name
