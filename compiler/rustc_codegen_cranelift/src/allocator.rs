@@ -5,7 +5,7 @@ use crate::prelude::*;
 
 use cranelift_codegen::binemit::{NullStackMapSink, NullTrapSink};
 use rustc_ast::expand::allocator::{
-    default_fn_name, AllocatorKind, AllocatorTy, ALLOCATOR_METHODS,
+    default_fn_name, global_fn_name, AllocatorKind, AllocatorTy, ALLOCATOR_METHODS,
 };
 
 /// Returns whether an allocator shim was created
@@ -66,7 +66,7 @@ fn codegen_inner(
                 returns: output.into_iter().map(AbiParam::new).collect(),
             };
 
-            let caller_name = format!("__rust_{}", method.name);
+            let caller_name = global_fn_name(method.name);
             let callee_name = default_fn_name(method.name);
             //eprintln!("Codegen allocator shim {} -> {} ({:?} -> {:?})", caller_name, callee_name, sig.params, sig.returns);
 
