@@ -3,7 +3,7 @@
 type X<'a, 'b> = impl std::fmt::Debug;
 
 fn f<'t, 'u>(a: &'t u32, b: &'u u32) -> (X<'t, 'u>, X<'u, 't>) {
-    //~^ ERROR concrete type differs from previous
+    //~^ ERROR concrete type differs from previous defining opaque type use
     (a, a)
 }
 
