@@ -1273,24 +1273,16 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
 
         // the "concrete opaque types" maps
         let concrete_opaque_types = &tcx.typeck(anon_owner_def_id).concrete_opaque_types;
+        debug!("concrete_opaque_types from typeck: {:#?}", concrete_opaque_types);
         let concrete_opaque_types: VecMap<_, _> = concrete_opaque_types
             .iter()
             .map(|(k, v)| {
-                let substs = tcx.fold_regions(k.substs, &mut false, |region, _| {
-                    // TODO: region is never `ReVar` at this point so this is useless
-                    if let ty::ReVar(..) = region {
-                        self.borrowck_context
-                            .universal_regions
-                            .indices
-                            .fold_to_region_vids(tcx, region)
-                    } else {
-                        region
-                    }
-                });
-
-                (OpaqueTypeKey { def_id: k.def_id, substs }, *v)
+                let k =
+                    self.borrowck_context.universal_regions.indices.fold_to_region_vids(tcx, *k);
+                (k, *v)
             })
             .collect();
+        debug!("concrete_opaque_types after remapping: {:#?}", concrete_opaque_types);
 
         let mut opaque_type_values = VecMap::new();
 
