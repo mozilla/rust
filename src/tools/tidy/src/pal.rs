@@ -38,6 +38,7 @@ const EXCEPTION_PATHS: &[&str] = &[
     "library/panic_abort",
     "library/panic_unwind",
     "library/unwind",
+    "library/std/src/sys_common/process_ext.rs", // doc stuff and more
     "library/rtstartup", // Not sure what to do about this. magic stuff for mingw
     "library/term",      // Not sure how to make this crate portable, but test crate needs it.
     "library/test",      // Probably should defer to unstable `std::sys` APIs.
