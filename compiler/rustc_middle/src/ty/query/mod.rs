@@ -115,11 +115,44 @@ macro_rules! query_storage {
     ([][$K:ty, $V:ty]) => {
         <DefaultCacheSelector as CacheSelector<$K, $V>>::Cache
     };
-    ([storage($ty:ty) $($rest:tt)*][$K:ty, $V:ty]) => {
+    ([(storage $ty:ty) $($rest:tt)*][$K:ty, $V:ty]) => {
         <$ty as CacheSelector<$K, $V>>::Cache
     };
-    ([$other:ident $(($($other_args:tt)*))* $(, $($modifiers:tt)*)*][$($args:tt)*]) => {
-        query_storage!([$($($modifiers)*)*][$($args)*])
+    ([$other:tt $($modifiers:tt)*][$($args:tt)*]) => {
+        query_storage!([$($modifiers)*][$($args)*])
+    };
+}
+
+macro_rules! separate_provide_extern_decl {
+    ([][$name:ident]) => {
+        ()
+    };
+    ([(separate_provide_extern) $($rest:tt)*][$name:ident]) => {
+        for<'tcx> fn(
+            TyCtxt<'tcx>,
+            query_keys::$name<'tcx>,
+        ) -> query_values::$name<'tcx>
+    };
+    ([$other:tt $($modifiers:tt)*][$($args:tt)*]) => {
+        separate_provide_extern_decl!([$($modifiers)*][$($args)*])
+    };
+}
+
+macro_rules! separate_provide_extern_default {
+    ([][$name:ident]) => {
+        ()
+    };
+    ([(separate_provide_extern) $($rest:tt)*][$name:ident]) => {
+        |_, key| bug!(
+            "`tcx.{}({:?})` unsupported by its crate; \
+             perhaps the `{}` query was never assigned a provider function",
+            stringify!($name),
+            key,
+            stringify!($name),
+        )
+    };
+    ([$other:tt $($modifiers:tt)*][$($args:tt)*]) => {
+        separate_provide_extern_default!([$($modifiers)*][$($args)*])
     };
 }
 
@@ -216,6 +249,10 @@ macro_rules! define_callbacks {
             ) -> query_values::$name<'tcx>,)*
         }
 
+        pub struct ExternProviders {
+            $(pub $name: separate_provide_extern_decl!([$($modifiers)*][$name]),)*
+        }
+
         impl Default for Providers {
             fn default() -> Self {
                 Providers {
@@ -230,8 +267,21 @@ macro_rules! define_callbacks {
             }
         }
 
+        impl Default for ExternProviders {
+            fn default() -> Self {
+                ExternProviders {
+                    $($name: separate_provide_extern_default!([$($modifiers)*][$name]),)*
+                }
+            }
+        }
+
         impl Copy for Providers {}
         impl Clone for Providers {
+            fn clone(&self) -> Self { *self }
+        }
+
+        impl Copy for ExternProviders {}
+        impl Clone for ExternProviders {
             fn clone(&self) -> Self { *self }
         }
 

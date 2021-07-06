@@ -18,7 +18,7 @@ use rustc_errors::{DiagnosticBuilder, Handler};
 use rustc_middle::dep_graph;
 use rustc_middle::ich::StableHashingContext;
 use rustc_middle::ty::query::{query_keys, query_storage, query_stored, query_values};
-use rustc_middle::ty::query::{Providers, QueryEngine};
+use rustc_middle::ty::query::{ExternProviders, Providers, QueryEngine};
 use rustc_middle::ty::{self, TyCtxt};
 use rustc_serialize::opaque;
 use rustc_span::Span;

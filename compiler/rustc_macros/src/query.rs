@@ -55,6 +55,9 @@ enum QueryModifier {
 
     /// Always evaluate the query, ignoring its dependencies
     EvalAlways,
+
+    /// Use a separate query provider for local and extern crates
+    SeparateProvideExtern,
 }
 
 impl Parse for QueryModifier {
@@ -120,6 +123,8 @@ impl Parse for QueryModifier {
             Ok(QueryModifier::Anon)
         } else if modifier == "eval_always" {
             Ok(QueryModifier::EvalAlways)
+        } else if modifier == "separate_provide_extern" {
+            Ok(QueryModifier::SeparateProvideExtern)
         } else {
             Err(Error::new(modifier.span(), "unknown query modifier"))
         }
@@ -214,8 +219,11 @@ struct QueryModifiers {
     /// Generate a dep node based on the dependencies of the query
     anon: bool,
 
-    // Always evaluate the query, ignoring its dependencies
+    /// Always evaluate the query, ignoring its dependencies
     eval_always: bool,
+
+    /// Use a separate query provider for local and extern crates
+    separate_provide_extern: bool,
 }
 
 /// Process query modifiers into a struct, erroring on duplicates
@@ -229,6 +237,7 @@ fn process_modifiers(query: &mut Query) -> QueryModifiers {
     let mut no_hash = false;
     let mut anon = false;
     let mut eval_always = false;
+    let mut separate_provide_extern = false;
     for modifier in query.modifiers.0.drain(..) {
         match modifier {
             QueryModifier::LoadCached(tcx, id, block) => {
@@ -319,6 +328,15 @@ fn process_modifiers(query: &mut Query) -> QueryModifiers {
                 }
                 eval_always = true;
             }
+            QueryModifier::SeparateProvideExtern => {
+                if separate_provide_extern {
+                    panic!(
+                        "duplicate modifier `separate_provide_extern` for query `{}`",
+                        query.name
+                    );
+                }
+                separate_provide_extern = true;
+            }
         }
     }
     let desc = desc.unwrap_or_else(|| {
@@ -334,6 +352,7 @@ fn process_modifiers(query: &mut Query) -> QueryModifiers {
         no_hash,
         anon,
         eval_always,
+        separate_provide_extern,
     }
 }
 
@@ -455,28 +474,32 @@ pub fn rustc_queries(input: TokenStream) -> TokenStream {
 
         // Pass on the fatal_cycle modifier
         if modifiers.fatal_cycle {
-            attributes.push(quote! { fatal_cycle });
+            attributes.push(quote! { (fatal_cycle) });
         };
         // Pass on the storage modifier
         if let Some(ref ty) = modifiers.storage {
-            attributes.push(quote! { storage(#ty) });
+            attributes.push(quote! { (storage #ty) });
         };
         // Pass on the cycle_delay_bug modifier
         if modifiers.cycle_delay_bug {
-            attributes.push(quote! { cycle_delay_bug });
+            attributes.push(quote! { (cycle_delay_bug) });
         };
         // Pass on the no_hash modifier
         if modifiers.no_hash {
-            attributes.push(quote! { no_hash });
+            attributes.push(quote! { (no_hash) });
         };
         // Pass on the anon modifier
         if modifiers.anon {
-            attributes.push(quote! { anon });
+            attributes.push(quote! { (anon) });
         };
         // Pass on the eval_always modifier
         if modifiers.eval_always {
-            attributes.push(quote! { eval_always });
+            attributes.push(quote! { (eval_always) });
         };
+        // Pass on the separate_provide_extern modifier
+        if modifiers.separate_provide_extern {
+            attributes.push(quote! { (separate_provide_extern) });
+        }
 
         let attribute_stream = quote! {#(#attributes),*};
         let doc_comments = query.doc_comments.iter();

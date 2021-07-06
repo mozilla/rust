@@ -15,7 +15,7 @@ use rustc_middle::middle::cstore::ForeignModule;
 use rustc_middle::middle::cstore::{CrateSource, CrateStore, EncodedMetadata};
 use rustc_middle::middle::exported_symbols::ExportedSymbol;
 use rustc_middle::middle::stability::DeprecationEntry;
-use rustc_middle::ty::query::Providers;
+use rustc_middle::ty::query::{ExternProviders, Providers};
 use rustc_middle::ty::{self, TyCtxt, Visibility};
 use rustc_session::utils::NativeLibKind;
 use rustc_session::{CrateDisambiguator, Session};
@@ -30,7 +30,7 @@ use std::any::Any;
 macro_rules! provide {
     (<$lt:tt> $tcx:ident, $def_id:ident, $other:ident, $cdata:ident,
       $($name:ident => $compute:block)*) => {
-        pub fn provide_extern(providers: &mut Providers) {
+        pub fn provide_extern(providers: &mut ExternProviders) {
             $(fn $name<$lt>(
                 $tcx: TyCtxt<$lt>,
                 def_id_arg: ty::query::query_keys::$name<$lt>,
@@ -55,7 +55,7 @@ macro_rules! provide {
                 $compute
             })*
 
-            *providers = Providers {
+            *providers = ExternProviders {
                 $($name,)*
                 ..*providers
             };

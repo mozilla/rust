@@ -219,17 +219,17 @@ macro_rules! handle_cycle_error {
         $error.emit();
         Value::from_cycle_error($tcx)
     }};
-    ([fatal_cycle $($rest:tt)*][$tcx:expr, $error:expr]) => {{
+    ([(fatal_cycle) $($rest:tt)*][$tcx:expr, $error:expr]) => {{
         $error.emit();
         $tcx.sess.abort_if_errors();
         unreachable!()
     }};
-    ([cycle_delay_bug $($rest:tt)*][$tcx:expr, $error:expr]) => {{
+    ([(cycle_delay_bug) $($rest:tt)*][$tcx:expr, $error:expr]) => {{
         $error.delay_as_bug();
         Value::from_cycle_error($tcx)
     }};
-    ([$other:ident $(($($other_args:tt)*))* $(, $($modifiers:tt)*)*][$($args:tt)*]) => {
-        handle_cycle_error!([$($($modifiers)*)*][$($args)*])
+    ([$other:tt $($modifiers:tt)*][$($args:tt)*]) => {
+        handle_cycle_error!([$($modifiers)*][$($args)*])
     };
 }
 
@@ -237,11 +237,11 @@ macro_rules! is_anon {
     ([]) => {{
         false
     }};
-    ([anon $($rest:tt)*]) => {{
+    ([(anon) $($rest:tt)*]) => {{
         true
     }};
-    ([$other:ident $(($($other_args:tt)*))* $(, $($modifiers:tt)*)*]) => {
-        is_anon!([$($($modifiers)*)*])
+    ([$other:tt $($modifiers:tt)*]) => {
+        is_anon!([$($modifiers)*])
     };
 }
 
@@ -249,11 +249,11 @@ macro_rules! is_eval_always {
     ([]) => {{
         false
     }};
-    ([eval_always $($rest:tt)*]) => {{
+    ([(eval_always) $($rest:tt)*]) => {{
         true
     }};
-    ([$other:ident $(($($other_args:tt)*))* $(, $($modifiers:tt)*)*]) => {
-        is_eval_always!([$($($modifiers)*)*])
+    ([$other:tt $($modifiers:tt)*]) => {
+        is_eval_always!([$($modifiers)*])
     };
 }
 
@@ -261,11 +261,28 @@ macro_rules! hash_result {
     ([][$hcx:expr, $result:expr]) => {{
         dep_graph::hash_result($hcx, &$result)
     }};
-    ([no_hash $($rest:tt)*][$hcx:expr, $result:expr]) => {{
+    ([(no_hash) $($rest:tt)*][$hcx:expr, $result:expr]) => {{
         None
     }};
-    ([$other:ident $(($($other_args:tt)*))* $(, $($modifiers:tt)*)*][$($args:tt)*]) => {
-        hash_result!([$($($modifiers)*)*][$($args)*])
+    ([$other:tt $($modifiers:tt)*][$($args:tt)*]) => {
+        hash_result!([$($modifiers)*][$($args)*])
+    };
+}
+
+macro_rules! get_provider {
+    ([][$tcx:expr, $name:ident, $key:expr]) => {{
+        let _ = $key; // Suppress unused variable warning
+        $tcx.queries.local_providers.$name
+    }};
+    ([(separate_provide_extern) $($rest:tt)*][$tcx:expr, $name:ident, $key:expr]) => {{
+        if $key.query_crate_is_local() {
+            $tcx.queries.local_providers.$name
+        } else {
+            $tcx.queries.extern_providers.$name
+        }
+    }};
+    ([$other:tt $($modifiers:tt)*][$($args:tt)*]) => {
+        get_provider!([$($modifiers)*][$($args)*])
     };
 }
 
@@ -356,11 +373,7 @@ macro_rules! define_queries {
             fn compute_fn(tcx: QueryCtxt<'tcx>, key: &Self::Key) ->
                 fn(TyCtxt<'tcx>, Self::Key) -> Self::Value
             {
-                if key.query_crate_is_local() {
-                    tcx.queries.local_providers.$name
-                } else {
-                    tcx.queries.extern_providers.$name
-                }
+                get_provider!([$($modifiers)*][tcx, $name, key])
             }
 
             fn hash_result(
@@ -460,7 +473,7 @@ macro_rules! define_queries_struct {
      input: ($(([$($modifiers:tt)*] [$($attr:tt)*] [$name:ident]))*)) => {
         pub struct Queries<$tcx> {
             local_providers: Box<Providers>,
-            extern_providers: Box<Providers>,
+            extern_providers: Box<ExternProviders>,
 
             $($(#[$attr])*  $name: QueryState<
                 crate::dep_graph::DepKind,
@@ -471,7 +484,7 @@ macro_rules! define_queries_struct {
         impl<$tcx> Queries<$tcx> {
             pub fn new(
                 local_providers: Providers,
-                extern_providers: Providers,
+                extern_providers: ExternProviders,
             ) -> Self {
                 Queries {
                     local_providers: Box::new(local_providers),
