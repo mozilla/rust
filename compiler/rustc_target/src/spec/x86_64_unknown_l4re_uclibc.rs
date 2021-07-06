@@ -1,9 +1,13 @@
-use crate::spec::Target;
+use crate::spec::{PanicStrategy, Target};
 
 pub fn target() -> Target {
     let mut base = super::l4re_base::opts();
     base.cpu = "x86-64".to_string();
     base.max_atomic_width = Some(64);
+    base.crt_static_default = true;
+    base.panic_strategy = PanicStrategy::Abort;
+    base.crt_static_allows_dylibs = false;
+    base.dynamic_linking = false;
 
     Target {
         llvm_target: "x86_64-unknown-l4re-uclibc".to_string(),

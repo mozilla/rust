@@ -88,6 +88,7 @@ mod windows_uwp_msvc_base;
 pub enum LinkerFlavor {
     Em,
     Gcc,
+    L4Bender,
     Ld,
     Msvc,
     Lld(LldFlavor),
@@ -158,6 +159,7 @@ macro_rules! flavor_mappings {
 flavor_mappings! {
     ((LinkerFlavor::Em), "em"),
     ((LinkerFlavor::Gcc), "gcc"),
+    ((LinkerFlavor::L4Bender), "l4-bender"),
     ((LinkerFlavor::Ld), "ld"),
     ((LinkerFlavor::Msvc), "msvc"),
     ((LinkerFlavor::PtxLinker), "ptx-linker"),
