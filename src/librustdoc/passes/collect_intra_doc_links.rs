@@ -30,12 +30,13 @@ use std::convert::{TryFrom, TryInto};
 use std::mem;
 use std::ops::Range;
 
-use crate::clean::{self, utils::find_nearest_parent_module, Crate, Item, ItemLink, PrimitiveType};
 use crate::core::DocContext;
 use crate::fold::DocFolder;
+use crate::html::format::HrefError;
 use crate::html::markdown::{markdown_links, MarkdownLink};
 use crate::lint::{BROKEN_INTRA_DOC_LINKS, PRIVATE_INTRA_DOC_LINKS};
 use crate::passes::Pass;
+use crate::clean::{self, utils::find_nearest_parent_module, Crate, Item, ItemLink, PrimitiveType};
 
 crate const COLLECT_INTRA_DOC_LINKS: Pass = Pass {
     name: "collect-intra-doc-links",
@@ -1232,6 +1233,7 @@ impl LinkCollector<'_, '_> {
                 }
             }
 
+            let mut had_error = false;
             // item can be non-local e.g. when using #[doc(primitive = "pointer")]
             if let Some((src_id, dst_id)) = id
                 .as_local()
@@ -1248,7 +1250,18 @@ impl LinkCollector<'_, '_> {
                     && !self.cx.tcx.privacy_access_levels(()).is_exported(hir_dst)
                 {
                     privacy_error(self.cx, &diag_info, &path_str);
+                    had_error = true;
                 }
+            }
+
+            // Even if the item exists and is public, it may not have documentation generated
+            // (e.g. if it's marked with `doc(hidden)`, or in a dependency with `--no-deps`).
+            // Give a warning if so.
+            if had_error {
+                return Some(());
+            }
+            if let Err(missing) = crate::html::format::href_inner(id, &self.cx.cache, &[]) {
+                missing_docs_for_link(self.cx, &item, id, missing, &path_str, &diag_info);
             }
 
             Some(())
@@ -2106,6 +2119,86 @@ fn suggest_disambiguator(
     } else {
         diag.help(&format!("{}: {}", help, suggestion.as_help(path_str)));
     }
+}
+
+/// Report a link to an item that will not have documentation generated.
+fn missing_docs_for_link(
+    cx: &DocContext<'_>,
+    item: &Item,
+    destination_id: DefId,
+    why: HrefError,
+    path_str: &str,
+    diag_info: &DiagnosticInfo<'_>,
+) {
+    // FIXME: this is a bug, rustdoc should load all items into the cache before doing this check.
+    //   Otherwise, there will be false negatives where rustdoc doesn't warn but should.
+    if why == HrefError::NotInExternalCache {
+        return;
+    }
+
+    let sym;
+    let item_name = match item.name {
+        Some(name) => {
+            sym = name.as_str();
+            &*sym
+        }
+        None => "<unknown>",
+    };
+    let msg = format!(
+        "documentation for `{}` links to item `{}` which will not have documentation generated",
+        item_name, path_str
+    );
+
+    report_diagnostic(cx.tcx, PRIVATE_INTRA_DOC_LINKS, &msg, diag_info, |diag, sp| {
+        use crate::clean::types::{AttributesExt, NestedAttributesExt};
+        use rustc_middle::ty::DefIdTree;
+
+        if let Some(sp) = sp {
+            diag.span_label(sp, "this item is will not be documented");
+        }
+
+        if why == HrefError::DocumentationNotBuilt {
+            diag.note(&format!(
+                "`{}` is in the crate `{}`, which will not be documented",
+                path_str,
+                cx.tcx.crate_name(destination_id.krate)
+            ));
+            return;
+        }
+
+        // shouldn't be possible to resolve private items
+        assert_ne!(why, HrefError::Private, "{:?}", destination_id);
+
+        if let Some(attr) =
+            cx.tcx.get_attrs(destination_id).lists(sym::doc).get_word_attr(sym::hidden)
+        {
+            diag.span_label(attr.span(), &format!("`{}` is marked as `#[doc(hidden)]`", path_str));
+            return;
+        }
+
+        let mut current = destination_id;
+        while let Some(parent) = cx.tcx.parent(current) {
+            if cx.tcx.get_attrs(parent).lists(sym::doc).has_word(sym::hidden) {
+                let name = cx.tcx.item_name(parent);
+                let (_, description) = cx.tcx.article_and_description(parent);
+                let span = cx.tcx.def_span(parent);
+                diag.span_label(
+                    span,
+                    &format!(
+                        "{} is in the {} `{}`, which is marked as `#[doc(hidden)]`",
+                        path_str, description, name
+                    ),
+                );
+                return;
+            }
+            current = parent;
+        }
+
+        diag.note(&format!(
+            "`{}` may be in a private module with all re-exports marked as `#[doc(no_inline)]`",
+            path_str
+        ));
+    });
 }
 
 /// Report a link from a public item to a private one.
