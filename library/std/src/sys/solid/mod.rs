@@ -14,6 +14,7 @@ mod itron {
     pub(super) mod task;
     pub mod thread;
     pub(super) mod time;
+    use super::unsupported;
 }
 
 pub mod alloc;

@@ -346,3 +346,7 @@ unsafe fn terminate_and_delete_current_task() -> ! {
     // Safety: `exd_tsk` never returns on success
     unsafe { crate::hint::unreachable_unchecked() };
 }
+
+pub fn available_concurrency() -> io::Result<crate::num::NonZeroUsize> {
+    super::unsupported()
+}
