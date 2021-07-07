@@ -1,5 +1,5 @@
 error: `UnwindSafe`, `RefUnwindSafe` trait implementation will change in Rust 2021
-  --> $DIR/mir_calls_to_shims.rs:15:38
+  --> $DIR/mir_calls_to_shims.rs:14:38
    |
 LL |       let result = panic::catch_unwind(move || {
    |  ______________________________________^

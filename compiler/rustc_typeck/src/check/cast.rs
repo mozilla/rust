@@ -53,8 +53,8 @@ use rustc_trait_selection::traits::error_reporting::report_object_safety_error;
 /// a function context.
 pub struct CastCheck<'tcx> {
     expr: &'tcx hir::Expr<'tcx>,
-    expr_ty: Ty<'tcx>,
-    cast_ty: Ty<'tcx>,
+    pub(crate) expr_ty: Ty<'tcx>,
+    pub(crate) cast_ty: Ty<'tcx>,
     cast_span: Span,
     span: Span,
 }

@@ -643,8 +643,13 @@ impl TypeRelation<'tcx> for Generalizer<'_, 'tcx> {
                                 .inner
                                 .borrow_mut()
                                 .type_variables()
-                                .new_var(self.for_universe, false, origin);
+                                .new_var(self.for_universe, origin);
                             let u = self.tcx().mk_ty_var(new_var_id);
+
+                            // Record that we replaced `vid` with `new_var_id` as part of a generalization
+                            // operation. This is needed to detect cyclic types. To see why, see the
+                            // docs in the `type_variables` module.
+                            self.infcx.inner.borrow_mut().type_variables().sub(vid, new_var_id);
                             debug!("generalize: replacing original vid={:?} with new={:?}", vid, u);
                             Ok(u)
                         }
@@ -879,11 +884,12 @@ impl TypeRelation<'tcx> for ConstInferUnifier<'_, 'tcx> {
 
                         let origin =
                             *self.infcx.inner.borrow_mut().type_variables().var_origin(vid);
-                        let new_var_id = self.infcx.inner.borrow_mut().type_variables().new_var(
-                            self.for_universe,
-                            false,
-                            origin,
-                        );
+                        let new_var_id = self
+                            .infcx
+                            .inner
+                            .borrow_mut()
+                            .type_variables()
+                            .new_var(self.for_universe, origin);
                         let u = self.tcx().mk_ty_var(new_var_id);
                         debug!(
                             "ConstInferUnifier: replacing original vid={:?} with new={:?}",

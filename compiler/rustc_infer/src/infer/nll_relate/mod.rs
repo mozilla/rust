@@ -920,7 +920,7 @@ where
                             // Replacing with a new variable in the universe `self.universe`,
                             // it will be unified later with the original type variable in
                             // the universe `_universe`.
-                            let new_var_id = variables.new_var(self.universe, false, origin);
+                            let new_var_id = variables.new_var(self.universe, origin);
 
                             let u = self.tcx().mk_ty_var(new_var_id);
                             debug!("generalize: replacing original vid={:?} with new={:?}", vid, u);

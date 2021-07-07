@@ -287,6 +287,10 @@ declare_features! (
     (accepted, const_fn_unsize, "1.54.0", Some(64992), None),
     /// Allows `impl Trait` with multiple unrelated lifetimes.
     (accepted, member_constraints, "1.54.0", Some(61997), None),
+    /// Allows the `!` type. Does not imply 'exhaustive_patterns' (below) any more.
+    (accepted, never_type, "1.54.0", Some(35121), None),
+    /// Allows diverging expressions to fall back to `!` rather than `()`.
+    (accepted, never_type_fallback, "1.54.0", Some(65992), None),
 
     // -------------------------------------------------------------------------
     // feature-group-end: accepted features
