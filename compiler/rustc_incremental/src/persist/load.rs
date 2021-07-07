@@ -1,7 +1,6 @@
 //! Code to save/load the dep-graph from files.
 
 use rustc_data_structures::fx::FxHashMap;
-use rustc_hir::definitions::DefPathTable;
 use rustc_middle::dep_graph::{SerializedDepGraph, WorkProduct, WorkProductId};
 use rustc_middle::ty::query::OnDiskCache;
 use rustc_serialize::opaque::Decoder;
@@ -22,8 +21,8 @@ pub enum LoadResult<T> {
     Error { message: String },
 }
 
-impl LoadResult<(SerializedDepGraph, WorkProductMap)> {
-    pub fn open(self, sess: &Session) -> (SerializedDepGraph, WorkProductMap) {
+impl<T: Default> LoadResult<T> {
+    pub fn open(self, sess: &Session) -> T {
         match self {
             LoadResult::Error { message } => {
                 sess.warn(&message);
@@ -75,11 +74,14 @@ pub enum MaybeAsync<T> {
     Sync(T),
     Async(std::thread::JoinHandle<T>),
 }
-impl<T> MaybeAsync<T> {
-    pub fn open(self) -> std::thread::Result<T> {
+
+impl<T> MaybeAsync<LoadResult<T>> {
+    pub fn open(self) -> LoadResult<T> {
         match self {
-            MaybeAsync::Sync(result) => Ok(result),
-            MaybeAsync::Async(handle) => handle.join(),
+            MaybeAsync::Sync(result) => result,
+            MaybeAsync::Async(handle) => handle.join().unwrap_or_else(|e| LoadResult::Error {
+                message: format!("could not decode incremental cache: {:?}", e),
+            }),
         }
     }
 }
@@ -196,10 +198,7 @@ pub fn load_dep_graph(sess: &Session) -> DepGraphFuture {
 /// If we are not in incremental compilation mode, returns `None`.
 /// Otherwise, tries to load the query result cache from disk,
 /// creating an empty cache if it could not be loaded.
-pub fn load_query_result_cache<'a>(
-    sess: &'a Session,
-    def_path_table: &DefPathTable,
-) -> Option<OnDiskCache<'a>> {
+pub fn load_query_result_cache<'a>(sess: &'a Session) -> Option<OnDiskCache<'a>> {
     if sess.opts.incremental.is_none() {
         return None;
     }
@@ -212,7 +211,7 @@ pub fn load_query_result_cache<'a>(
         sess.is_nightly_build(),
     ) {
         LoadResult::Ok { data: (bytes, start_pos) } => {
-            Some(OnDiskCache::new(sess, bytes, start_pos, def_path_table))
+            Some(OnDiskCache::new(sess, bytes, start_pos))
         }
         _ => Some(OnDiskCache::new_empty(sess.source_map())),
     }
