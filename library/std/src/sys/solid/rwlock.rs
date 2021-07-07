@@ -12,6 +12,8 @@ pub struct RWLock {
     rwl: SpinIdOnceCell<()>,
 }
 
+pub type MovableRWLock = RWLock;
+
 // Safety: `num_readers` is protected by `mtx_num_readers`
 unsafe impl Send for RWLock {}
 unsafe impl Sync for RWLock {}
