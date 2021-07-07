@@ -1,4 +1,4 @@
-use super::{abi, itron};
+use super::{abi, itron, net};
 use crate::io::ErrorKind;
 
 pub use self::itron::error::{expect_success, ItronError as SolidError};
@@ -11,6 +11,7 @@ pub fn error_name(er: abi::ER) -> Option<&'static str> {
     match er {
         // Success
         er if er >= 0 => None,
+        er if er < abi::sockets::SOLID_NET_ERR_BASE => net::error_name(er),
 
         abi::SOLID_ERR_NOTFOUND => Some("not found"),
         abi::SOLID_ERR_NOTSUPPORTED => Some("not supported"),
@@ -34,6 +35,7 @@ pub fn decode_error_kind(er: abi::ER) -> ErrorKind {
     match er {
         // Success
         er if er >= 0 => ErrorKind::Uncategorized,
+        er if er < abi::sockets::SOLID_NET_ERR_BASE => net::decode_error_kind(er),
 
         abi::SOLID_ERR_NOTFOUND => ErrorKind::NotFound,
         abi::SOLID_ERR_NOTSUPPORTED => ErrorKind::Unsupported,

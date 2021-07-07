@@ -1,6 +1,7 @@
 use crate::os::raw::c_int;
 
 mod fs;
+pub mod sockets;
 pub use self::fs::*;
 
 pub const SOLID_BP_PROGRAM_EXITED: usize = 15;

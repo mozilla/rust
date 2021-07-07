@@ -28,7 +28,6 @@ pub mod env;
 pub(crate) mod error;
 pub mod fs;
 pub mod io;
-#[path = "../unsupported/net.rs"]
 pub mod net;
 pub mod os;
 pub mod path;
