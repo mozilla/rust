@@ -3,9 +3,11 @@ use crate::error::Error as StdError;
 use crate::ffi::{CStr, CString, OsStr, OsString};
 use crate::fmt;
 use crate::io;
-use crate::os::raw::{c_char, c_int};
+use crate::os::{
+    raw::{c_char, c_int},
+    solid::ffi::{OsStrExt, OsStringExt},
+};
 use crate::path::{self, PathBuf};
-use crate::sys_common::os_str_bytes::{OsStrExt, OsStringExt};
 use crate::sys_common::rwlock::StaticRWLock;
 use crate::vec;
 

@@ -5,11 +5,11 @@ use crate::{
     io::{self, IoSlice, IoSliceMut, SeekFrom},
     mem::MaybeUninit,
     os::raw::{c_int, c_short},
+    os::solid::ffi::OsStrExt,
     path::{Path, PathBuf},
     sync::Arc,
     sys::time::SystemTime,
     sys::unsupported,
-    sys_common::os_str_bytes::OsStrExt,
 };
 
 pub use crate::sys_common::fs::try_exists;
