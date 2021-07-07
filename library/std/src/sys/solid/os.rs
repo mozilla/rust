@@ -6,7 +6,7 @@ use crate::io;
 use crate::os::raw::{c_char, c_int};
 use crate::path::{self, PathBuf};
 use crate::sys_common::os_str_bytes::{OsStrExt, OsStringExt};
-use crate::sys_common::rwlock::RWLock;
+use crate::sys_common::rwlock::StaticRWLock;
 use crate::vec;
 
 use super::{abi, error, itron, memchr};
@@ -76,31 +76,7 @@ pub fn current_exe() -> io::Result<PathBuf> {
     unsupported()
 }
 
-static ENV_LOCK: RWLock = RWLock::new();
-
-pub fn env_read_lock() -> impl Drop {
-    struct EnvLockReadGuard;
-    impl Drop for EnvLockReadGuard {
-        #[inline]
-        fn drop(&mut self) {
-            unsafe { ENV_LOCK.read_unlock() };
-        }
-    }
-    unsafe { ENV_LOCK.read() };
-    EnvLockReadGuard
-}
-
-pub fn env_write_lock() -> impl Drop {
-    struct EnvLockWriteGuard;
-    impl Drop for EnvLockWriteGuard {
-        #[inline]
-        fn drop(&mut self) {
-            unsafe { ENV_LOCK.write_unlock() };
-        }
-    }
-    unsafe { ENV_LOCK.write() };
-    EnvLockWriteGuard
-}
+static ENV_LOCK: StaticRWLock = StaticRWLock::new();
 
 pub struct Env {
     iter: vec::IntoIter<(OsString, OsString)>,
@@ -127,7 +103,7 @@ pub fn env() -> Env {
     }
 
     unsafe {
-        let _guard = env_read_lock();
+        let _guard = ENV_LOCK.read();
         let mut result = Vec::new();
         if !environ.is_null() {
             while !(*environ).is_null() {
@@ -163,7 +139,7 @@ pub fn getenv(k: &OsStr) -> io::Result<Option<OsString>> {
     // always None as well
     let k = CString::new(k.as_bytes())?;
     unsafe {
-        let _guard = env_read_lock();
+        let _guard = ENV_LOCK.read();
         let s = libc::getenv(k.as_ptr()) as *const libc::c_char;
         let ret = if s.is_null() {
             None
@@ -179,7 +155,7 @@ pub fn setenv(k: &OsStr, v: &OsStr) -> io::Result<()> {
     let v = CString::new(v.as_bytes())?;
 
     unsafe {
-        let _guard = env_write_lock();
+        let _guard = ENV_LOCK.write();
         cvt_env(libc::setenv(k.as_ptr(), v.as_ptr(), 1)).map(drop)
     }
 }
@@ -188,7 +164,7 @@ pub fn unsetenv(n: &OsStr) -> io::Result<()> {
     let nbuf = CString::new(n.as_bytes())?;
 
     unsafe {
-        let _guard = env_write_lock();
+        let _guard = ENV_LOCK.write();
         cvt_env(libc::unsetenv(nbuf.as_ptr())).map(drop)
     }
 }
