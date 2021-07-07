@@ -13,7 +13,6 @@ pub fn target() -> Target {
             relocation_model: RelocModel::Static,
             disable_redzone: true,
             max_atomic_width: Some(128),
-            unsupported_abis: super::arm_base::unsupported_abis(),
             ..base
         },
     }
