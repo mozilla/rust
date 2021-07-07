@@ -82,7 +82,7 @@ pub fn error_name(er: abi::ER) -> Option<&'static str> {
 pub fn decode_error_kind(er: abi::ER) -> ErrorKind {
     match er {
         // Success
-        er if er >= 0 => ErrorKind::Other,
+        er if er >= 0 => ErrorKind::Uncategorized,
 
         // μITRON 4.0
         // abi::E_SYS
@@ -111,7 +111,7 @@ pub fn decode_error_kind(er: abi::ER) -> ErrorKind {
         abi::E_NORES => ErrorKind::OutOfMemory, // Some("insufficient system resources"),
         // abi::E_RASTER
         // abi::E_COMM
-        _ => ErrorKind::Other,
+        _ => ErrorKind::Uncategorized,
     }
 }
 

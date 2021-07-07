@@ -435,7 +435,7 @@ impl fmt::Debug for File {
 
 pub fn unlink(p: &Path) -> io::Result<()> {
     if stat(p)?.file_type().is_dir() {
-        Err(io::Error::new_const(io::ErrorKind::Other, &"is a directory"))
+        Err(io::Error::new_const(io::ErrorKind::IsADirectory, &"is a directory"))
     } else {
         error::SolidError::err_if_negative(unsafe { abi::SOLID_FS_Unlink(cstr(p)?.as_ptr()) })
             .map_err(|e| e.as_io_error())?;
@@ -465,7 +465,7 @@ pub fn rmdir(p: &Path) -> io::Result<()> {
             .map_err(|e| e.as_io_error())?;
         Ok(())
     } else {
-        Err(io::Error::new_const(io::ErrorKind::Other, &"not a directory"))
+        Err(io::Error::new_const(io::ErrorKind::NotADirectory, &"not a directory"))
     }
 }
 

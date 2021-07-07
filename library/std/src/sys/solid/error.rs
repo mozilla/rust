@@ -33,7 +33,7 @@ pub fn error_name(er: abi::ER) -> Option<&'static str> {
 pub fn decode_error_kind(er: abi::ER) -> ErrorKind {
     match er {
         // Success
-        er if er >= 0 => ErrorKind::Other,
+        er if er >= 0 => ErrorKind::Uncategorized,
 
         abi::SOLID_ERR_NOTFOUND => ErrorKind::NotFound,
         abi::SOLID_ERR_NOTSUPPORTED => ErrorKind::Unsupported,
