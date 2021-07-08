@@ -26,10 +26,10 @@
 
 use crate::edition::Edition;
 use crate::symbol::{kw, sym, Symbol};
-use crate::SESSION_GLOBALS;
+use crate::with_session_globals;
 use crate::{BytePos, CachingSourceMapView, ExpnIdCache, SourceFile, Span, DUMMY_SP};
 
-use crate::def_id::{CrateNum, DefId, CRATE_DEF_INDEX, LOCAL_CRATE};
+use crate::def_id::{CrateNum, DefId, DefPathHash, CRATE_DEF_INDEX, LOCAL_CRATE};
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
@@ -181,6 +181,7 @@ impl HygieneData {
             DUMMY_SP,
             edition,
             Some(DefId::local(CRATE_DEF_INDEX)),
+            None,
         );
         root_data.orig_id = Some(0);
 
@@ -200,7 +201,7 @@ impl HygieneData {
     }
 
     pub fn with<T, F: FnOnce(&mut HygieneData) -> T>(f: F) -> T {
-        SESSION_GLOBALS.with(|session_globals| f(&mut *session_globals.hygiene_data.borrow_mut()))
+        with_session_globals(|session_globals| f(&mut *session_globals.hygiene_data.borrow_mut()))
     }
 
     fn fresh_expn(&mut self, mut expn_data: Option<ExpnData>) -> ExpnId {
@@ -687,7 +688,7 @@ impl Span {
     ) -> Span {
         self.fresh_expansion(ExpnData {
             allow_internal_unstable,
-            ..ExpnData::default(ExpnKind::Desugaring(reason), self, edition, None)
+            ..ExpnData::default(ExpnKind::Desugaring(reason), self, edition, None, None)
         })
     }
 }
@@ -734,6 +735,8 @@ pub struct ExpnData {
     /// The `DefId` of the macro being invoked,
     /// if this `ExpnData` corresponds to a macro invocation
     pub macro_def_id: Option<DefId>,
+    /// The normal module (`mod`) in which the expanded macro was defined.
+    pub parent_module: Option<DefId>,
     /// The crate that originally created this `ExpnData`. During
     /// metadata serialization, we only encode `ExpnData`s that were
     /// created locally - when our serialized metadata is decoded,
@@ -777,6 +780,7 @@ impl ExpnData {
         local_inner_macros: bool,
         edition: Edition,
         macro_def_id: Option<DefId>,
+        parent_module: Option<DefId>,
     ) -> ExpnData {
         ExpnData {
             kind,
@@ -788,6 +792,7 @@ impl ExpnData {
             local_inner_macros,
             edition,
             macro_def_id,
+            parent_module,
             krate: LOCAL_CRATE,
             orig_id: None,
             disambiguator: 0,
@@ -800,6 +805,7 @@ impl ExpnData {
         call_site: Span,
         edition: Edition,
         macro_def_id: Option<DefId>,
+        parent_module: Option<DefId>,
     ) -> ExpnData {
         ExpnData {
             kind,
@@ -811,6 +817,7 @@ impl ExpnData {
             local_inner_macros: false,
             edition,
             macro_def_id,
+            parent_module,
             krate: LOCAL_CRATE,
             orig_id: None,
             disambiguator: 0,
@@ -823,10 +830,11 @@ impl ExpnData {
         edition: Edition,
         allow_internal_unstable: Lrc<[Symbol]>,
         macro_def_id: Option<DefId>,
+        parent_module: Option<DefId>,
     ) -> ExpnData {
         ExpnData {
             allow_internal_unstable: Some(allow_internal_unstable),
-            ..ExpnData::default(kind, call_site, edition, macro_def_id)
+            ..ExpnData::default(kind, call_site, edition, macro_def_id, parent_module)
         }
     }
 
@@ -1330,9 +1338,12 @@ fn update_disambiguator(expn_id: ExpnId) {
     }
 
     impl<'a> crate::HashStableContext for DummyHashStableContext<'a> {
-        fn hash_def_id(&mut self, def_id: DefId, hasher: &mut StableHasher) {
-            def_id.krate.as_u32().hash_stable(self, hasher);
-            def_id.index.as_u32().hash_stable(self, hasher);
+        #[inline]
+        fn def_path_hash(&self, def_id: DefId) -> DefPathHash {
+            DefPathHash(Fingerprint::new(
+                def_id.krate.as_u32().into(),
+                def_id.index.as_u32().into(),
+            ))
         }
 
         fn expn_id_cache() -> &'static LocalKey<ExpnIdCache> {
@@ -1345,9 +1356,6 @@ fn update_disambiguator(expn_id: ExpnId) {
             &CACHE
         }
 
-        fn hash_crate_num(&mut self, krate: CrateNum, hasher: &mut StableHasher) {
-            krate.as_u32().hash_stable(self, hasher);
-        }
         fn hash_spans(&self) -> bool {
             true
         }
@@ -1359,8 +1367,9 @@ fn update_disambiguator(expn_id: ExpnId) {
         }
     }
 
-    let source_map = SESSION_GLOBALS
-        .with(|session_globals| session_globals.source_map.borrow().as_ref().unwrap().clone());
+    let source_map = with_session_globals(|session_globals| {
+        session_globals.source_map.borrow().as_ref().unwrap().clone()
+    });
 
     let mut ctx =
         DummyHashStableContext { caching_source_map: CachingSourceMapView::new(&source_map) };

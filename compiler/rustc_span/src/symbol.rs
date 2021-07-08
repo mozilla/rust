@@ -13,7 +13,7 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::str;
 
-use crate::{Edition, Span, DUMMY_SP, SESSION_GLOBALS};
+use crate::{with_session_globals, Edition, Span, DUMMY_SP};
 
 #[cfg(test)]
 mod tests;
@@ -328,6 +328,7 @@ symbols! {
         box_free,
         box_patterns,
         box_syntax,
+        bpf_target_feature,
         braced_empty_structs,
         branch,
         breakpoint,
@@ -415,7 +416,6 @@ symbols! {
         constructor,
         contents,
         context,
-        control_flow_enum,
         convert,
         copy,
         copy_closures,
@@ -478,6 +478,7 @@ symbols! {
         discriminant_type,
         discriminant_value,
         dispatch_from_dyn,
+        display_trait,
         div,
         div_assign,
         doc,
@@ -586,6 +587,7 @@ symbols! {
         from,
         from_desugaring,
         from_generator,
+        from_iter,
         from_method,
         from_output,
         from_residual,
@@ -680,6 +682,7 @@ symbols! {
         lateout,
         lazy_normalization_consts,
         le,
+        len,
         let_chains,
         lhs,
         lib,
@@ -755,6 +758,7 @@ symbols! {
         modifiers,
         module,
         module_path,
+        more_qualified_paths,
         more_struct_aliases,
         movbe_target_feature,
         move_ref_pattern,
@@ -943,7 +947,7 @@ symbols! {
         receiver,
         recursion_limit,
         reexport_test_harness_main,
-        ref_unwind_safe,
+        ref_unwind_safe_trait,
         reference,
         reflect,
         reg,
@@ -1061,6 +1065,7 @@ symbols! {
         rustdoc,
         rustfmt,
         rvalue_static_promotion,
+        s,
         sanitize,
         sanitizer_runtime,
         saturating_add,
@@ -1068,7 +1073,6 @@ symbols! {
         self_in_typedefs,
         self_struct_ctor,
         semitransparent,
-        send,
         send_trait,
         shl,
         shl_assign,
@@ -1145,6 +1149,7 @@ symbols! {
         skip,
         slice,
         slice_alloc,
+        slice_len_fn,
         slice_patterns,
         slice_u8,
         slice_u8_alloc,
@@ -1234,7 +1239,9 @@ symbols! {
         truncf32,
         truncf64,
         try_blocks,
+        try_from,
         try_from_trait,
+        try_into,
         try_into_trait,
         try_trait_v2,
         tt,
@@ -1291,7 +1298,7 @@ symbols! {
         unused_qualifications,
         unwind,
         unwind_attributes,
-        unwind_safe,
+        unwind_safe_trait,
         unwrap,
         unwrap_or,
         use_extern_macros,
@@ -1332,6 +1339,7 @@ symbols! {
         wrapping_add,
         wrapping_mul,
         wrapping_sub,
+        wreg,
         write_bytes,
         xmm_reg,
         ymm_reg,
@@ -1781,7 +1789,7 @@ impl Ident {
 
 #[inline]
 fn with_interner<T, F: FnOnce(&mut Interner) -> T>(f: F) -> T {
-    SESSION_GLOBALS.with(|session_globals| f(&mut *session_globals.symbol_interner.lock()))
+    with_session_globals(|session_globals| f(&mut *session_globals.symbol_interner.lock()))
 }
 
 /// An alternative to [`Symbol`], useful when the chars within the symbol need to

@@ -18,6 +18,7 @@ pub use adt::*;
 pub use assoc::*;
 pub use closure::*;
 pub use generics::*;
+pub use vtable::*;
 
 use crate::hir::exports::ExportMap;
 use crate::ich::StableHashingContext;
@@ -39,7 +40,6 @@ use rustc_hir::def::{CtorKind, CtorOf, DefKind, Res};
 use rustc_hir::def_id::{CrateNum, DefId, LocalDefId, LocalDefIdMap, CRATE_DEF_INDEX};
 use rustc_hir::{Constness, Node};
 use rustc_macros::HashStable;
-use rustc_span::hygiene::ExpnId;
 use rustc_span::symbol::{kw, Ident, Symbol};
 use rustc_span::Span;
 use rustc_target::abi::Align;
@@ -59,7 +59,7 @@ pub use self::consts::{Const, ConstInt, ConstKind, InferConst, ScalarInt, Uneval
 pub use self::context::{
     tls, CanonicalUserType, CanonicalUserTypeAnnotation, CanonicalUserTypeAnnotations,
     CtxtInterners, DelaySpanBugEmitted, FreeRegionInfo, GeneratorInteriorTypeCause, GlobalCtxt,
-    Lift, ResolvedOpaqueTy, TyCtxt, TypeckResults, UserType, UserTypeAnnotationIndex,
+    Lift, TyCtxt, TypeckResults, UserType, UserTypeAnnotationIndex,
 };
 pub use self::instance::{Instance, InstanceDef};
 pub use self::list::List;
@@ -72,7 +72,7 @@ pub use self::sty::{
     ExistentialPredicate, ExistentialProjection, ExistentialTraitRef, FnSig, FreeRegion, GenSig,
     GeneratorSubsts, GeneratorSubstsParts, ParamConst, ParamTy, PolyExistentialProjection,
     PolyExistentialTraitRef, PolyFnSig, PolyGenSig, PolyTraitRef, ProjectionTy, Region, RegionKind,
-    RegionVid, TraitRef, TyKind, TypeAndMut, UpvarSubsts,
+    RegionVid, TraitRef, TyKind, TypeAndMut, UpvarSubsts, VarianceDiagInfo, VarianceDiagMutKind,
 };
 pub use self::trait_def::TraitDef;
 
@@ -95,6 +95,7 @@ pub mod relate;
 pub mod subst;
 pub mod trait_def;
 pub mod util;
+pub mod vtable;
 pub mod walk;
 
 mod adt;
@@ -127,7 +128,7 @@ pub struct ResolverOutputs {
     pub main_def: Option<MainDefinition>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct MainDefinition {
     pub res: Res<ast::NodeId>,
     pub is_import: bool,
@@ -172,6 +173,25 @@ pub enum Visibility {
     Restricted(DefId),
     /// Not visible anywhere in the local crate. This is the visibility of private external items.
     Invisible,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Copy,
+    Hash,
+    TyEncodable,
+    TyDecodable,
+    HashStable,
+    TypeFoldable
+)]
+pub struct ClosureSizeProfileData<'tcx> {
+    /// Tuple containing the types of closure captures before the feature `capture_disjoint_fields`
+    pub before_feature_tys: Ty<'tcx>,
+    /// Tuple containing the types of closure captures after the feature `capture_disjoint_fields`
+    pub after_feature_tys: Ty<'tcx>,
 }
 
 pub trait DefIdTree: Copy {
@@ -834,6 +854,12 @@ impl<'tcx> InstantiatedPredicates<'tcx> {
     pub fn is_empty(&self) -> bool {
         self.predicates.is_empty()
     }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, HashStable, TyEncodable, TyDecodable)]
+pub struct OpaqueTypeKey<'tcx> {
+    pub def_id: DefId,
+    pub substs: SubstsRef<'tcx>,
 }
 
 rustc_index::newtype_index! {
@@ -1862,20 +1888,11 @@ impl<'tcx> TyCtxt<'tcx> {
             && use_name
                 .span
                 .ctxt()
-                .hygienic_eq(def_name.span.ctxt(), self.expansion_that_defined(def_parent_def_id))
-    }
-
-    pub fn expansion_that_defined(self, scope: DefId) -> ExpnId {
-        match scope.as_local() {
-            // Parsing and expansion aren't incremental, so we don't
-            // need to go through a query for the same-crate case.
-            Some(scope) => self.hir().definitions().expansion_that_defined(scope),
-            None => self.expn_that_defined(scope),
-        }
+                .hygienic_eq(def_name.span.ctxt(), self.expn_that_defined(def_parent_def_id))
     }
 
     pub fn adjust_ident(self, mut ident: Ident, scope: DefId) -> Ident {
-        ident.span.normalize_to_macros_2_0_and_adjust(self.expansion_that_defined(scope));
+        ident.span.normalize_to_macros_2_0_and_adjust(self.expn_that_defined(scope));
         ident
     }
 
@@ -1885,14 +1902,11 @@ impl<'tcx> TyCtxt<'tcx> {
         scope: DefId,
         block: hir::HirId,
     ) -> (Ident, DefId) {
-        let scope =
-            match ident.span.normalize_to_macros_2_0_and_adjust(self.expansion_that_defined(scope))
-            {
-                Some(actual_expansion) => {
-                    self.hir().definitions().parent_module_of_macro_def(actual_expansion)
-                }
-                None => self.parent_module(block).to_def_id(),
-            };
+        let scope = ident
+            .span
+            .normalize_to_macros_2_0_and_adjust(self.expn_that_defined(scope))
+            .and_then(|actual_expansion| actual_expansion.expn_data().parent_module)
+            .unwrap_or_else(|| self.parent_module(block).to_def_id());
         (ident, scope)
     }
 
@@ -1971,6 +1985,7 @@ pub fn provide(providers: &mut ty::query::Providers) {
     util::provide(providers);
     print::provide(providers);
     super::util::bug::provide(providers);
+    super::middle::provide(providers);
     *providers = ty::query::Providers {
         trait_impls_of: trait_def::trait_impls_of_provider,
         type_uninhabited_from: inhabitedness::type_uninhabited_from,

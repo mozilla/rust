@@ -32,7 +32,7 @@ use std::ops::DerefMut;
 use std::panic;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use tracing::info;
 
@@ -73,7 +73,10 @@ pub fn create_session(
     let codegen_backend = if let Some(make_codegen_backend) = make_codegen_backend {
         make_codegen_backend(&sopts)
     } else {
-        get_codegen_backend(&sopts)
+        get_codegen_backend(
+            &sopts.maybe_sysroot,
+            sopts.debugging_opts.codegen_backend.as_ref().map(|name| &name[..]),
+        )
     };
 
     // target_override is documented to be called before init(), so this is okay
@@ -147,7 +150,7 @@ pub fn setup_callbacks_and_run_in_thread_pool_with_globals<F: FnOnce() -> R + Se
     crate::callbacks::setup_callbacks();
 
     let main_handler = move || {
-        rustc_span::with_session_globals(edition, || {
+        rustc_span::create_session_globals_then(edition, || {
             io::set_output_capture(stderr.clone());
             f()
         })
@@ -168,12 +171,13 @@ unsafe fn handle_deadlock() {
     rustc_data_structures::sync::assert_sync::<tls::ImplicitCtxt<'_, '_>>();
     let icx: &tls::ImplicitCtxt<'_, '_> = &*(context as *const tls::ImplicitCtxt<'_, '_>);
 
-    let session_globals = rustc_span::SESSION_GLOBALS.with(|sg| sg as *const _);
+    let session_globals = rustc_span::with_session_globals(|sg| sg as *const _);
     let session_globals = &*session_globals;
     thread::spawn(move || {
         tls::enter_context(icx, |_| {
-            rustc_span::SESSION_GLOBALS
-                .set(session_globals, || tls::with(|tcx| tcx.queries.deadlock(tcx, &registry)))
+            rustc_span::set_session_globals_then(session_globals, || {
+                tls::with(|tcx| tcx.queries.deadlock(tcx, &registry))
+            })
         });
     });
 }
@@ -200,13 +204,13 @@ pub fn setup_callbacks_and_run_in_thread_pool_with_globals<F: FnOnce() -> R + Se
 
     let with_pool = move |pool: &rayon::ThreadPool| pool.install(f);
 
-    rustc_span::with_session_globals(edition, || {
-        rustc_span::SESSION_GLOBALS.with(|session_globals| {
+    rustc_span::create_session_globals_then(edition, || {
+        rustc_span::with_session_globals(|session_globals| {
             // The main handler runs for each Rayon worker thread and sets up
             // the thread local rustc uses. `session_globals` is captured and set
             // on the new threads.
             let main_handler = move |thread: rayon::ThreadBuilder| {
-                rustc_span::SESSION_GLOBALS.set(session_globals, || {
+                rustc_span::set_session_globals_then(session_globals, || {
                     io::set_output_capture(stderr.clone());
                     thread.run()
                 })
@@ -241,35 +245,34 @@ fn load_backend_from_dylib(path: &Path) -> fn() -> Box<dyn CodegenBackend> {
     }
 }
 
-pub fn get_codegen_backend(sopts: &config::Options) -> Box<dyn CodegenBackend> {
-    static INIT: Once = Once::new();
+/// Get the codegen backend based on the name and specified sysroot.
+///
+/// A name of `None` indicates that the default backend should be used.
+pub fn get_codegen_backend(
+    maybe_sysroot: &Option<PathBuf>,
+    backend_name: Option<&str>,
+) -> Box<dyn CodegenBackend> {
+    static LOAD: SyncOnceCell<unsafe fn() -> Box<dyn CodegenBackend>> = SyncOnceCell::new();
 
-    static mut LOAD: fn() -> Box<dyn CodegenBackend> = || unreachable!();
-
-    INIT.call_once(|| {
+    let load = LOAD.get_or_init(|| {
         #[cfg(feature = "llvm")]
         const DEFAULT_CODEGEN_BACKEND: &str = "llvm";
 
         #[cfg(not(feature = "llvm"))]
         const DEFAULT_CODEGEN_BACKEND: &str = "cranelift";
 
-        let codegen_name = sopts
-            .debugging_opts
-            .codegen_backend
-            .as_ref()
-            .map(|name| &name[..])
-            .unwrap_or(DEFAULT_CODEGEN_BACKEND);
-
-        let backend = match codegen_name {
+        match backend_name.unwrap_or(DEFAULT_CODEGEN_BACKEND) {
             filename if filename.contains('.') => load_backend_from_dylib(filename.as_ref()),
-            codegen_name => get_builtin_codegen_backend(&sopts.maybe_sysroot, codegen_name),
-        };
-
-        unsafe {
-            LOAD = backend;
+            #[cfg(feature = "llvm")]
+            "llvm" => rustc_codegen_llvm::LlvmCodegenBackend::new,
+            backend_name => get_codegen_sysroot(maybe_sysroot, backend_name),
         }
     });
-    unsafe { LOAD() }
+
+    // SAFETY: In case of a builtin codegen backend this is safe. In case of an external codegen
+    // backend we hope that the backend links against the same rustc_driver version. If this is not
+    // the case, we get UB.
+    unsafe { load() }
 }
 
 // This is used for rustdoc, but it uses similar machinery to codegen backend
@@ -384,17 +387,6 @@ fn sysroot_candidates() -> Vec<PathBuf> {
             let os = OsString::from_wide(&space);
             Some(PathBuf::from(os))
         }
-    }
-}
-
-pub fn get_builtin_codegen_backend(
-    maybe_sysroot: &Option<PathBuf>,
-    backend_name: &str,
-) -> fn() -> Box<dyn CodegenBackend> {
-    match backend_name {
-        #[cfg(feature = "llvm")]
-        "llvm" => rustc_codegen_llvm::LlvmCodegenBackend::new,
-        _ => get_codegen_sysroot(maybe_sysroot, backend_name),
     }
 }
 

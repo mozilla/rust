@@ -2,11 +2,12 @@ use crate::clean::auto_trait::AutoTraitFinder;
 use crate::clean::blanket_impl::BlanketImplFinder;
 use crate::clean::{
     inline, Clean, Crate, Generic, GenericArg, GenericArgs, ImportSource, Item, ItemKind, Lifetime,
-    MacroKind, Path, PathSegment, Primitive, PrimitiveType, ResolvedPath, Type, TypeBinding,
+    Path, PathSegment, PolyTrait, Primitive, PrimitiveType, ResolvedPath, Type, TypeBinding,
 };
 use crate::core::DocContext;
 use crate::formats::item_type::ItemType;
 
+use rustc_ast::tokenstream::TokenTree;
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
@@ -14,6 +15,7 @@ use rustc_middle::mir::interpret::ConstValue;
 use rustc_middle::ty::subst::{GenericArgKind, SubstsRef};
 use rustc_middle::ty::{self, DefIdTree, TyCtxt};
 use rustc_span::symbol::{kw, sym, Symbol};
+use std::fmt::Write as _;
 use std::mem;
 
 #[cfg(test)]
@@ -30,7 +32,7 @@ crate fn krate(cx: &mut DocContext<'_>) -> Crate {
     cx.cache.owned_box_did = cx.tcx.lang_items().owned_box();
 
     let mut externs = Vec::new();
-    for &cnum in cx.tcx.crates().iter() {
+    for &cnum in cx.tcx.crates(()).iter() {
         externs.push((cnum, cnum.clean(cx)));
         // Analyze doc-reachability for extern items
         LibEmbargoVisitor::new(cx).visit_lib(cnum);
@@ -163,8 +165,18 @@ pub(super) fn external_path(
 
 crate fn strip_type(ty: Type) -> Type {
     match ty {
-        Type::ResolvedPath { path, param_names, did, is_generic } => {
-            Type::ResolvedPath { path: strip_path(&path), param_names, did, is_generic }
+        Type::ResolvedPath { path, did, is_generic } => {
+            Type::ResolvedPath { path: strip_path(&path), did, is_generic }
+        }
+        Type::DynTrait(mut bounds, lt) => {
+            let first = bounds.remove(0);
+            let stripped_trait = strip_type(first.trait_);
+
+            bounds.insert(
+                0,
+                PolyTrait { trait_: stripped_trait, generic_params: first.generic_params },
+            );
+            Type::DynTrait(bounds, lt)
         }
         Type::Tuple(inner_tys) => {
             Type::Tuple(inner_tys.iter().map(|t| strip_type(t.clone())).collect())
@@ -235,22 +247,6 @@ crate fn build_deref_target_impls(cx: &mut DocContext<'_>, items: &[Item], ret: 
                 inline::build_impls(cx, None, did, None, ret);
             }
         }
-    }
-}
-
-crate trait ToSource {
-    fn to_src(&self, cx: &DocContext<'_>) -> String;
-}
-
-impl ToSource for rustc_span::Span {
-    fn to_src(&self, cx: &DocContext<'_>) -> String {
-        debug!("converting span {:?} to snippet", self);
-        let sn = match cx.sess().source_map().span_to_snippet(*self) {
-            Ok(x) => x,
-            Err(_) => String::new(),
-        };
-        debug!("got snippet {}", sn);
-        sn
     }
 }
 
@@ -431,7 +427,7 @@ crate fn resolve_type(cx: &mut DocContext<'_>, path: Path, id: hir::HirId) -> Ty
         _ => false,
     };
     let did = register_res(cx, path.res);
-    ResolvedPath { path, param_names: None, did, is_generic }
+    ResolvedPath { path, did, is_generic }
 }
 
 crate fn get_auto_trait_and_blanket_impls(
@@ -451,35 +447,48 @@ crate fn get_auto_trait_and_blanket_impls(
     auto_impls.into_iter().chain(blanket_impls)
 }
 
+/// If `res` has a documentation page associated, store it in the cache.
+///
+/// This is later used by [`href()`] to determine the HTML link for the item.
+///
+/// [`href()`]: crate::html::format::href
 crate fn register_res(cx: &mut DocContext<'_>, res: Res) -> DefId {
+    use DefKind::*;
     debug!("register_res({:?})", res);
 
     let (did, kind) = match res {
-        Res::Def(DefKind::Fn, i) => (i, ItemType::Function),
-        Res::Def(DefKind::TyAlias, i) => (i, ItemType::Typedef),
-        Res::Def(DefKind::Enum, i) => (i, ItemType::Enum),
-        Res::Def(DefKind::Trait, i) => (i, ItemType::Trait),
         Res::Def(DefKind::AssocTy | DefKind::AssocFn | DefKind::AssocConst, i) => {
+            // associated items are documented, but on the page of their parent
             (cx.tcx.parent(i).unwrap(), ItemType::Trait)
         }
-        Res::Def(DefKind::Struct, i) => (i, ItemType::Struct),
-        Res::Def(DefKind::Union, i) => (i, ItemType::Union),
-        Res::Def(DefKind::Mod, i) => (i, ItemType::Module),
-        Res::Def(DefKind::ForeignTy, i) => (i, ItemType::ForeignType),
-        Res::Def(DefKind::Const, i) => (i, ItemType::Constant),
-        Res::Def(DefKind::Static, i) => (i, ItemType::Static),
         Res::Def(DefKind::Variant, i) => {
+            // variant items are documented, but on the page of their parent
             (cx.tcx.parent(i).expect("cannot get parent def id"), ItemType::Enum)
         }
-        Res::Def(DefKind::Macro(mac_kind), i) => match mac_kind {
-            MacroKind::Bang => (i, ItemType::Macro),
-            MacroKind::Attr => (i, ItemType::ProcAttribute),
-            MacroKind::Derive => (i, ItemType::ProcDerive),
-        },
-        Res::Def(DefKind::TraitAlias, i) => (i, ItemType::TraitAlias),
-        Res::SelfTy(Some(def_id), _) => (def_id, ItemType::Trait),
-        Res::SelfTy(_, Some((impl_def_id, _))) => return impl_def_id,
-        _ => return res.def_id(),
+        // Each of these have their own page.
+        Res::Def(
+            kind
+            @
+            (Fn | TyAlias | Enum | Trait | Struct | Union | Mod | ForeignTy | Const | Static
+            | Macro(..) | TraitAlias),
+            i,
+        ) => (i, kind.into()),
+        // This is part of a trait definition; document the trait.
+        Res::SelfTy(Some(trait_def_id), _) => (trait_def_id, ItemType::Trait),
+        // This is an inherent impl; it doesn't have its own page.
+        Res::SelfTy(None, Some((impl_def_id, _))) => return impl_def_id,
+        Res::SelfTy(None, None)
+        | Res::PrimTy(_)
+        | Res::ToolMod
+        | Res::SelfCtor(_)
+        | Res::Local(_)
+        | Res::NonMacroAttr(_)
+        | Res::Err => return res.def_id(),
+        Res::Def(
+            TyParam | ConstParam | Ctor(..) | ExternCrate | Use | ForeignMod | AnonConst | OpaqueTy
+            | Field | LifetimeParam | GlobalAsm | Impl | Closure | Generator,
+            id,
+        ) => return id,
     };
     if did.is_local() {
         return did;
@@ -542,4 +551,29 @@ crate fn has_doc_flag(attrs: ty::Attributes<'_>, flag: Symbol) -> bool {
         attr.has_name(sym::doc)
             && attr.meta_item_list().map_or(false, |l| rustc_attr::list_contains_name(&l, flag))
     })
+}
+
+/// A link to `doc.rust-lang.org` that includes the channel name. Use this instead of manual links
+/// so that the channel is consistent.
+///
+/// Set by `bootstrap::Builder::doc_rust_lang_org_channel` in order to keep tests passing on beta/stable.
+crate const DOC_RUST_LANG_ORG_CHANNEL: &'static str = env!("DOC_RUST_LANG_ORG_CHANNEL");
+
+/// Render a sequence of macro arms in a format suitable for displaying to the user
+/// as part of an item declaration.
+pub(super) fn render_macro_arms<'a>(
+    matchers: impl Iterator<Item = &'a TokenTree>,
+    arm_delim: &str,
+) -> String {
+    let mut out = String::new();
+    for matcher in matchers {
+        writeln!(out, "    {} => {{ ... }}{}", render_macro_matcher(matcher), arm_delim).unwrap();
+    }
+    out
+}
+
+/// Render a macro matcher in a format suitable for displaying to the user
+/// as part of an item declaration.
+pub(super) fn render_macro_matcher(matcher: &TokenTree) -> String {
+    rustc_ast_pretty::pprust::tt_to_string(matcher)
 }

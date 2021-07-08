@@ -1,6 +1,6 @@
 use crate::HashStableContext;
 use rustc_data_structures::fingerprint::Fingerprint;
-use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
+use rustc_data_structures::stable_hasher::{HashStable, StableHasher, ToStableHashKey};
 use rustc_data_structures::AtomicRef;
 use rustc_index::vec::Idx;
 use rustc_macros::HashStable_Generic;
@@ -241,20 +241,20 @@ impl DefId {
 
 impl<E: Encoder> Encodable<E> for DefId {
     default fn encode(&self, s: &mut E) -> Result<(), E::Error> {
-        s.emit_struct("DefId", 2, |s| {
-            s.emit_struct_field("krate", 0, |s| self.krate.encode(s))?;
+        s.emit_struct(false, |s| {
+            s.emit_struct_field("krate", true, |s| self.krate.encode(s))?;
 
-            s.emit_struct_field("index", 1, |s| self.index.encode(s))
+            s.emit_struct_field("index", false, |s| self.index.encode(s))
         })
     }
 }
 
 impl<D: Decoder> Decodable<D> for DefId {
     default fn decode(d: &mut D) -> Result<DefId, D::Error> {
-        d.read_struct("DefId", 2, |d| {
+        d.read_struct(|d| {
             Ok(DefId {
-                krate: d.read_struct_field("krate", 0, Decodable::decode)?,
-                index: d.read_struct_field("index", 1, Decodable::decode)?,
+                krate: d.read_struct_field("krate", Decodable::decode)?,
+                index: d.read_struct_field("index", Decodable::decode)?,
             })
         })
     }
@@ -332,13 +332,49 @@ impl<D: Decoder> Decodable<D> for LocalDefId {
 rustc_data_structures::define_id_collections!(LocalDefIdMap, LocalDefIdSet, LocalDefId);
 
 impl<CTX: HashStableContext> HashStable<CTX> for DefId {
+    #[inline]
     fn hash_stable(&self, hcx: &mut CTX, hasher: &mut StableHasher) {
-        hcx.hash_def_id(*self, hasher)
+        self.to_stable_hash_key(hcx).hash_stable(hcx, hasher);
+    }
+}
+
+impl<CTX: HashStableContext> HashStable<CTX> for LocalDefId {
+    #[inline]
+    fn hash_stable(&self, hcx: &mut CTX, hasher: &mut StableHasher) {
+        self.to_stable_hash_key(hcx).hash_stable(hcx, hasher);
     }
 }
 
 impl<CTX: HashStableContext> HashStable<CTX> for CrateNum {
+    #[inline]
     fn hash_stable(&self, hcx: &mut CTX, hasher: &mut StableHasher) {
-        hcx.hash_crate_num(*self, hasher)
+        self.to_stable_hash_key(hcx).hash_stable(hcx, hasher);
+    }
+}
+
+impl<CTX: HashStableContext> ToStableHashKey<CTX> for DefId {
+    type KeyType = DefPathHash;
+
+    #[inline]
+    fn to_stable_hash_key(&self, hcx: &CTX) -> DefPathHash {
+        hcx.def_path_hash(*self)
+    }
+}
+
+impl<CTX: HashStableContext> ToStableHashKey<CTX> for LocalDefId {
+    type KeyType = DefPathHash;
+
+    #[inline]
+    fn to_stable_hash_key(&self, hcx: &CTX) -> DefPathHash {
+        hcx.def_path_hash(self.to_def_id())
+    }
+}
+
+impl<CTX: HashStableContext> ToStableHashKey<CTX> for CrateNum {
+    type KeyType = DefPathHash;
+
+    #[inline]
+    fn to_stable_hash_key(&self, hcx: &CTX) -> DefPathHash {
+        self.as_def_id().to_stable_hash_key(hcx)
     }
 }

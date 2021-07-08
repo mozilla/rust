@@ -942,7 +942,7 @@ impl EncodeContext<'a, 'tcx> {
             });
             record!(self.tables.span[def_id] <- tcx.def_span(def_id));
             record!(self.tables.attributes[def_id] <- tcx.get_attrs(def_id));
-            record!(self.tables.expn_that_defined[def_id] <- self.tcx.expansion_that_defined(def_id));
+            record!(self.tables.expn_that_defined[def_id] <- self.tcx.expn_that_defined(def_id));
             if should_encode_visibility(def_kind) {
                 record!(self.tables.visibility[def_id] <- self.tcx.visibility(def_id));
             }
@@ -1222,7 +1222,12 @@ impl EncodeContext<'a, 'tcx> {
                 let fn_data = if let hir::ImplItemKind::Fn(ref sig, body) = ast_item.kind {
                     FnData {
                         asyncness: sig.header.asyncness,
-                        constness: sig.header.constness,
+                        // Can be inside `impl const Trait`, so using sig.header.constness is not reliable
+                        constness: if self.tcx.is_const_fn_raw(def_id) {
+                            hir::Constness::Const
+                        } else {
+                            hir::Constness::NotConst
+                        },
                         param_names: self.encode_fn_param_names_for_body(body),
                     }
                 } else {
@@ -1667,7 +1672,7 @@ impl EncodeContext<'a, 'tcx> {
 
     fn encode_crate_deps(&mut self) -> Lazy<[CrateDep]> {
         empty_proc_macro!(self);
-        let crates = self.tcx.crates();
+        let crates = self.tcx.crates(());
 
         let mut deps = crates
             .iter()

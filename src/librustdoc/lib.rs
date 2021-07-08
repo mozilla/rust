@@ -31,7 +31,6 @@ extern crate tracing;
 // Dependencies listed in Cargo.toml do not need `extern crate`.
 
 extern crate rustc_ast;
-extern crate rustc_ast_lowering;
 extern crate rustc_ast_pretty;
 extern crate rustc_attr;
 extern crate rustc_data_structures;
@@ -80,6 +79,8 @@ use rustc_middle::ty::TyCtxt;
 use rustc_session::config::{make_crate_type_option, ErrorOutputType, RustcOptGroup};
 use rustc_session::getopts;
 use rustc_session::{early_error, early_warn};
+
+use crate::clean::utils::DOC_RUST_LANG_ORG_CHANNEL;
 
 /// A macro to create a FxHashMap.
 ///
@@ -614,7 +615,10 @@ fn usage(argv0: &str) {
     }
     println!("{}", options.usage(&format!("{} [options] <input>", argv0)));
     println!("    @path               Read newline separated options from `path`\n");
-    println!("More information available at https://doc.rust-lang.org/rustdoc/what-is-rustdoc.html")
+    println!(
+        "More information available at {}/rustdoc/what-is-rustdoc.html",
+        DOC_RUST_LANG_ORG_CHANNEL
+    );
 }
 
 /// A result type used by several functions under `main()`.
@@ -712,6 +716,7 @@ fn main_options(options: config::Options) -> MainResult {
     let default_passes = options.default_passes;
     let output_format = options.output_format;
     // FIXME: fix this clone (especially render_options)
+    let externs = options.externs.clone();
     let manual_passes = options.manual_passes.clone();
     let render_options = options.render_options.clone();
     let scrape_examples = options.scrape_examples.clone();
@@ -730,7 +735,7 @@ fn main_options(options: config::Options) -> MainResult {
             // We need to hold on to the complete resolver, so we cause everything to be
             // cloned for the analysis passes to use. Suboptimal, but necessary in the
             // current architecture.
-            let resolver = core::create_resolver(queries, &sess);
+            let resolver = core::create_resolver(externs, queries, &sess);
 
             if sess.has_errors() {
                 sess.fatal("Compilation failed, aborting rustdoc");

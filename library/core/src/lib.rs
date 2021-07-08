@@ -51,7 +51,6 @@
 #![cfg(not(test))]
 #![stable(feature = "core", since = "1.6.0")]
 #![doc(
-    html_root_url = "https://doc.rust-lang.org/nightly/",
     html_playground_url = "https://play.rust-lang.org/",
     issue_tracker_base_url = "https://github.com/rust-lang/rust/issues/",
     test(no_crate_inject, attr(deny(warnings))),
@@ -66,6 +65,7 @@
 #![feature(allow_internal_unstable)]
 #![feature(arbitrary_self_types)]
 #![feature(asm)]
+#![feature(bool_to_option)]
 #![feature(cfg_target_has_atomic)]
 #![feature(const_heap)]
 #![feature(const_alloc_layout)]
@@ -87,7 +87,6 @@
 #![feature(const_fn_floating_point_arithmetic)]
 #![feature(const_fn_fn_ptr_basics)]
 #![feature(const_fn_trait_bound)]
-#![cfg_attr(bootstrap, feature(const_fn))]
 #![feature(const_option)]
 #![feature(const_precise_live_drops)]
 #![feature(const_ptr_offset)]
@@ -112,7 +111,6 @@
 #![feature(doc_cfg)]
 #![feature(doc_notable_trait)]
 #![feature(duration_consts_2)]
-#![cfg_attr(bootstrap, feature(extended_key_value_attributes))]
 #![feature(extern_types)]
 #![feature(fundamental)]
 #![feature(intra_doc_pointers)]
@@ -160,15 +158,14 @@
 #![feature(const_fn_transmute)]
 #![feature(abi_unadjusted)]
 #![feature(adx_target_feature)]
-#![feature(external_doc)]
 #![feature(associated_type_bounds)]
 #![feature(const_caller_location)]
 #![feature(slice_ptr_get)]
 #![feature(no_niche)] // rust-lang/rust#68303
 #![feature(no_coverage)] // rust-lang/rust#84605
-#![feature(int_error_matching)]
 #![deny(unsafe_op_in_unsafe_fn)]
-#![deny(or_patterns_back_compat)]
+#![cfg_attr(bootstrap, deny(or_patterns_back_compat))]
+#![cfg_attr(not(bootstrap), deny(rust_2021_incompatible_or_patterns))]
 
 // allow using `core::` in intra-doc links
 #[allow(unused_extern_crates)]
@@ -259,7 +256,6 @@ pub mod option;
 pub mod panic;
 pub mod panicking;
 pub mod pin;
-pub mod raw;
 pub mod result;
 #[unstable(feature = "async_stream", issue = "79024")]
 pub mod stream;
