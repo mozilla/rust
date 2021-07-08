@@ -1930,7 +1930,11 @@ fn add_order_independent_options(
 
     // Try to strip as much out of the generated object by removing unused
     // sections if possible. See more comments in linker.rs
-    if !sess.link_dead_code() {
+    // If PGO is enabled sometimes gc_sections will remove the profile data section
+    // as it appears to be unused. This can then cause the PGO profile file to lose
+    // some functions. If we are generating a profile we shouldn't strip sections
+    // to ensure we have all the data for PGO.
+    if !(sess.link_dead_code() || sess.opts.cg.profile_generate.enabled()) {
         let keep_metadata = crate_type == CrateType::Dylib;
         cmd.gc_sections(keep_metadata);
     }
