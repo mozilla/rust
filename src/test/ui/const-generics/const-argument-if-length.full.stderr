@@ -24,11 +24,11 @@ LL |     value: T,
 help: borrowed types always have a statically known size
    |
 LL |     value: &T,
-   |            ^
+   |            +
 help: the `Box` type always has a statically known size and allocates its contents in the heap
    |
 LL |     value: Box<T>,
-   |            ^^^^ ^
+   |            ++++ +
 
 error: aborting due to 2 previous errors
 

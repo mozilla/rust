@@ -12,11 +12,11 @@ LL | #![deny(rustdoc::broken_intra_doc_links)]
 help: to link to the module, prefix with `mod@`
    |
 LL | /// [mod@char]
-   |      ^^^^^^^^
+   |      ~~~~~~~~
 help: to link to the builtin type, prefix with `prim@`
    |
 LL | /// [prim@char]
-   |      ^^^^^^^^^
+   |      ~~~~~~~~~
 
 error: `char` is both a module and a builtin type
   --> $DIR/prim-conflict.rs:10:6
@@ -27,11 +27,11 @@ LL | /// [type@char]
 help: to link to the module, prefix with `mod@`
    |
 LL | /// [mod@char]
-   |      ^^^^^^^^
+   |      ~~~~~~~~
 help: to link to the builtin type, prefix with `prim@`
    |
 LL | /// [prim@char]
-   |      ^^^^^^^^^
+   |      ~~~~~~~~~
 
 error: incompatible link kind for `char`
   --> $DIR/prim-conflict.rs:19:6

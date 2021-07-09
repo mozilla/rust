@@ -6,8 +6,8 @@ LL |     let x: impl Trait<A> = ();
    |
 help: consider introducing a named lifetime parameter
    |
-LL | fn main<'a>() {
-LL |     let x: impl Trait<A<'a>> = ();
+LL ~ fn main<'a>() {
+LL ~     let x: impl Trait<A<'a>> = ();
    |
 
 error: aborting due to previous error

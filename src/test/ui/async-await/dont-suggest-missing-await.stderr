@@ -13,7 +13,7 @@ LL |         take_u32(x)
 help: consider `await`ing on the `Future`
    |
 LL |         take_u32(x.await)
-   |                   ^^^^^^
+   |                   ++++++
 
 error: aborting due to previous error
 

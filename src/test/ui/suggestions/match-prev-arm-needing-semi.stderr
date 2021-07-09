@@ -24,11 +24,12 @@ LL | |     };
 help: consider `await`ing on the `Future`
    |
 LL |         false => async_dummy().await,
-   |                               ^^^^^^
+   |                               ++++++
 help: consider removing this semicolon
    |
-LL |             async_dummy()
-   |                         --
+LL -             async_dummy();
+LL +             async_dummy()
+   | 
 
 error[E0308]: `match` arms have incompatible types
   --> $DIR/match-prev-arm-needing-semi.rs:40:18
@@ -56,13 +57,13 @@ LL | |     };
 help: consider `await`ing on the `Future`
    |
 LL |         false => async_dummy2().await,
-   |                                ^^^^^^
+   |                                ++++++
 help: consider removing this semicolon and boxing the expressions
    |
-LL |             Box::new(async_dummy())
+LL ~             Box::new(async_dummy())
 LL |
 LL |         }
-LL |         false => Box::new(async_dummy2()),
+LL ~         false => Box::new(async_dummy2()),
    |
 
 error[E0308]: `match` arms have incompatible types
@@ -89,9 +90,9 @@ LL | |     };
    = note: distinct uses of `impl Trait` result in different opaque types
 help: consider `await`ing on both `Future`s
    |
-LL |         true => async_dummy().await,
+LL ~         true => async_dummy().await,
 LL |
-LL |         false => async_dummy2().await,
+LL ~         false => async_dummy2().await,
    |
 
 error[E0308]: `match` arms have incompatible types
