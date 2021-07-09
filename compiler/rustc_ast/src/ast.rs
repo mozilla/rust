@@ -2290,6 +2290,18 @@ pub struct ForeignMod {
 pub struct EnumDef {
     pub variants: Vec<Variant>,
 }
+
+impl EnumDef {
+    /// Whether the enum has any fields, i.e. it has any Struct or Tuple variants.
+    /// Note that this returns true even for empty Struct or Tuple variants.
+    pub fn is_fieldless(&self) -> bool {
+        self.variants.iter().all(|variant| match variant.data {
+            VariantData::Struct(..) | VariantData::Tuple(..) => false,
+            VariantData::Unit(..) => true,
+        })
+    }
+}
+
 /// Enum variant.
 #[derive(Clone, Encodable, Decodable, Debug)]
 pub struct Variant {

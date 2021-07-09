@@ -643,6 +643,9 @@ impl Span {
             .outer_expn_data()
             .allow_internal_unstable
             .map_or(false, |features| features.iter().any(|&f| f == feature))
+            // The enum_as_repr macro is statically added at parse-time regardless of feature
+            // enablement, and no-ops itself if the feature isn't enabled.
+            || (feature == sym::enum_as_repr && self.is_dummy())
     }
 
     /// Checks if this span arises from a compiler desugaring of kind `kind`.

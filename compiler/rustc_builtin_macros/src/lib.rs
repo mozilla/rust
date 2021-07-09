@@ -99,11 +99,13 @@ pub fn register_builtin_macros(resolver: &mut dyn ResolverExpand) {
     }
 
     register_derive! {
+        AsRepr: enums::expand_as_repr,
         Clone: clone::expand_deriving_clone,
         Copy: bounds::expand_deriving_copy,
         Debug: debug::expand_deriving_debug,
         Default: default::expand_deriving_default,
         Eq: eq::expand_deriving_eq,
+        FromRepr: enums::expand_from_repr,
         Hash: hash::expand_deriving_hash,
         Ord: ord::expand_deriving_ord,
         PartialEq: partial_eq::expand_deriving_partial_eq,

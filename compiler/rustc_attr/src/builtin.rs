@@ -853,91 +853,101 @@ impl IntType {
 /// the same discriminant size that the corresponding C enum would or C
 /// structure layout, `packed` to remove padding, and `transparent` to elegate representation
 /// concerns to the only non-ZST field.
-pub fn find_repr_attrs(sess: &Session, attr: &Attribute) -> Vec<ReprAttr> {
+pub fn find_repr_attrs<'a, I: IntoIterator<Item = &'a Attribute>>(
+    sess: &ParseSess,
+    attrs: I,
+    error_if_invalid: bool,
+) -> Vec<ReprAttr> {
     use ReprAttr::*;
 
     let mut acc = Vec::new();
-    let diagnostic = &sess.parse_sess.span_diagnostic;
-    if attr.has_name(sym::repr) {
-        if let Some(items) = attr.meta_item_list() {
-            sess.mark_attr_used(attr);
-            for item in items {
-                let mut recognised = false;
-                if item.is_word() {
-                    let hint = match item.name_or_empty() {
-                        sym::C => Some(ReprC),
-                        sym::packed => Some(ReprPacked(1)),
-                        sym::simd => Some(ReprSimd),
-                        sym::transparent => Some(ReprTransparent),
-                        sym::no_niche => Some(ReprNoNiche),
-                        name => int_type_of_word(name).map(ReprInt),
-                    };
+    let diagnostic = &sess.span_diagnostic;
+    for attr in attrs {
+        if attr.has_name(sym::repr) {
+            if let Some(items) = attr.meta_item_list() {
+                sess.mark_attr_used(attr);
+                for item in items {
+                    let mut recognised = false;
+                    if item.is_word() {
+                        let hint = match item.name_or_empty() {
+                            sym::C => Some(ReprC),
+                            sym::packed => Some(ReprPacked(1)),
+                            sym::simd => Some(ReprSimd),
+                            sym::transparent => Some(ReprTransparent),
+                            sym::no_niche => Some(ReprNoNiche),
+                            name => int_type_of_word(name).map(ReprInt),
+                        };
 
-                    if let Some(h) = hint {
-                        recognised = true;
-                        acc.push(h);
-                    }
-                } else if let Some((name, value)) = item.name_value_literal() {
-                    let mut literal_error = None;
-                    if name == sym::align {
-                        recognised = true;
-                        match parse_alignment(&value.kind) {
-                            Ok(literal) => acc.push(ReprAlign(literal)),
-                            Err(message) => literal_error = Some(message),
-                        };
-                    } else if name == sym::packed {
-                        recognised = true;
-                        match parse_alignment(&value.kind) {
-                            Ok(literal) => acc.push(ReprPacked(literal)),
-                            Err(message) => literal_error = Some(message),
-                        };
-                    }
-                    if let Some(literal_error) = literal_error {
-                        struct_span_err!(
-                            diagnostic,
-                            item.span(),
-                            E0589,
-                            "invalid `repr(align)` attribute: {}",
-                            literal_error
-                        )
-                        .emit();
-                    }
-                } else if let Some(meta_item) = item.meta_item() {
-                    if meta_item.has_name(sym::align) {
-                        if let MetaItemKind::NameValue(ref value) = meta_item.kind {
+                        if let Some(h) = hint {
                             recognised = true;
-                            let mut err = struct_span_err!(
-                                diagnostic,
-                                item.span(),
-                                E0693,
-                                "incorrect `repr(align)` attribute format"
-                            );
-                            match value.kind {
-                                ast::LitKind::Int(int, ast::LitIntType::Unsuffixed) => {
-                                    err.span_suggestion(
-                                        item.span(),
-                                        "use parentheses instead",
-                                        format!("align({})", int),
-                                        Applicability::MachineApplicable,
-                                    );
-                                }
-                                ast::LitKind::Str(s, _) => {
-                                    err.span_suggestion(
-                                        item.span(),
-                                        "use parentheses instead",
-                                        format!("align({})", s),
-                                        Applicability::MachineApplicable,
-                                    );
-                                }
-                                _ => {}
+                            acc.push(h);
+                        }
+                    } else if let Some((name, value)) = item.name_value_literal() {
+                        let mut literal_error = None;
+                        if name == sym::align {
+                            recognised = true;
+                            match parse_alignment(&value.kind) {
+                                Ok(literal) => acc.push(ReprAlign(literal)),
+                                Err(message) => literal_error = Some(message),
+                            };
+                        } else if name == sym::packed {
+                            recognised = true;
+                            match parse_alignment(&value.kind) {
+                                Ok(literal) => acc.push(ReprPacked(literal)),
+                                Err(message) => literal_error = Some(message),
+                            };
+                        }
+                        if let Some(literal_error) = literal_error {
+                            if error_if_invalid {
+                                struct_span_err!(
+                                    diagnostic,
+                                    item.span(),
+                                    E0589,
+                                    "invalid `repr(align)` attribute: {}",
+                                    literal_error
+                                )
+                                .emit();
                             }
-                            err.emit();
+                        }
+                    } else if let Some(meta_item) = item.meta_item() {
+                        if meta_item.has_name(sym::align) {
+                            if let MetaItemKind::NameValue(ref value) = meta_item.kind {
+                                recognised = true;
+                                let mut err = struct_span_err!(
+                                    diagnostic,
+                                    item.span(),
+                                    E0693,
+                                    "incorrect `repr(align)` attribute format"
+                                );
+                                match value.kind {
+                                    ast::LitKind::Int(int, ast::LitIntType::Unsuffixed) => {
+                                        err.span_suggestion(
+                                            item.span(),
+                                            "use parentheses instead",
+                                            format!("align({})", int),
+                                            Applicability::MachineApplicable,
+                                        );
+                                    }
+                                    ast::LitKind::Str(s, _) => {
+                                        err.span_suggestion(
+                                            item.span(),
+                                            "use parentheses instead",
+                                            format!("align({})", s),
+                                            Applicability::MachineApplicable,
+                                        );
+                                    }
+                                    _ => {}
+                                }
+                                if error_if_invalid {
+                                    err.emit();
+                                }
+                            }
                         }
                     }
-                }
-                if !recognised {
-                    // Not a word we recognize
-                    diagnostic.delay_span_bug(item.span(), "unrecognized representation hint");
+                    if !recognised && error_if_invalid {
+                        // Not a word we recognize
+                        diagnostic.delay_span_bug(item.span(), "unrecognized representation hint");
+                    }
                 }
             }
         }

@@ -13,6 +13,8 @@ use rustc_span::hygiene::ExpnId;
 use rustc_span::source_map::{FilePathMapping, SourceMap};
 use rustc_span::{MultiSpan, Span, Symbol};
 
+use rustc_ast::attr::MarkedAttrs;
+use rustc_ast::Attribute;
 use std::str;
 
 /// The set of keys (and, optionally, values) that define the compilation
@@ -142,6 +144,8 @@ pub struct ParseSess {
     /// Spans passed to `proc_macro::quote_span`. Each span has a numerical
     /// identifier represented by its position in the vector.
     pub proc_macro_quoted_spans: Lock<Vec<Span>>,
+
+    used_attrs: Lock<MarkedAttrs>,
 }
 
 impl ParseSess {
@@ -171,6 +175,7 @@ impl ParseSess {
             type_ascription_path_suggestions: Default::default(),
             assume_incomplete_release: false,
             proc_macro_quoted_spans: Default::default(),
+            used_attrs: Lock::new(MarkedAttrs::new()),
         }
     }
 
@@ -252,5 +257,13 @@ impl ParseSess {
 
     pub fn proc_macro_quoted_spans(&self) -> Vec<Span> {
         self.proc_macro_quoted_spans.lock().clone()
+    }
+
+    pub fn mark_attr_used(&self, attr: &Attribute) {
+        self.used_attrs.lock().mark(attr)
+    }
+
+    pub fn is_attr_used(&self, attr: &Attribute) -> bool {
+        self.used_attrs.lock().is_marked(attr)
     }
 }

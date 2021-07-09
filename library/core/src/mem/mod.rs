@@ -989,6 +989,15 @@ impl<T> fmt::Debug for Discriminant<T> {
     }
 }
 
+#[unstable(feature = "enum_as_repr", issue = "86772")]
+unsafe impl<T: crate::enums::AsRepr> crate::enums::AsRepr for Discriminant<T> {
+    type Repr = <T as DiscriminantKind>::Discriminant;
+
+    fn as_repr(&self) -> Self::Repr {
+        self.0
+    }
+}
+
 /// Returns a value uniquely identifying the enum variant in `v`.
 ///
 /// If `T` is not an enum, calling this function will not result in undefined behavior, but the

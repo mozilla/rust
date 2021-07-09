@@ -1,0 +1,58 @@
+error[FIXME]: `FromRepr` can only be derived for enums
+  --> $DIR/deriving-enum-from-repr-bad.rs:10:10
+   |
+LL | #[derive(FromRepr)]
+   |          ^^^^^^^^
+   |
+   = note: this error originates in the derive macro `FromRepr` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[FIXME]: `FromRepr` can only be derived for enums with an explicit integer representation
+  --> $DIR/deriving-enum-from-repr-bad.rs:14:10
+   |
+LL | #[derive(FromRepr)]
+   |          ^^^^^^^^
+   |
+   = note: this error originates in the derive macro `FromRepr` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[FIXME]: `FromRepr` can only be derived for enums with an explicit integer representation
+  --> $DIR/deriving-enum-from-repr-bad.rs:22:10
+   |
+LL | #[derive(FromRepr)]
+   |          ^^^^^^^^
+   |
+   = note: this error originates in the derive macro `FromRepr` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[FIXME]: `FromRepr` can only be derived for data-free enums
+  --> $DIR/deriving-enum-from-repr-bad.rs:29:10
+   |
+LL | #[derive(FromRepr)]
+   |          ^^^^^^^^
+   |
+   = note: this error originates in the derive macro `FromRepr` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[FIXME]: `FromRepr` can only be derived for data-free enums
+  --> $DIR/deriving-enum-from-repr-bad.rs:37:10
+   |
+LL | #[derive(FromRepr)]
+   |          ^^^^^^^^
+   |
+   = note: this error originates in the derive macro `FromRepr` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[FIXME]: `FromRepr` can only be derived for data-free enums
+  --> $DIR/deriving-enum-from-repr-bad.rs:45:10
+   |
+LL | #[derive(FromRepr)]
+   |          ^^^^^^^^
+   |
+   = note: this error originates in the derive macro `FromRepr` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[FIXME]: `FromRepr` can only be derived for data-free enums
+  --> $DIR/deriving-enum-from-repr-bad.rs:53:10
+   |
+LL | #[derive(FromRepr)]
+   |          ^^^^^^^^
+   |
+   = note: this error originates in the derive macro `FromRepr` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: aborting due to 7 previous errors
+

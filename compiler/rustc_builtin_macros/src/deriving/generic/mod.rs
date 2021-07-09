@@ -393,14 +393,13 @@ impl<'a> TraitDef<'a> {
     ) {
         match *item {
             Annotatable::Item(ref item) => {
-                let is_packed = item.attrs.iter().any(|attr| {
-                    for r in attr::find_repr_attrs(&cx.sess, attr) {
+                let is_packed =
+                    attr::find_repr_attrs(&cx.sess.parse_sess, &item.attrs, true).iter().any(|r| {
                         if let attr::ReprPacked(_) = r {
                             return true;
                         }
-                    }
-                    false
-                });
+                        false
+                    });
                 let has_no_type_params = match item.kind {
                     ast::ItemKind::Struct(_, ref generics)
                     | ast::ItemKind::Enum(_, ref generics)

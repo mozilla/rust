@@ -4157,6 +4157,7 @@ dependencies = [
  "bitflags",
  "rustc_ast",
  "rustc_ast_pretty",
+ "rustc_attr",
  "rustc_data_structures",
  "rustc_errors",
  "rustc_feature",
