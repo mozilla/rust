@@ -1,7 +1,7 @@
 // run-rustfix
 // edition:2018
 // check-pass
-#![warn(future_prelude_collision)]
+#![warn(rust_2021_prelude_collisions)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
@@ -26,7 +26,7 @@ mod a {
         // In this case, we can just use `TryIntoU32`
         let _: u32 = 3u8.try_into().unwrap();
         //~^ WARNING trait method `try_into` will become ambiguous in Rust 2021
-        //~^^ WARNING this was previously accepted by the compiler but is being phased out; it will become a hard error in the 2021 edition!
+        //~^^ WARNING this is accepted in the current edition
     }
 }
 
@@ -39,7 +39,7 @@ mod b {
         // the path `crate::m::TryIntoU32` (with which it was imported).
         let _: u32 = 3u8.try_into().unwrap();
         //~^ WARNING trait method `try_into` will become ambiguous in Rust 2021
-        //~^^ WARNING this was previously accepted by the compiler but is being phased out; it will become a hard error in the 2021 edition!
+        //~^^ WARNING this is accepted in the current edition
     }
 }
 
@@ -52,7 +52,7 @@ mod c {
         // the path `super::m::TryIntoU32` (with which it was imported).
         let _: u32 = 3u8.try_into().unwrap();
         //~^ WARNING trait method `try_into` will become ambiguous in Rust 2021
-        //~^^ WARNING this was previously accepted by the compiler but is being phased out; it will become a hard error in the 2021 edition!
+        //~^^ WARNING this is accepted in the current edition
     }
 }
 

@@ -25,10 +25,15 @@ macro_rules! unlikely {
 }
 
 // All these modules are technically private and only exposed for coretests:
+#[cfg(not(no_fp_fmt_parse))]
 pub mod bignum;
+#[cfg(not(no_fp_fmt_parse))]
 pub mod dec2flt;
+#[cfg(not(no_fp_fmt_parse))]
 pub mod diy_float;
+#[cfg(not(no_fp_fmt_parse))]
 pub mod flt2dec;
+pub mod fmt;
 
 #[macro_use]
 mod int_macros; // import int_impl!
@@ -36,6 +41,7 @@ mod int_macros; // import int_impl!
 mod uint_macros; // import uint_impl!
 
 mod error;
+mod int_log10;
 mod nonzero;
 mod wrapping;
 
@@ -43,6 +49,7 @@ mod wrapping;
 pub use wrapping::Wrapping;
 
 #[stable(feature = "rust1", since = "1.0.0")]
+#[cfg(not(no_fp_fmt_parse))]
 pub use dec2flt::ParseFloatError;
 
 #[stable(feature = "rust1", since = "1.0.0")]
@@ -590,8 +597,8 @@ impl u8 {
     /// before using this function.
     ///
     /// [infra-aw]: https://infra.spec.whatwg.org/#ascii-whitespace
-    /// [pct]: http://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap07.html#tag_07_03_01
-    /// [bfs]: http://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html#tag_18_06_05
+    /// [pct]: https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap07.html#tag_07_03_01
+    /// [bfs]: https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html#tag_18_06_05
     ///
     /// # Examples
     ///

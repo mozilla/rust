@@ -5,7 +5,7 @@
 // run-rustfix
 // edition:2018
 
-#![warn(future_prelude_collision)]
+#![warn(rust_2021_prelude_collisions)]
 
 trait TryIntoU32 {
     fn try_into(&self) -> Result<u32, ()>;
@@ -40,7 +40,7 @@ mod inner {
     pub fn test() -> u32 {
         get_dyn_trait().try_into().unwrap()
         //~^ WARNING trait method `try_into` will become ambiguous
-        //~| WARNING this was previously accepted
+        //~| WARNING this is accepted in the current edition
     }
 }
 

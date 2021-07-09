@@ -29,6 +29,9 @@ use crate::html::highlight;
 use crate::html::layout::Page;
 use crate::html::markdown::MarkdownSummaryLine;
 
+const ITEM_TABLE_OPEN: &'static str = "<div class=\"item-table\">";
+const ITEM_TABLE_CLOSE: &'static str = "</div>";
+
 pub(super) fn print_item(cx: &Context<'_>, item: &clean::Item, buf: &mut Buffer, page: &Page<'_>) {
     debug_assert!(!item.is_stripped());
     // Write the breadcrumb trail header for the top
@@ -263,14 +266,15 @@ fn item_module(w: &mut Buffer, cx: &Context<'_>, item: &clean::Item, items: &[cl
             curty = myty;
         } else if myty != curty {
             if curty.is_some() {
-                w.write_str("</table>");
+                w.write_str(ITEM_TABLE_CLOSE);
             }
             curty = myty;
             let (short, name) = item_ty_to_strs(myty.unwrap());
             write!(
                 w,
                 "<h2 id=\"{id}\" class=\"section-header\">\
-                       <a href=\"#{id}\">{name}</a></h2>\n<table>",
+                       <a href=\"#{id}\">{name}</a></h2>\n{}",
+                ITEM_TABLE_OPEN,
                 id = cx.derive_id(short.to_owned()),
                 name = name
             );
@@ -283,23 +287,23 @@ fn item_module(w: &mut Buffer, cx: &Context<'_>, item: &clean::Item, items: &[cl
                 match *src {
                     Some(ref src) => write!(
                         w,
-                        "<tr><td><code>{}extern crate {} as {};",
+                        "<div class=\"item-left\"><code>{}extern crate {} as {};",
                         myitem.visibility.print_with_space(myitem.def_id, cx),
-                        anchor(myitem.def_id.expect_real(), &*src.as_str(), cx),
+                        anchor(myitem.def_id.expect_def_id(), &*src.as_str(), cx),
                         myitem.name.as_ref().unwrap(),
                     ),
                     None => write!(
                         w,
-                        "<tr><td><code>{}extern crate {};",
+                        "<div class=\"item-left\"><code>{}extern crate {};",
                         myitem.visibility.print_with_space(myitem.def_id, cx),
                         anchor(
-                            myitem.def_id.expect_real(),
+                            myitem.def_id.expect_def_id(),
                             &*myitem.name.as_ref().unwrap().as_str(),
                             cx
                         ),
                     ),
                 }
-                w.write_str("</code></td></tr>");
+                w.write_str("</code></div>");
             }
 
             clean::ImportItem(ref import) => {
@@ -326,10 +330,10 @@ fn item_module(w: &mut Buffer, cx: &Context<'_>, item: &clean::Item, items: &[cl
 
                 write!(
                     w,
-                    "<tr class=\"{stab}{add}import-item\">\
-                         <td><code>{vis}{imp}</code></td>\
-                         <td class=\"docblock-short\">{stab_tags}</td>\
-                     </tr>",
+                    "<div class=\"item-left {stab}{add}import-item\">\
+                         <code>{vis}{imp}</code>\
+                     </div>\
+                     <div class=\"item-right docblock-short\">{stab_tags}</div>",
                     stab = stab.unwrap_or_default(),
                     add = add,
                     vis = myitem.visibility.print_with_space(myitem.def_id, cx),
@@ -358,11 +362,12 @@ fn item_module(w: &mut Buffer, cx: &Context<'_>, item: &clean::Item, items: &[cl
                 let doc_value = myitem.doc_value().unwrap_or_default();
                 write!(
                     w,
-                    "<tr class=\"{stab}{add}module-item\">\
-                         <td><a class=\"{class}\" href=\"{href}\" \
-                             title=\"{title}\">{name}</a>{unsafety_flag}</td>\
-                         <td class=\"docblock-short\">{stab_tags}{docs}</td>\
-                     </tr>",
+                    "<div class=\"item-left {stab}{add}module-item\">\
+                         <a class=\"{class}\" href=\"{href}\" title=\"{title}\">{name}</a>\
+                             {unsafety_flag}\
+                             {stab_tags}\
+                     </div>\
+                     <div class=\"item-right docblock-short\">{docs}</div>",
                     name = *myitem.name.as_ref().unwrap(),
                     stab_tags = extra_info_tags(myitem, item, cx.tcx()),
                     docs = MarkdownSummaryLine(&doc_value, &myitem.links(cx)).into_string(),
@@ -382,7 +387,7 @@ fn item_module(w: &mut Buffer, cx: &Context<'_>, item: &clean::Item, items: &[cl
     }
 
     if curty.is_some() {
-        w.write_str("</table>");
+        w.write_str(ITEM_TABLE_CLOSE);
     }
 }
 
@@ -664,9 +669,9 @@ fn item_trait(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, t: &clean::Tra
     }
 
     // If there are methods directly on this trait object, render them here.
-    render_assoc_items(w, cx, it, it.def_id.expect_real(), AssocItemRender::All);
+    render_assoc_items(w, cx, it, it.def_id.expect_def_id(), AssocItemRender::All);
 
-    if let Some(implementors) = cx.cache.implementors.get(&it.def_id.expect_real()) {
+    if let Some(implementors) = cx.cache.implementors.get(&it.def_id.expect_def_id()) {
         // The DefId is for the first Type found with that name. The bool is
         // if any Types with the same name but different DefId have been found.
         let mut implementor_dups: FxHashMap<Symbol, (DefId, bool)> = FxHashMap::default();
@@ -782,7 +787,7 @@ fn item_trait(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, t: &clean::Tra
         path = if it.def_id.is_local() {
             cx.current.join("/")
         } else {
-            let (ref path, _) = cx.cache.external_paths[&it.def_id.expect_real()];
+            let (ref path, _) = cx.cache.external_paths[&it.def_id.expect_def_id()];
             path[..path.len() - 1].join("/")
         },
         ty = it.type_(),
@@ -808,7 +813,7 @@ fn item_trait_alias(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, t: &clea
     // won't be visible anywhere in the docs. It would be nice to also show
     // associated items from the aliased type (see discussion in #32077), but
     // we need #14072 to make sense of the generics.
-    render_assoc_items(w, cx, it, it.def_id.expect_real(), AssocItemRender::All)
+    render_assoc_items(w, cx, it, it.def_id.expect_def_id(), AssocItemRender::All)
 }
 
 fn item_opaque_ty(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, t: &clean::OpaqueTy) {
@@ -829,7 +834,7 @@ fn item_opaque_ty(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, t: &clean:
     // won't be visible anywhere in the docs. It would be nice to also show
     // associated items from the aliased type (see discussion in #32077), but
     // we need #14072 to make sense of the generics.
-    render_assoc_items(w, cx, it, it.def_id.expect_real(), AssocItemRender::All)
+    render_assoc_items(w, cx, it, it.def_id.expect_def_id(), AssocItemRender::All)
 }
 
 fn item_typedef(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, t: &clean::Typedef) {
@@ -846,7 +851,7 @@ fn item_typedef(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, t: &clean::T
 
     document(w, cx, it, None);
 
-    let def_id = it.def_id.expect_real();
+    let def_id = it.def_id.expect_def_id();
     // Render any items associated directly to this alias, as otherwise they
     // won't be visible anywhere in the docs. It would be nice to also show
     // associated items from the aliased type (see discussion in #32077), but
@@ -898,7 +903,7 @@ fn item_union(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, s: &clean::Uni
             document(w, cx, field, Some(it));
         }
     }
-    let def_id = it.def_id.expect_real();
+    let def_id = it.def_id.expect_def_id();
     render_assoc_items(w, cx, it, def_id, AssocItemRender::All);
     document_type_layout(w, cx, def_id);
 }
@@ -1036,7 +1041,7 @@ fn item_enum(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, e: &clean::Enum
             }
         }
     }
-    let def_id = it.def_id.expect_real();
+    let def_id = it.def_id.expect_def_id();
     render_assoc_items(w, cx, it, def_id, AssocItemRender::All);
     document_type_layout(w, cx, def_id);
 }
@@ -1088,7 +1093,7 @@ fn item_proc_macro(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, m: &clean
 
 fn item_primitive(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item) {
     document(w, cx, it, None);
-    render_assoc_items(w, cx, it, it.def_id.expect_real(), AssocItemRender::All)
+    render_assoc_items(w, cx, it, it.def_id.expect_def_id(), AssocItemRender::All)
 }
 
 fn item_constant(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, c: &clean::Constant) {
@@ -1177,7 +1182,7 @@ fn item_struct(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, s: &clean::St
             }
         }
     }
-    let def_id = it.def_id.expect_real();
+    let def_id = it.def_id.expect_def_id();
     render_assoc_items(w, cx, it, def_id, AssocItemRender::All);
     document_type_layout(w, cx, def_id);
 }
@@ -1208,7 +1213,7 @@ fn item_foreign_type(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item) {
 
     document(w, cx, it, None);
 
-    render_assoc_items(w, cx, it, it.def_id.expect_real(), AssocItemRender::All)
+    render_assoc_items(w, cx, it, it.def_id.expect_def_id(), AssocItemRender::All)
 }
 
 fn item_keyword(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item) {

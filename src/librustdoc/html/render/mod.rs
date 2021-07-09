@@ -53,7 +53,7 @@ use rustc_span::symbol::{kw, sym, Symbol};
 use serde::ser::SerializeSeq;
 use serde::{Serialize, Serializer};
 
-use crate::clean::{self, FakeDefId, GetDefId, RenderedLink, SelfTy};
+use crate::clean::{self, GetDefId, ItemId, RenderedLink, SelfTy};
 use crate::docfs::PathError;
 use crate::error::Error;
 use crate::formats::cache::Cache;
@@ -95,31 +95,8 @@ crate struct IndexItem {
 /// A type used for the search index.
 #[derive(Debug)]
 crate struct RenderType {
-    ty: Option<DefId>,
-    idx: Option<usize>,
     name: Option<String>,
-    generics: Option<Vec<Generic>>,
-}
-
-/// A type used for the search index.
-#[derive(Debug)]
-crate struct Generic {
-    name: String,
-    defid: Option<DefId>,
-    idx: Option<usize>,
-}
-
-impl Serialize for Generic {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        if let Some(id) = self.idx {
-            serializer.serialize_some(&id)
-        } else {
-            serializer.serialize_some(&self.name)
-        }
-    }
+    generics: Option<Vec<String>>,
 }
 
 /// Full type of functions/methods in the search index.
@@ -173,7 +150,13 @@ impl Serialize for TypeWithKind {
     where
         S: Serializer,
     {
-        (&self.ty.name, self.kind).serialize(serializer)
+        let mut seq = serializer.serialize_seq(None)?;
+        seq.serialize_element(&self.ty.name)?;
+        seq.serialize_element(&self.kind)?;
+        if let Some(generics) = &self.ty.generics {
+            seq.serialize_element(generics)?;
+        }
+        seq.end()
     }
 }
 
@@ -752,7 +735,7 @@ fn naive_assoc_href(it: &clean::Item, link: AssocItemLink<'_>, cx: &Context<'_>)
         AssocItemLink::Anchor(Some(ref id)) => format!("#{}", id),
         AssocItemLink::Anchor(None) => anchor,
         AssocItemLink::GotoSource(did, _) => {
-            href(did.expect_real(), cx).map(|p| format!("{}{}", p.0, anchor)).unwrap_or(anchor)
+            href(did.expect_def_id(), cx).map(|p| format!("{}{}", p.0, anchor)).unwrap_or(anchor)
         }
     }
 }
@@ -884,7 +867,7 @@ fn render_assoc_item(
                     ItemType::TyMethod
                 };
 
-                href(did.expect_real(), cx)
+                href(did.expect_def_id(), cx)
                     .map(|p| format!("{}#{}.{}", p.0, ty, name))
                     .unwrap_or_else(|| format!("#{}.{}", ty, name))
             }
@@ -1004,7 +987,7 @@ fn render_attributes_in_code(w: &mut Buffer, it: &clean::Item) {
 #[derive(Copy, Clone)]
 enum AssocItemLink<'a> {
     Anchor(Option<&'a str>),
-    GotoSource(FakeDefId, &'a FxHashSet<Symbol>),
+    GotoSource(ItemId, &'a FxHashSet<Symbol>),
 }
 
 impl<'a> AssocItemLink<'a> {
@@ -1044,7 +1027,7 @@ fn render_assoc_items(
                 write!(
                     w,
                     "<h2 id=\"deref-methods\" class=\"small-section-header\">\
-                         Methods from {trait_}&lt;Target = {type_}&gt;\
+                         <span>Methods from {trait_}&lt;Target = {type_}&gt;</span>\
                          <a href=\"#deref-methods\" class=\"anchor\"></a>\
                      </h2>",
                     trait_ = trait_.print(cx),
@@ -1694,6 +1677,7 @@ fn print_sidebar(cx: &Context<'_>, it: &clean::Item, buffer: &mut Buffer) {
             write!(
                 buffer,
                 "<div class=\"block version\">\
+                     <div class=\"narrow-helper\"></div>\
                      <p>Version {}</p>\
                  </div>",
                 Escape(version),
@@ -1835,7 +1819,7 @@ fn small_url_encode(s: String) -> String {
 }
 
 fn sidebar_assoc_items(cx: &Context<'_>, out: &mut Buffer, it: &clean::Item) {
-    let did = it.def_id.expect_real();
+    let did = it.def_id.expect_def_id();
     if let Some(v) = cx.cache.impls.get(&did) {
         let mut used_links = FxHashSet::default();
         let cache = cx.cache();
@@ -2125,7 +2109,7 @@ fn sidebar_trait(cx: &Context<'_>, buf: &mut Buffer, it: &clean::Item, t: &clean
         "</div>",
     );
 
-    if let Some(implementors) = cx.cache.implementors.get(&it.def_id.expect_real()) {
+    if let Some(implementors) = cx.cache.implementors.get(&it.def_id.expect_def_id()) {
         let cache = cx.cache();
         let mut res = implementors
             .iter()

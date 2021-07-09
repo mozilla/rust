@@ -450,6 +450,7 @@ impl<'a> Builder<'a> {
                 test::RustdocTheme,
                 test::RustdocUi,
                 test::RustdocJson,
+                test::HtmlCheck,
                 // Run bootstrap close to the end as it's unlikely to fail
                 test::Bootstrap,
                 // Run run-make last, since these won't pass without make on Windows
@@ -464,6 +465,7 @@ impl<'a> Builder<'a> {
                 doc::Std,
                 doc::Rustc,
                 doc::Rustdoc,
+                doc::Rustfmt,
                 doc::ErrorIndex,
                 doc::Nomicon,
                 doc::Reference,

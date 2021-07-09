@@ -11,7 +11,8 @@ use rustc_middle::hir::map::Map;
 use rustc_middle::lint::LevelAndSource;
 use rustc_middle::lint::LintDiagnosticBuilder;
 use rustc_middle::lint::{
-    struct_lint_level, LintLevelMap, LintLevelSets, LintLevelSource, LintSet,
+    struct_lint_level, LintLevelMap, LintLevelSets, LintLevelSource, LintSet, LintStackIndex,
+    COMMAND_LINE,
 };
 use rustc_middle::ty::query::Providers;
 use rustc_middle::ty::TyCtxt;
@@ -50,15 +51,15 @@ fn lint_levels(tcx: TyCtxt<'_>, (): ()) -> LintLevelMap {
 pub struct LintLevelsBuilder<'s> {
     sess: &'s Session,
     sets: LintLevelSets,
-    id_to_set: FxHashMap<HirId, u32>,
-    cur: u32,
+    id_to_set: FxHashMap<HirId, LintStackIndex>,
+    cur: LintStackIndex,
     warn_about_weird_lints: bool,
     store: &'s LintStore,
     crate_attrs: &'s [ast::Attribute],
 }
 
 pub struct BuilderPush {
-    prev: u32,
+    prev: LintStackIndex,
     pub changed: bool,
 }
 
@@ -72,7 +73,7 @@ impl<'s> LintLevelsBuilder<'s> {
         let mut builder = LintLevelsBuilder {
             sess,
             sets: LintLevelSets::new(),
-            cur: 0,
+            cur: COMMAND_LINE,
             id_to_set: Default::default(),
             warn_about_weird_lints,
             store,
@@ -88,7 +89,7 @@ impl<'s> LintLevelsBuilder<'s> {
         self.sets.lint_cap = sess.opts.lint_cap.unwrap_or(Level::Forbid);
 
         for &(ref lint_name, level) in &sess.opts.lint_opts {
-            store.check_lint_name_cmdline(sess, &lint_name, Some(level));
+            store.check_lint_name_cmdline(sess, &lint_name, level, self.crate_attrs);
             let orig_level = level;
 
             // If the cap is less than this specified level, e.g., if we've got
@@ -110,16 +111,17 @@ impl<'s> LintLevelsBuilder<'s> {
         }
 
         for lint_name in &sess.opts.force_warns {
-            let valid = store.check_lint_name_cmdline(sess, lint_name, None);
-            if valid {
-                let lints = store
-                    .find_lints(lint_name)
-                    .unwrap_or_else(|_| bug!("A valid lint failed to produce a lint ids"));
-                self.sets.force_warns.extend(&lints);
+            store.check_lint_name_cmdline(sess, lint_name, Level::ForceWarn, self.crate_attrs);
+            let lints = store
+                .find_lints(lint_name)
+                .unwrap_or_else(|_| bug!("A valid lint failed to produce a lint ids"));
+            for id in lints {
+                let src = LintLevelSource::CommandLine(Symbol::intern(lint_name), Level::ForceWarn);
+                specs.insert(id, (Level::ForceWarn, src));
             }
         }
 
-        self.sets.list.push(LintSet::CommandLine { specs });
+        self.cur = self.sets.list.push(LintSet { specs, parent: COMMAND_LINE });
     }
 
     /// Attempts to insert the `id` to `level_src` map entry. If unsuccessful
@@ -131,6 +133,8 @@ impl<'s> LintLevelsBuilder<'s> {
         id: LintId,
         (level, src): LevelAndSource,
     ) {
+        let (old_level, old_src) =
+            self.sets.get_lint_level(id.lint, self.cur, Some(&specs), &self.sess);
         // Setting to a non-forbid level is an error if the lint previously had
         // a forbid level. Note that this is not necessarily true even with a
         // `#[forbid(..)]` attribute present, as that is overriden by `--cap-lints`.
@@ -138,9 +142,7 @@ impl<'s> LintLevelsBuilder<'s> {
         // This means that this only errors if we're truly lowering the lint
         // level from forbid.
         if level != Level::Forbid {
-            if let (Level::Forbid, old_src) =
-                self.sets.get_lint_level(id.lint, self.cur, Some(&specs), &self.sess)
-            {
+            if let Level::Forbid = old_level {
                 // Backwards compatibility check:
                 //
                 // We used to not consider `forbid(lint_group)`
@@ -152,9 +154,6 @@ impl<'s> LintLevelsBuilder<'s> {
                     LintLevelSource::Default => false,
                     LintLevelSource::Node(symbol, _, _) => self.store.is_lint_group(symbol),
                     LintLevelSource::CommandLine(symbol, _) => self.store.is_lint_group(symbol),
-                    LintLevelSource::ForceWarn(_symbol) => {
-                        bug!("forced warn lint returned a forbid lint level")
-                    }
                 };
                 debug!(
                     "fcw_warning={:?}, specs.get(&id) = {:?}, old_src={:?}, id_name={:?}",
@@ -179,7 +178,6 @@ impl<'s> LintLevelsBuilder<'s> {
                         LintLevelSource::CommandLine(_, _) => {
                             diag_builder.note("`forbid` lint level was set on command line");
                         }
-                        _ => bug!("forced warn lint returned a forbid lint level"),
                     }
                     diag_builder.emit();
                 };
@@ -216,7 +214,11 @@ impl<'s> LintLevelsBuilder<'s> {
                 }
             }
         }
-        specs.insert(id, (level, src));
+        if let Level::ForceWarn = old_level {
+            specs.insert(id, (old_level, old_src));
+        } else {
+            specs.insert(id, (level, src));
+        }
     }
 
     /// Pushes a list of AST lint attributes onto this context.
@@ -320,33 +322,14 @@ impl<'s> LintLevelsBuilder<'s> {
                         continue;
                     }
                 };
-                let tool_name = if meta_item.path.segments.len() > 1 {
-                    let tool_ident = meta_item.path.segments[0].ident;
-                    if !is_known_lint_tool(tool_ident.name, sess, &self.crate_attrs) {
-                        let mut err = struct_span_err!(
-                            sess,
-                            tool_ident.span,
-                            E0710,
-                            "unknown tool name `{}` found in scoped lint: `{}`",
-                            tool_ident.name,
-                            pprust::path_to_string(&meta_item.path),
-                        );
-                        if sess.is_nightly_build() {
-                            err.help(&format!(
-                                "add `#![register_tool({})]` to the crate root",
-                                tool_ident.name
-                            ));
-                        }
-                        err.emit();
-                        continue;
-                    }
-
-                    Some(meta_item.path.segments.remove(0).ident.name)
+                let tool_ident = if meta_item.path.segments.len() > 1 {
+                    Some(meta_item.path.segments.remove(0).ident)
                 } else {
                     None
                 };
+                let tool_name = tool_ident.map(|ident| ident.name);
                 let name = pprust::path_to_string(&meta_item.path);
-                let lint_result = store.check_lint_name(&name, tool_name);
+                let lint_result = store.check_lint_name(sess, &name, tool_name, self.crate_attrs);
                 match &lint_result {
                     CheckLintNameResult::Ok(ids) => {
                         let src = LintLevelSource::Node(
@@ -363,7 +346,8 @@ impl<'s> LintLevelsBuilder<'s> {
                     CheckLintNameResult::Tool(result) => {
                         match *result {
                             Ok(ids) => {
-                                let complete_name = &format!("{}::{}", tool_name.unwrap(), name);
+                                let complete_name =
+                                    &format!("{}::{}", tool_ident.unwrap().name, name);
                                 let src = LintLevelSource::Node(
                                     Symbol::intern(complete_name),
                                     sp,
@@ -418,6 +402,26 @@ impl<'s> LintLevelsBuilder<'s> {
                         }
                     }
 
+                    &CheckLintNameResult::NoTool => {
+                        let mut err = struct_span_err!(
+                            sess,
+                            tool_ident.map_or(DUMMY_SP, |ident| ident.span),
+                            E0710,
+                            "unknown tool name `{}` found in scoped lint: `{}::{}`",
+                            tool_name.unwrap(),
+                            tool_name.unwrap(),
+                            pprust::path_to_string(&meta_item.path),
+                        );
+                        if sess.is_nightly_build() {
+                            err.help(&format!(
+                                "add `#![register_tool({})]` to the crate root",
+                                tool_name.unwrap()
+                            ));
+                        }
+                        err.emit();
+                        continue;
+                    }
+
                     _ if !self.warn_about_weird_lints => {}
 
                     CheckLintNameResult::Warning(msg, renamed) => {
@@ -449,8 +453,8 @@ impl<'s> LintLevelsBuilder<'s> {
                         let (level, src) =
                             self.sets.get_lint_level(lint, self.cur, Some(&specs), self.sess);
                         struct_lint_level(self.sess, lint, level, src, Some(sp.into()), |lint| {
-                            let name = if let Some(tool_name) = tool_name {
-                                format!("{}::{}", tool_name, name)
+                            let name = if let Some(tool_ident) = tool_ident {
+                                format!("{}::{}", tool_ident.name, name)
                             } else {
                                 name.to_string()
                             };
@@ -473,7 +477,9 @@ impl<'s> LintLevelsBuilder<'s> {
                 if let CheckLintNameResult::Warning(_, Some(new_name)) = lint_result {
                     // Ignore any errors or warnings that happen because the new name is inaccurate
                     // NOTE: `new_name` already includes the tool name, so we don't have to add it again.
-                    if let CheckLintNameResult::Ok(ids) = store.check_lint_name(&new_name, None) {
+                    if let CheckLintNameResult::Ok(ids) =
+                        store.check_lint_name(sess, &new_name, None, self.crate_attrs)
+                    {
                         let src = LintLevelSource::Node(Symbol::intern(&new_name), sp, reason);
                         for &id in ids {
                             self.check_gated_lint(id, attr.span);
@@ -522,8 +528,7 @@ impl<'s> LintLevelsBuilder<'s> {
 
         let prev = self.cur;
         if !specs.is_empty() {
-            self.cur = self.sets.list.len() as u32;
-            self.sets.list.push(LintSet::Node { specs, parent: prev });
+            self.cur = self.sets.list.push(LintSet { specs, parent: prev });
         }
 
         BuilderPush { prev, changed: prev != self.cur }
@@ -577,7 +582,7 @@ impl<'s> LintLevelsBuilder<'s> {
     }
 }
 
-fn is_known_lint_tool(m_item: Symbol, sess: &Session, attrs: &[ast::Attribute]) -> bool {
+pub fn is_known_lint_tool(m_item: Symbol, sess: &Session, attrs: &[ast::Attribute]) -> bool {
     if [sym::clippy, sym::rustc, sym::rustdoc].contains(&m_item) {
         return true;
     }

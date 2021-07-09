@@ -42,11 +42,13 @@ use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_infer::infer::UpvarRegion;
 use rustc_middle::hir::place::{Place, PlaceBase, PlaceWithHirId, Projection, ProjectionKind};
 use rustc_middle::mir::FakeReadCause;
-use rustc_middle::ty::{self, TraitRef, Ty, TyCtxt, TypeckResults, UpvarSubsts};
+use rustc_middle::ty::{
+    self, ClosureSizeProfileData, Ty, TyCtxt, TypeckResults, UpvarCapture, UpvarSubsts,
+};
 use rustc_session::lint;
 use rustc_span::sym;
 use rustc_span::{MultiSpan, Span, Symbol};
-use rustc_trait_selection::traits::{Obligation, ObligationCause};
+use rustc_trait_selection::infer::InferCtxtExt;
 
 use rustc_data_structures::stable_set::FxHashSet;
 use rustc_index::vec::Idx;
@@ -167,13 +169,15 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         );
         self.log_capture_analysis_first_pass(closure_def_id, &delegate.capture_information, span);
 
-        self.compute_min_captures(closure_def_id, delegate.capture_information);
+        self.compute_min_captures(closure_def_id, capture_clause, delegate.capture_information);
 
         let closure_hir_id = self.tcx.hir().local_def_id_to_hir_id(local_def_id);
 
-        if should_do_disjoint_capture_migration_analysis(self.tcx, closure_hir_id) {
+        if should_do_rust_2021_incompatible_closure_captures_analysis(self.tcx, closure_hir_id) {
             self.perform_2229_migration_anaysis(closure_def_id, body_id, capture_clause, span);
         }
+
+        let after_feature_tys = self.final_upvar_tys(closure_def_id);
 
         // We now fake capture information for all variables that are mentioned within the closure
         // We do this after handling migrations so that min_captures computes before
@@ -200,8 +204,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             }
 
             // This will update the min captures based on this new fake information.
-            self.compute_min_captures(closure_def_id, capture_information);
+            self.compute_min_captures(closure_def_id, capture_clause, capture_information);
         }
+
+        let before_feature_tys = self.final_upvar_tys(closure_def_id);
 
         if let Some(closure_substs) = infer_kind {
             // Unify the (as yet unbound) type variable in the closure
@@ -213,7 +219,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             // If we have an origin, store it.
             if let Some(origin) = delegate.current_origin.clone() {
                 let origin = if enable_precise_capture(self.tcx, span) {
-                    (origin.0, restrict_capture_precision(origin.1))
+                    (origin.0, restrict_capture_precision(capture_clause, origin.1))
                 } else {
                     (origin.0, Place { projections: vec![], ..origin.1 })
                 };
@@ -258,6 +264,16 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             .collect();
         self.typeck_results.borrow_mut().closure_fake_reads.insert(closure_def_id, fake_reads);
 
+        if self.tcx.sess.opts.debugging_opts.profile_closures {
+            self.typeck_results.borrow_mut().closure_size_eval.insert(
+                closure_def_id,
+                ClosureSizeProfileData {
+                    before_feature_tys: self.tcx.mk_tup(before_feature_tys.into_iter()),
+                    after_feature_tys: self.tcx.mk_tup(after_feature_tys.into_iter()),
+                },
+            );
+        }
+
         // If we are also inferred the closure kind here,
         // process any deferred resolutions.
         let deferred_call_resolutions = self.remove_deferred_call_resolutions(closure_def_id);
@@ -285,13 +301,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     captured_place.place, upvar_ty, capture, captured_place.mutability,
                 );
 
-                match capture {
-                    ty::UpvarCapture::ByValue(_) => upvar_ty,
-                    ty::UpvarCapture::ByRef(borrow) => self.tcx.mk_ref(
-                        borrow.region,
-                        ty::TypeAndMut { ty: upvar_ty, mutbl: borrow.kind.to_mutbl_lossy() },
-                    ),
-                }
+                apply_capture_kind_on_capture_ty(self.tcx, upvar_ty, capture)
             })
             .collect()
     }
@@ -368,6 +378,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     fn compute_min_captures(
         &self,
         closure_def_id: DefId,
+        capture_clause: hir::CaptureBy,
         capture_information: InferredCaptureInformation<'tcx>,
     ) {
         if capture_information.is_empty() {
@@ -385,7 +396,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 base => bug!("Expected upvar, found={:?}", base),
             };
 
-            let place = restrict_capture_precision(place);
+            let place = restrict_capture_precision(capture_clause, place);
 
             let min_cap_list = match root_var_min_capture_list.get_mut(&var_hir_id) {
                 None => {
@@ -488,17 +499,18 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             let local_def_id = closure_def_id.expect_local();
             let closure_hir_id = self.tcx.hir().local_def_id_to_hir_id(local_def_id);
             self.tcx.struct_span_lint_hir(
-                lint::builtin::DISJOINT_CAPTURE_MIGRATION,
+                lint::builtin::RUST_2021_INCOMPATIBLE_CLOSURE_CAPTURES,
                 closure_hir_id,
                 span,
                 |lint| {
                     let mut diagnostics_builder = lint.build(
                         format!(
-                            "{} affected for closure because of `capture_disjoint_fields`",
+                            "{} will change in Rust 2021",
                             reasons
                         )
                         .as_str(),
                     );
+                    diagnostics_builder.note("for more information, see <https://doc.rust-lang.org/nightly/edition-guide/rust-2021/disjoint-capture-in-closures.html>");
                     let closure_body_span = self.tcx.hir().span(body_id.hir_id);
                     let (sugg, app) =
                         match self.tcx.sess.source_map().span_to_snippet(closure_body_span) {
@@ -560,35 +572,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         reasons
     }
 
-    /// Returns true if `ty` may implement `trait_def_id`
-    fn ty_impls_trait(
-        &self,
-        ty: Ty<'tcx>,
-        cause: &ObligationCause<'tcx>,
-        trait_def_id: DefId,
-    ) -> bool {
-        use crate::rustc_middle::ty::ToPredicate;
-        use crate::rustc_middle::ty::WithConstness;
-        use rustc_trait_selection::traits::query::evaluate_obligation::InferCtxtExt;
-        let tcx = self.infcx.tcx;
-
-        let trait_ref = TraitRef { def_id: trait_def_id, substs: tcx.mk_substs_trait(ty, &[]) };
-
-        let obligation = Obligation::new(
-            cause.clone(),
-            self.param_env,
-            trait_ref.without_const().to_predicate(tcx),
-        );
-
-        self.infcx.predicate_may_hold(&obligation)
-    }
-
     /// Returns true if migration is needed for trait for the provided var_hir_id
     fn need_2229_migrations_for_trait(
         &self,
         min_captures: Option<&ty::RootVariableMinCaptureList<'tcx>>,
         var_hir_id: hir::HirId,
         check_trait: Option<DefId>,
+        closure_clause: hir::CaptureBy,
     ) -> bool {
         let root_var_min_capture_list = if let Some(root_var_min_capture_list) =
             min_captures.and_then(|m| m.get(&var_hir_id))
@@ -600,19 +590,52 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         let ty = self.infcx.resolve_vars_if_possible(self.node_ty(var_hir_id));
 
-        let cause = ObligationCause::misc(self.tcx.hir().span(var_hir_id), self.body_id);
+        let ty = match closure_clause {
+            hir::CaptureBy::Value => ty, // For move closure the capture kind should be by value
+            hir::CaptureBy::Ref => {
+                // For non move closure the capture kind is the max capture kind of all captures
+                // according to the ordering ImmBorrow < UniqueImmBorrow < MutBorrow < ByValue
+                let mut max_capture_info = root_var_min_capture_list.first().unwrap().info;
+                for capture in root_var_min_capture_list.iter() {
+                    max_capture_info = determine_capture_info(max_capture_info, capture.info);
+                }
+
+                apply_capture_kind_on_capture_ty(self.tcx, ty, max_capture_info.capture_kind)
+            }
+        };
 
         let obligation_should_hold = check_trait
-            .map(|check_trait| self.ty_impls_trait(ty, &cause, check_trait))
+            .map(|check_trait| {
+                self.infcx
+                    .type_implements_trait(
+                        check_trait,
+                        ty,
+                        self.tcx.mk_substs_trait(ty, &[]),
+                        self.param_env,
+                    )
+                    .must_apply_modulo_regions()
+            })
             .unwrap_or(false);
 
-        // Check whether catpured fields also implement the trait
-
+        // Check whether captured fields also implement the trait
         for capture in root_var_min_capture_list.iter() {
-            let ty = capture.place.ty();
+            let ty = apply_capture_kind_on_capture_ty(
+                self.tcx,
+                capture.place.ty(),
+                capture.info.capture_kind,
+            );
 
             let obligation_holds_for_capture = check_trait
-                .map(|check_trait| self.ty_impls_trait(ty, &cause, check_trait))
+                .map(|check_trait| {
+                    self.infcx
+                        .type_implements_trait(
+                            check_trait,
+                            ty,
+                            self.tcx.mk_substs_trait(ty, &[]),
+                            self.param_env,
+                        )
+                        .must_apply_modulo_regions()
+                })
                 .unwrap_or(false);
 
             if !obligation_holds_for_capture && obligation_should_hold {
@@ -636,6 +659,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         &self,
         min_captures: Option<&ty::RootVariableMinCaptureList<'tcx>>,
         var_hir_id: hir::HirId,
+        closure_clause: hir::CaptureBy,
     ) -> Option<FxHashSet<&str>> {
         let tcx = self.infcx.tcx;
 
@@ -646,6 +670,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             min_captures,
             var_hir_id,
             tcx.lang_items().clone_trait(),
+            closure_clause,
         ) {
             auto_trait_reasons.insert("`Clone`");
         }
@@ -654,6 +679,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             min_captures,
             var_hir_id,
             tcx.lang_items().sync_trait(),
+            closure_clause,
         ) {
             auto_trait_reasons.insert("`Sync`");
         }
@@ -661,7 +687,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         if self.need_2229_migrations_for_trait(
             min_captures,
             var_hir_id,
-            tcx.lang_items().send_trait(),
+            tcx.get_diagnostic_item(sym::send_trait),
+            closure_clause,
         ) {
             auto_trait_reasons.insert("`Send`");
         }
@@ -670,6 +697,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             min_captures,
             var_hir_id,
             tcx.lang_items().unpin_trait(),
+            closure_clause,
         ) {
             auto_trait_reasons.insert("`Unpin`");
         }
@@ -677,7 +705,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         if self.need_2229_migrations_for_trait(
             min_captures,
             var_hir_id,
-            tcx.lang_items().unwind_safe_trait(),
+            tcx.get_diagnostic_item(sym::unwind_safe_trait),
+            closure_clause,
         ) {
             auto_trait_reasons.insert("`UnwindSafe`");
         }
@@ -685,7 +714,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         if self.need_2229_migrations_for_trait(
             min_captures,
             var_hir_id,
-            tcx.lang_items().ref_unwind_safe_trait(),
+            tcx.get_diagnostic_item(sym::ref_unwind_safe_trait),
+            closure_clause,
         ) {
             auto_trait_reasons.insert("`RefUnwindSafe`");
         }
@@ -805,7 +835,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         for (&var_hir_id, _) in upvars.iter() {
             let mut need_migration = false;
             if let Some(trait_migration_cause) =
-                self.compute_2229_migrations_for_trait(min_captures, var_hir_id)
+                self.compute_2229_migrations_for_trait(min_captures, var_hir_id, closure_clause)
             {
                 need_migration = true;
                 auto_trait_reasons.extend(trait_migration_cause);
@@ -943,12 +973,14 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let is_drop_defined_for_ty = |ty: Ty<'tcx>| {
             let drop_trait = self.tcx.require_lang_item(hir::LangItem::Drop, Some(closure_span));
             let ty_params = self.tcx.mk_substs_trait(base_path_ty, &[]);
-            self.tcx.type_implements_trait((
-                drop_trait,
-                ty,
-                ty_params,
-                self.tcx.param_env(closure_def_id.expect_local()),
-            ))
+            self.infcx
+                .type_implements_trait(
+                    drop_trait,
+                    ty,
+                    ty_params,
+                    self.tcx.param_env(closure_def_id.expect_local()),
+                )
+                .must_apply_modulo_regions()
         };
 
         let is_drop_defined_for_ty = is_drop_defined_for_ty(base_path_ty);
@@ -1275,6 +1307,19 @@ fn restrict_repr_packed_field_ref_capture<'tcx>(
     place
 }
 
+/// Returns a Ty that applies the specified capture kind on the provided capture Ty
+fn apply_capture_kind_on_capture_ty(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+    capture_kind: UpvarCapture<'tcx>,
+) -> Ty<'tcx> {
+    match capture_kind {
+        ty::UpvarCapture::ByValue(_) => ty,
+        ty::UpvarCapture::ByRef(borrow) => tcx
+            .mk_ref(borrow.region, ty::TypeAndMut { ty: ty, mutbl: borrow.kind.to_mutbl_lossy() }),
+    }
+}
+
 struct InferBorrowKind<'a, 'tcx> {
     fcx: &'a FnCtxt<'a, 'tcx>,
 
@@ -1590,7 +1635,7 @@ impl<'a, 'tcx> euv::Delegate<'tcx> for InferBorrowKind<'a, 'tcx> {
         if let PlaceBase::Upvar(_) = place.base {
             // We need to restrict Fake Read precision to avoid fake reading unsafe code,
             // such as deref of a raw pointer.
-            let place = restrict_capture_precision(place);
+            let place = restrict_capture_precision(self.capture_clause, place);
             let place =
                 restrict_repr_packed_field_ref_capture(self.fcx.tcx, self.fcx.param_env, &place);
             self.fake_reads.push((place, cause, diag_expr_id));
@@ -1607,11 +1652,17 @@ impl<'a, 'tcx> euv::Delegate<'tcx> for InferBorrowKind<'a, 'tcx> {
             "consume(place_with_id={:?}, diag_expr_id={:?}, mode={:?})",
             place_with_id, diag_expr_id, mode
         );
+
+        let place_with_id = PlaceWithHirId {
+            place: truncate_capture_for_optimization(&place_with_id.place),
+            ..*place_with_id
+        };
+
         if !self.capture_information.contains_key(&place_with_id.place) {
-            self.init_capture_info_for_place(place_with_id, diag_expr_id);
+            self.init_capture_info_for_place(&place_with_id, diag_expr_id);
         }
 
-        self.adjust_upvar_borrow_kind_for_consume(place_with_id, diag_expr_id, mode);
+        self.adjust_upvar_borrow_kind_for_consume(&place_with_id, diag_expr_id, mode);
     }
 
     fn borrow(
@@ -1625,11 +1676,17 @@ impl<'a, 'tcx> euv::Delegate<'tcx> for InferBorrowKind<'a, 'tcx> {
             place_with_id, diag_expr_id, bk
         );
 
+        // We only want repr packed restriction to be applied to reading references into a packed
+        // struct, and not when the data is being moved. There for we call this method here instead
+        // of in `restrict_capture_precision`.
         let place = restrict_repr_packed_field_ref_capture(
             self.fcx.tcx,
             self.fcx.param_env,
             &place_with_id.place,
         );
+
+        let place = truncate_capture_for_optimization(&place);
+
         let place_with_id = PlaceWithHirId { place, ..*place_with_id };
 
         if !self.capture_information.contains_key(&place_with_id.place) {
@@ -1654,11 +1711,46 @@ impl<'a, 'tcx> euv::Delegate<'tcx> for InferBorrowKind<'a, 'tcx> {
     }
 }
 
+/// Deref of a box isn't captured in move clousres. This is motivated by:
+///   1. We only want to capture data that is on the stack
+///   2. One motivation for the user to use a box might be to reduce the amount of data that gets
+///      moved (if size of pointer < size of data). We want to make sure that this optimization that
+///      the user made is respected.
+fn restrict_precision_for_box<'tcx>(
+    capture_clause: hir::CaptureBy,
+    mut place: Place<'tcx>,
+) -> Place<'tcx> {
+    match capture_clause {
+        hir::CaptureBy::Ref => {}
+        hir::CaptureBy::Value => {
+            if ty::TyS::is_box(place.base_ty) {
+                place.projections.truncate(0);
+            } else {
+                // Either the box is the last access or there is a deref applied on the box
+                // In either case we want to stop at the box.
+                let pos = place.projections.iter().position(|proj| ty::TyS::is_box(proj.ty));
+                match pos {
+                    None => {}
+                    Some(idx) => {
+                        place.projections.truncate(idx + 1);
+                    }
+                }
+            }
+        }
+    }
+
+    place
+}
+
 /// Truncate projections so that following rules are obeyed by the captured `place`:
 /// - No projections are applied to raw pointers, since these require unsafe blocks. We capture
 ///   them completely.
 /// - No Index projections are captured, since arrays are captured completely.
-fn restrict_capture_precision<'tcx>(mut place: Place<'tcx>) -> Place<'tcx> {
+/// - Deref of a box isn't captured in move clousres.
+fn restrict_capture_precision<'tcx>(
+    capture_clause: hir::CaptureBy,
+    mut place: Place<'tcx>,
+) -> Place<'tcx> {
     if place.projections.is_empty() {
         // Nothing to do here
         return place;
@@ -1693,7 +1785,8 @@ fn restrict_capture_precision<'tcx>(mut place: Place<'tcx>) -> Place<'tcx> {
 
     place.projections.truncate(length);
 
-    place
+    // Dont't capture projections on top of a box in move closures.
+    restrict_precision_for_box(capture_clause, place)
 }
 
 /// Truncates a place so that the resultant capture doesn't move data out of a reference
@@ -1769,8 +1862,12 @@ fn var_name(tcx: TyCtxt<'_>, var_hir_id: hir::HirId) -> Symbol {
     tcx.hir().name(var_hir_id)
 }
 
-fn should_do_disjoint_capture_migration_analysis(tcx: TyCtxt<'_>, closure_id: hir::HirId) -> bool {
-    let (level, _) = tcx.lint_level_at_node(lint::builtin::DISJOINT_CAPTURE_MIGRATION, closure_id);
+fn should_do_rust_2021_incompatible_closure_captures_analysis(
+    tcx: TyCtxt<'_>,
+    closure_id: hir::HirId,
+) -> bool {
+    let (level, _) =
+        tcx.lint_level_at_node(lint::builtin::RUST_2021_INCOMPATIBLE_CLOSURE_CAPTURES, closure_id);
 
     !matches!(level, lint::Level::Allow)
 }
@@ -1922,6 +2019,48 @@ fn determine_place_ancestry_relation(
         }
     } else {
         PlaceAncestryRelation::Divergent
+    }
+}
+
+/// Reduces the precision of the captured place when the precision doesn't yeild any benefit from
+/// borrow checking prespective, allowing us to save us on the size of the capture.
+///
+///
+/// Fields that are read through a shared reference will always be read via a shared ref or a copy,
+/// and therefore capturing precise paths yields no benefit. This optimization truncates the
+/// rightmost deref of the capture if the deref is applied to a shared ref.
+///
+/// Reason we only drop the last deref is because of the following edge case:
+///
+/// ```rust
+/// struct MyStruct<'a> {
+///    a: &'static A,
+///    b: B,
+///    c: C<'a>,
+/// }
+///
+/// fn foo<'a, 'b>(m: &'a MyStruct<'b>) -> impl FnMut() + 'static {
+///     let c = || drop(&*m.a.field_of_a);
+///     // Here we really do want to capture `*m.a` because that outlives `'static`
+///
+///     // If we capture `m`, then the closure no longer outlives `'static'
+///     // it is constrained to `'a`
+/// }
+/// ```
+fn truncate_capture_for_optimization<'tcx>(place: &Place<'tcx>) -> Place<'tcx> {
+    let is_shared_ref = |ty: Ty<'_>| matches!(ty.kind(), ty::Ref(.., hir::Mutability::Not));
+
+    // Find the right-most deref (if any). All the projections that come after this
+    // are fields or other "in-place pointer adjustments"; these refer therefore to
+    // data owned by whatever pointer is being dereferenced here.
+    let idx = place.projections.iter().rposition(|proj| ProjectionKind::Deref == proj.kind);
+
+    match idx {
+        // If that pointer is a shared reference, then we don't need those fields.
+        Some(idx) if is_shared_ref(place.ty_before_projection(idx)) => {
+            Place { projections: place.projections[0..=idx].to_vec(), ..place.clone() }
+        }
+        None | Some(_) => place.clone(),
     }
 }
 

@@ -107,7 +107,7 @@ fn assert_non_crate_hash_different(x: &Options, y: &Options) {
 // When the user supplies --test we should implicitly supply --cfg test
 #[test]
 fn test_switch_implies_cfg_test() {
-    rustc_span::with_default_session_globals(|| {
+    rustc_span::create_default_session_globals_then(|| {
         let matches = optgroups().parse(&["--test".to_string()]).unwrap();
         let (sess, cfg) = mk_session(matches);
         let cfg = build_configuration(&sess, to_crate_config(cfg));
@@ -118,7 +118,7 @@ fn test_switch_implies_cfg_test() {
 // When the user supplies --test and --cfg test, don't implicitly add another --cfg test
 #[test]
 fn test_switch_implies_cfg_test_unless_cfg_test() {
-    rustc_span::with_default_session_globals(|| {
+    rustc_span::create_default_session_globals_then(|| {
         let matches = optgroups().parse(&["--test".to_string(), "--cfg=test".to_string()]).unwrap();
         let (sess, cfg) = mk_session(matches);
         let cfg = build_configuration(&sess, to_crate_config(cfg));
@@ -130,20 +130,20 @@ fn test_switch_implies_cfg_test_unless_cfg_test() {
 
 #[test]
 fn test_can_print_warnings() {
-    rustc_span::with_default_session_globals(|| {
+    rustc_span::create_default_session_globals_then(|| {
         let matches = optgroups().parse(&["-Awarnings".to_string()]).unwrap();
         let (sess, _) = mk_session(matches);
         assert!(!sess.diagnostic().can_emit_warnings());
     });
 
-    rustc_span::with_default_session_globals(|| {
+    rustc_span::create_default_session_globals_then(|| {
         let matches =
             optgroups().parse(&["-Awarnings".to_string(), "-Dwarnings".to_string()]).unwrap();
         let (sess, _) = mk_session(matches);
         assert!(sess.diagnostic().can_emit_warnings());
     });
 
-    rustc_span::with_default_session_globals(|| {
+    rustc_span::create_default_session_globals_then(|| {
         let matches = optgroups().parse(&["-Adead_code".to_string()]).unwrap();
         let (sess, _) = mk_session(matches);
         assert!(sess.diagnostic().can_emit_warnings());
@@ -654,6 +654,7 @@ fn test_debugging_options_tracking_hash() {
     untracked!(perf_stats, true);
     // `pre_link_arg` is omitted because it just forwards to `pre_link_args`.
     untracked!(pre_link_args, vec![String::from("abc"), String::from("def")]);
+    untracked!(profile_closures, true);
     untracked!(print_link_args, true);
     untracked!(print_llvm_passes, true);
     untracked!(print_mono_items, Some(String::from("abc")));
@@ -715,6 +716,7 @@ fn test_debugging_options_tracking_hash() {
     tracked!(instrument_coverage, Some(InstrumentCoverage::All));
     tracked!(instrument_mcount, true);
     tracked!(link_only, true);
+    tracked!(llvm_plugins, vec![String::from("plugin_name")]);
     tracked!(merge_functions, Some(MergeFunctions::Disabled));
     tracked!(mir_emit_retag, true);
     tracked!(mir_opt_level, Some(4));
