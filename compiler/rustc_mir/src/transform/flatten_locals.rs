@@ -96,20 +96,20 @@ fn compute_flattening<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) -> Replace
     let escaping = escaping_locals(&*body);
     let (basic_blocks, local_decls) = body.basic_blocks_and_local_decls_mut();
     let mut visitor =
-        FlattenVisitor { tcx, escaping, local_decls: local_decls, map: Default::default() };
+        PreFlattenVisitor { tcx, escaping, local_decls: local_decls, map: Default::default() };
     for (block, bbdata) in basic_blocks.iter_enumerated() {
         visitor.visit_basic_block_data(block, bbdata);
     }
     return visitor.map;
 
-    struct FlattenVisitor<'tcx, 'll> {
+    struct PreFlattenVisitor<'tcx, 'll> {
         tcx: TyCtxt<'tcx>,
         local_decls: &'ll mut LocalDecls<'tcx>,
         escaping: FxHashSet<Local>,
         map: ReplacementMap<'tcx>,
     }
 
-    impl<'tcx, 'll> FlattenVisitor<'tcx, 'll> {
+    impl<'tcx, 'll> PreFlattenVisitor<'tcx, 'll> {
         fn create_discriminant(&mut self, local: Local) -> bool {
             if self.escaping.contains(&local) {
                 return false;
@@ -150,7 +150,7 @@ fn compute_flattening<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) -> Replace
         }
     }
 
-    impl<'tcx, 'll> Visitor<'tcx> for FlattenVisitor<'tcx, 'll> {
+    impl<'tcx, 'll> Visitor<'tcx> for PreFlattenVisitor<'tcx, 'll> {
         fn visit_statement(&mut self, statement: &Statement<'tcx>, location: Location) {
             if let StatementKind::SetDiscriminant { place, .. } = &statement.kind {
                 if place.projection.is_empty() {
