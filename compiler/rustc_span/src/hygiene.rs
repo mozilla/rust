@@ -59,11 +59,18 @@ pub struct SyntaxContextData {
     dollar_crate_name: Symbol,
 }
 
+rustc_index::newtype_index! {
+    /// A unique ID associated with a macro invocation and expansion.
+    pub struct ExpnIndex {
+        ENCODABLE = custom
+    }
+}
+
 /// A unique ID associated with a macro invocation and expansion.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ExpnId {
     pub krate: CrateNum,
-    pub local_id: u32,
+    pub local_id: ExpnIndex,
 }
 
 rustc_index::newtype_index! {
@@ -101,6 +108,14 @@ impl LocalExpnId {
     /// The ID of the theoretical expansion that generates freshly parsed, unexpanded AST.
     pub const ROOT: LocalExpnId = LocalExpnId::from_u32(0);
 
+    pub fn from_raw(idx: ExpnIndex) -> LocalExpnId {
+        LocalExpnId::from_u32(idx.as_u32())
+    }
+
+    pub fn as_raw(self) -> ExpnIndex {
+        ExpnIndex::from_u32(self.as_u32())
+    }
+
     pub fn fresh_empty() -> LocalExpnId {
         HygieneData::with(|data| data.fresh_expn(None))
     }
@@ -124,7 +139,7 @@ impl LocalExpnId {
 
     #[inline]
     pub fn to_expn_id(self) -> ExpnId {
-        ExpnId { krate: LOCAL_CRATE, local_id: self.as_u32() }
+        ExpnId { krate: LOCAL_CRATE, local_id: self.as_raw() }
     }
 
     #[inline]
@@ -171,7 +186,7 @@ impl LocalExpnId {
 impl ExpnId {
     /// The ID of the theoretical expansion that generates freshly parsed, unexpanded AST.
     /// Invariant: we do not create any ExpnId with local_id == 0 and krate != 0.
-    pub const ROOT: ExpnId = ExpnId { krate: LOCAL_CRATE, local_id: 0 };
+    pub const ROOT: ExpnId = ExpnId { krate: LOCAL_CRATE, local_id: ExpnIndex::from_u32(0) };
 
     #[inline]
     pub fn expn_hash(self) -> ExpnHash {
@@ -185,7 +200,7 @@ impl ExpnId {
 
     #[inline]
     pub fn as_local(self) -> Option<LocalExpnId> {
-        if self.krate == LOCAL_CRATE { Some(LocalExpnId::from_u32(self.local_id)) } else { None }
+        if self.krate == LOCAL_CRATE { Some(LocalExpnId::from_raw(self.local_id)) } else { None }
     }
 
     #[inline]
@@ -324,7 +339,7 @@ impl HygieneData {
 
     fn is_descendant_of(&self, mut expn_id: ExpnId, ancestor: ExpnId) -> bool {
         while expn_id != ancestor {
-            if expn_id.local_id == 0 {
+            if expn_id.local_id.as_u32() == 0 {
                 return false;
             }
             expn_id = self.expn_data(expn_id).parent;
@@ -1178,7 +1193,7 @@ pub fn decode_expn_id_incrcomp<D: Decoder>(
     }
 
     if krate != LOCAL_CRATE {
-        let expn_id = ExpnId { krate, local_id: index };
+        let expn_id = ExpnId { krate, local_id: ExpnIndex::from_u32(index) };
         if HygieneData::with(|hygiene_data| hygiene_data.foreign_expn_data.contains_key(&expn_id)) {
             return Ok(expn_id);
         }
@@ -1246,7 +1261,7 @@ pub fn decode_expn_id_incrcomp<D: Decoder>(
 
 pub fn decode_expn_id<D: Decoder>(
     d: &mut D,
-    decode_data: impl FnOnce(CrateNum, u32) -> (ExpnData, ExpnHash),
+    decode_data: impl FnOnce(CrateNum, ExpnIndex) -> (ExpnData, ExpnHash),
 ) -> Result<ExpnId, D::Error> {
     let krate = CrateNum::decode(d)?;
     let index = u32::decode(d)?;
@@ -1257,6 +1272,8 @@ pub fn decode_expn_id<D: Decoder>(
         debug!("decode_expn_id: deserialized root");
         return Ok(ExpnId::ROOT);
     }
+
+    let index = ExpnIndex::from_u32(index);
 
     // This function is used to decode metadata, so it cannot decode information about LOCAL_CRATE.
     debug_assert_ne!(krate, LOCAL_CRATE);
@@ -1271,7 +1288,7 @@ pub fn decode_expn_id<D: Decoder>(
     // other ExpnIds
     let (expn_data, hash) = decode_data(krate, index);
     debug_assert_eq!(krate, expn_data.krate);
-    debug_assert_eq!(Some(index), expn_data.orig_id);
+    debug_assert_eq!(Some(index.as_u32()), expn_data.orig_id);
 
     HygieneData::with(|hygiene_data| {
         let _old_data = hygiene_data.foreign_expn_data.insert(expn_id, expn_data);
@@ -1431,7 +1448,7 @@ pub fn raw_encode_expn_id_incrcomp<E: Encoder>(
         context.latest_expns.lock().insert(expn);
     }
     expn.krate.encode(e)?;
-    expn.local_id.encode(e)
+    expn.local_id.as_u32().encode(e)
 }
 
 pub fn raw_encode_expn_id<E: Encoder>(
@@ -1451,7 +1468,7 @@ pub fn raw_encode_expn_id<E: Encoder>(
         }
     }
     expn.krate.encode(e)?;
-    expn.local_id.encode(e)
+    expn.local_id.as_u32().encode(e)
 }
 
 impl<E: Encoder> Encodable<E> for SyntaxContext {

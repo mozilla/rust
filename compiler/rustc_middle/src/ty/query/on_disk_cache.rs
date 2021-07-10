@@ -367,7 +367,7 @@ impl<'sess> OnDiskCache<'sess> {
                     if index.krate == LOCAL_CRATE {
                         let pos = AbsoluteBytePos::new(encoder.position());
                         encoder.encode_tagged(TAG_EXPN_DATA, &(expn_data, hash))?;
-                        expn_ids.insert(index.local_id, pos);
+                        expn_ids.insert(index.local_id.as_u32(), pos);
                     }
                     // TODO Handle foreign expansions.
                     Ok(())
