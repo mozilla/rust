@@ -32,7 +32,7 @@ impl<'tcx> MirPass<'tcx> for FlattenLocals {
 fn escaping_locals(body: &Body<'_>) -> FxHashSet<Local> {
     let mut set: FxHashSet<_> = (0..body.arg_count + 1).map(Local::new).collect();
     for (local, decl) in body.local_decls().iter_enumerated() {
-        if decl.ty.is_union() {
+        if decl.ty.is_union() || decl.ty.is_enum() {
             set.insert(local);
         }
     }
