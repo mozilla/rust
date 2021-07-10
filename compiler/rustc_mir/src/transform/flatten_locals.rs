@@ -4,7 +4,7 @@ use rustc_index::vec::Idx;
 use rustc_middle::mir::interpret::Scalar;
 use rustc_middle::mir::visit::*;
 use rustc_middle::mir::*;
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::{Ty, TyCtxt};
 use std::collections::hash_map::Entry;
 
 pub struct FlattenLocals;
@@ -23,14 +23,19 @@ impl<'tcx> MirPass<'tcx> for FlattenLocals {
             return;
         }
 
-        let mut visitor = FlattenVisitor { tcx, map: &replacements, all_dead_locals };
+        let mut visitor = ReplacementVisitor { tcx, map: &replacements, all_dead_locals };
         visitor.visit_body(body);
         super::simplify::simplify_locals(body, tcx);
     }
 }
 
 fn escaping_locals(body: &Body<'_>) -> FxHashSet<Local> {
-    let set = (0..body.arg_count + 1).map(Local::new).collect();
+    let mut set: FxHashSet<_> = (0..body.arg_count + 1).map(Local::new).collect();
+    for (local, decl) in body.local_decls().iter_enumerated() {
+        if decl.ty.is_union() {
+            set.insert(local);
+        }
+    }
     let mut visitor = EscapeVisitor { escaping: false, set };
     visitor.visit_body(body);
     return visitor.set;
@@ -61,6 +66,12 @@ fn escaping_locals(body: &Body<'_>) -> FxHashSet<Local> {
         }
 
         fn visit_rvalue(&mut self, rvalue: &Rvalue<'tcx>, location: Location) {
+            if let Rvalue::Discriminant(place) = rvalue {
+                if place.projection.is_empty() {
+                    // Getting discriminant on an enum is ok.
+                    return;
+                }
+            }
             if let Rvalue::AddressOf(..) | Rvalue::Ref(..) = rvalue {
                 // Raw pointers may be used to access anything inside the enclosing place.
                 self.escaping = true;
@@ -69,6 +80,16 @@ fn escaping_locals(body: &Body<'_>) -> FxHashSet<Local> {
             } else {
                 self.super_rvalue(rvalue, location)
             }
+        }
+
+        fn visit_statement(&mut self, statement: &Statement<'tcx>, location: Location) {
+            if let StatementKind::SetDiscriminant { place, .. } = &statement.kind {
+                if place.projection.is_empty() {
+                    // Setting discriminant on an enum is ok.
+                    return;
+                }
+            }
+            self.super_statement(statement, location)
         }
 
         fn visit_terminator(&mut self, terminator: &Terminator<'tcx>, location: Location) {
@@ -86,9 +107,9 @@ fn escaping_locals(body: &Body<'_>) -> FxHashSet<Local> {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct ReplacementMap<'tcx> {
-    discr: FxHashMap<Local, Local>,
+    discr: FxHashMap<Local, (Local, Ty<'tcx>)>,
     fields: FxHashMap<PlaceRef<'tcx>, Local>,
 }
 
@@ -115,19 +136,17 @@ fn compute_flattening<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) -> Replace
                 return false;
             }
 
-            match self.map.discr.entry(local) {
-                Entry::Occupied(_) => true,
-                Entry::Vacant(v) => {
-                    let ty = self.tcx.types.isize;
-                    let local = self.local_decls.push(LocalDecl {
-                        ty,
-                        user_ty: None,
-                        ..self.local_decls[local].clone()
-                    });
-                    v.insert(local);
-                    true
-                }
+            if let Entry::Vacant(v) = self.map.discr.entry(local) {
+                let ty = self.local_decls[local].ty.discriminant_ty(self.tcx);
+                let local = self.local_decls.push(LocalDecl {
+                    ty,
+                    user_ty: None,
+                    ..self.local_decls[local].clone()
+                });
+                v.insert((local, ty));
             }
+
+            true
         }
 
         fn create_place(&mut self, place: PlaceRef<'tcx>) {
@@ -185,13 +204,13 @@ fn compute_flattening<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) -> Replace
     }
 }
 
-struct FlattenVisitor<'tcx, 'll> {
+struct ReplacementVisitor<'tcx, 'll> {
     tcx: TyCtxt<'tcx>,
     map: &'ll ReplacementMap<'tcx>,
     all_dead_locals: FxHashSet<Local>,
 }
 
-impl<'tcx, 'll> MutVisitor<'tcx> for FlattenVisitor<'tcx, 'll> {
+impl<'tcx, 'll> MutVisitor<'tcx> for ReplacementVisitor<'tcx, 'll> {
     fn tcx(&self) -> TyCtxt<'tcx> {
         self.tcx
     }
@@ -201,12 +220,12 @@ impl<'tcx, 'll> MutVisitor<'tcx> for FlattenVisitor<'tcx, 'll> {
             StatementKind::SetDiscriminant { place, variant_index }
                 if place.projection.is_empty() =>
             {
-                if let Some(local) = self.map.discr.get(&place.local) {
+                if let Some((local, discr_ty)) = self.map.discr.get(&place.local) {
                     statement.kind = StatementKind::Assign(box (
                         Place::from(*local),
                         Rvalue::Use(Operand::const_from_scalar(
                             self.tcx,
-                            self.tcx.types.isize,
+                            discr_ty,
                             Scalar::from_u64(variant_index.as_u32().into()),
                             statement.source_info.span,
                         )),
@@ -229,7 +248,7 @@ impl<'tcx, 'll> MutVisitor<'tcx> for FlattenVisitor<'tcx, 'll> {
     fn visit_rvalue(&mut self, rvalue: &mut Rvalue<'tcx>, location: Location) {
         if let Rvalue::Discriminant(place) = rvalue {
             if let Some(local) = place.as_local() {
-                if let Some(local) = self.map.discr.get(&local) {
+                if let Some((local, _)) = self.map.discr.get(&local) {
                     *rvalue = Rvalue::Use(Operand::Copy(Place::from(*local)));
                 }
             }
