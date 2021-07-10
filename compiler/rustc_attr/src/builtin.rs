@@ -2,13 +2,13 @@
 
 use rustc_ast::{self as ast, Attribute, Lit, LitKind, MetaItem, MetaItemKind, NestedMetaItem};
 use rustc_ast_pretty::pprust;
-use rustc_errors::{struct_span_err, Applicability};
+use rustc_errors::{struct_span_err, Applicability, Handler};
 use rustc_feature::{find_gated_cfg, is_builtin_attr_name, Features, GatedCfg};
 use rustc_macros::HashStable_Generic;
 use rustc_session::parse::{feature_err, ParseSess};
 use rustc_session::Session;
 use rustc_span::hygiene::Transparency;
-use rustc_span::{symbol::sym, symbol::Symbol, Span};
+use rustc_span::{symbol::sym, symbol::Symbol, BytePos, Span};
 use std::num::NonZeroU32;
 
 pub fn is_builtin_attr(attr: &Attribute) -> bool {
@@ -827,6 +827,202 @@ pub enum ReprAttr {
     ReprNoNiche,
 }
 
+impl ReprAttr {
+    fn try_from_meta_item(
+        diagnostic: &Handler,
+        item: &MetaItem,
+    ) -> Result</* incorrect attr if None */ Option<Self>, /* invalid attr */ ()> {
+        use ReprAttr::*;
+        let name = item.name_or_empty();
+        let expect_no_args = || {
+            if !item.is_word() {
+                struct_span_err!(
+                    diagnostic,
+                    item.span,
+                    E0589,
+                    "invalid `repr({})` attribute: no arguments expected",
+                    name,
+                )
+                .span_suggestion_verbose(
+                    item.path.span.shrink_to_hi().to(item.span.shrink_to_hi()),
+                    "remove additional values",
+                    String::new(),
+                    Applicability::MachineApplicable,
+                )
+                .emit();
+            }
+        };
+        let expect_one_int_arg = || {
+            if let MetaItemKind::NameValue(ref value) = item.kind {
+                let mut err = struct_span_err!(
+                    diagnostic,
+                    item.span,
+                    E0693,
+                    "incorrect `repr({})` attribute format",
+                    name
+                );
+                match value.kind {
+                    ast::LitKind::Int(_int, ast::LitIntType::Unsuffixed) => {
+                        let open_paren_span =
+                            item.path.span.shrink_to_hi().to(value.span.shrink_to_lo());
+                        let close_paren_span =
+                            item.span.shrink_to_hi().to(value.span.shrink_to_hi());
+
+                        err.multipart_suggestion(
+                            "use parentheses instead",
+                            vec![
+                                (open_paren_span, "(".to_string()),
+                                (close_paren_span, ")".to_string()),
+                            ],
+                            Applicability::MachineApplicable,
+                        );
+                    }
+                    ast::LitKind::Str(str, style) => {
+                        // repr(foo = "123" )
+                        //         ^^^     ^
+                        let open_paren_span =
+                            item.path.span.shrink_to_hi().to(value.span.shrink_to_lo());
+                        let close_paren_span =
+                            item.span.shrink_to_hi().to(value.span.shrink_to_hi());
+                        // repr(foo = "123" )
+                        //         ^^^^   ^^
+                        // BytePos math is safe because strings can only be surrounded by single
+                        // byte characters (`r`, `#`, and `"` are all one byte)
+                        let open_paren_span = open_paren_span
+                            .with_hi(open_paren_span.hi() + BytePos(style.prefix_len()));
+                        let close_paren_span = close_paren_span
+                            .with_hi(close_paren_span.lo() - BytePos(style.suffix_len()));
+
+                        if str.is_empty() {
+                            // When encountering repr(foo = "") suggest additional help
+                            err.span_suggestion_verbose(
+                                open_paren_span.to(close_paren_span),
+                                "use parentheses instead and add a value",
+                                "(/* value */)".to_string(),
+                                Applicability::HasPlaceholders,
+                            );
+                        } else {
+                            err.multipart_suggestion(
+                                "use parentheses instead",
+                                vec![
+                                    (open_paren_span, "(".to_string()),
+                                    (close_paren_span, ")".to_string()),
+                                ],
+                                Applicability::MachineApplicable,
+                            );
+
+                            match str.as_str().parse::<u128>() {
+                                Ok(num) => match is_alignment_valid(num) {
+                                    Ok(align) => {
+                                        err.emit();
+                                        return Some(align);
+                                    }
+                                    Err(msg) => {
+                                        err.span_label(value.span, msg);
+                                    }
+                                },
+                                Err(_) => {
+                                    err.span_label(value.span, "must be a non-negative number");
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        err.span_label(value.span, "must be a non-negative number");
+                    }
+                }
+                err.emit();
+            } else if item.is_word() || matches!(item.meta_item_list(), Some([])) {
+                struct_span_err!(
+                    diagnostic,
+                    item.span,
+                    E0693,
+                    "invalid `repr({})` attribute: expected a non-negative number",
+                    name
+                )
+                .span_suggestion_verbose(
+                    item.path.span.shrink_to_hi().to(item.span.shrink_to_hi()),
+                    "add a value",
+                    "(/* value */)".to_string(),
+                    Applicability::HasPlaceholders,
+                )
+                .emit();
+            } else if let Some([meta]) = item.meta_item_list() {
+                match parse_alignment(
+                    struct_span_err!(
+                        diagnostic,
+                        meta.span(),
+                        E0589,
+                        "invalid `repr({})` attribute",
+                        name,
+                    ),
+                    meta,
+                ) {
+                    Ok(lit) => return Some(lit),
+                    Err(()) => {
+                        // parse_alignment already emitted an error
+                    }
+                }
+            } else if let Some([first_meta, .., last_meta]) = item.meta_item_list() {
+                struct_span_err!(
+                    diagnostic,
+                    item.span,
+                    E0693,
+                    "invalid `repr({})` attribute: expected only one value",
+                    item.name_or_empty(),
+                )
+                .span_label(first_meta.span().to(last_meta.span()), "only one argument expected")
+                .emit();
+            }
+            return None;
+        };
+        // Every possible repr variant must be covered here or else an ICE will occur
+        Ok(Some(match name {
+            sym::C => {
+                expect_no_args();
+                ReprC
+            }
+            sym::simd => {
+                expect_no_args();
+                ReprSimd
+            }
+            sym::transparent => {
+                expect_no_args();
+                ReprTransparent
+            }
+            sym::no_niche => {
+                expect_no_args();
+                ReprNoNiche
+            }
+            sym::align => {
+                if let Some(arg) = expect_one_int_arg() {
+                    ReprAlign(arg)
+                } else {
+                    return Ok(None);
+                }
+            }
+            sym::packed => {
+                if item.is_word() {
+                    ReprPacked(1)
+                } else if let Some(arg) = expect_one_int_arg() {
+                    ReprPacked(arg)
+                } else {
+                    return Ok(None);
+                }
+            }
+            name => {
+                if let Some(ty) = int_type_of_word(name) {
+                    expect_no_args();
+                    ReprInt(ty)
+                } else {
+                    // Unrecognized repr attr
+                    return Err(());
+                }
+            }
+        }))
+    }
+}
+
 #[derive(Eq, PartialEq, Debug, Copy, Clone)]
 #[derive(Encodable, Decodable, HashStable_Generic)]
 pub enum IntType {
@@ -846,7 +1042,7 @@ impl IntType {
     }
 }
 
-/// Parse #[repr(...)] forms.
+/// Parse `#[repr(...)]` forms.
 ///
 /// Valid repr contents: any of the primitive integral type names (see
 /// `int_type_of_word`, below) to specify enum discriminant type; `C`, to use
@@ -854,90 +1050,24 @@ impl IntType {
 /// structure layout, `packed` to remove padding, and `transparent` to elegate representation
 /// concerns to the only non-ZST field.
 pub fn find_repr_attrs(sess: &Session, attr: &Attribute) -> Vec<ReprAttr> {
-    use ReprAttr::*;
-
     let mut acc = Vec::new();
     let diagnostic = &sess.parse_sess.span_diagnostic;
     if attr.has_name(sym::repr) {
         if let Some(items) = attr.meta_item_list() {
             sess.mark_attr_used(attr);
             for item in items {
-                let mut recognised = false;
-                if item.is_word() {
-                    let hint = match item.name_or_empty() {
-                        sym::C => Some(ReprC),
-                        sym::packed => Some(ReprPacked(1)),
-                        sym::simd => Some(ReprSimd),
-                        sym::transparent => Some(ReprTransparent),
-                        sym::no_niche => Some(ReprNoNiche),
-                        name => int_type_of_word(name).map(ReprInt),
-                    };
-
-                    if let Some(h) = hint {
-                        recognised = true;
-                        acc.push(h);
+                match item
+                    .meta_item()
+                    .ok_or(())
+                    .and_then(|item| ReprAttr::try_from_meta_item(diagnostic, &item))
+                {
+                    Ok(None) => {
+                        // Recognized attribute, but failed to parse (e.g. align() or packed(1, 2, 3))
                     }
-                } else if let Some((name, value)) = item.name_value_literal() {
-                    let mut literal_error = None;
-                    if name == sym::align {
-                        recognised = true;
-                        match parse_alignment(&value.kind) {
-                            Ok(literal) => acc.push(ReprAlign(literal)),
-                            Err(message) => literal_error = Some(message),
-                        };
-                    } else if name == sym::packed {
-                        recognised = true;
-                        match parse_alignment(&value.kind) {
-                            Ok(literal) => acc.push(ReprPacked(literal)),
-                            Err(message) => literal_error = Some(message),
-                        };
+                    Ok(Some(attr)) => acc.push(attr),
+                    Err(()) => {
+                        diagnostic.delay_span_bug(item.span(), "unrecognized representation hint")
                     }
-                    if let Some(literal_error) = literal_error {
-                        struct_span_err!(
-                            diagnostic,
-                            item.span(),
-                            E0589,
-                            "invalid `repr(align)` attribute: {}",
-                            literal_error
-                        )
-                        .emit();
-                    }
-                } else if let Some(meta_item) = item.meta_item() {
-                    if meta_item.has_name(sym::align) {
-                        if let MetaItemKind::NameValue(ref value) = meta_item.kind {
-                            recognised = true;
-                            let mut err = struct_span_err!(
-                                diagnostic,
-                                item.span(),
-                                E0693,
-                                "incorrect `repr(align)` attribute format"
-                            );
-                            match value.kind {
-                                ast::LitKind::Int(int, ast::LitIntType::Unsuffixed) => {
-                                    err.span_suggestion(
-                                        item.span(),
-                                        "use parentheses instead",
-                                        format!("align({})", int),
-                                        Applicability::MachineApplicable,
-                                    );
-                                }
-                                ast::LitKind::Str(s, _) => {
-                                    err.span_suggestion(
-                                        item.span(),
-                                        "use parentheses instead",
-                                        format!("align({})", s),
-                                        Applicability::MachineApplicable,
-                                    );
-                                }
-                                _ => {}
-                            }
-                            err.emit();
-                        }
-                    }
-                }
-                if !recognised {
-                    // Not a word we recognize
-                    diagnostic.delay_span_bug(item.span(), "unrecognized representation hint");
                 }
             }
         }
@@ -1046,15 +1176,65 @@ fn allow_unstable<'a>(
     })
 }
 
-pub fn parse_alignment(node: &ast::LitKind) -> Result<u32, &'static str> {
-    if let ast::LitKind::Int(literal, ast::LitIntType::Unsuffixed) = node {
-        if literal.is_power_of_two() {
-            // rustc_middle::ty::layout::Align restricts align to <= 2^29
-            if *literal <= 1 << 29 { Ok(*literal as u32) } else { Err("larger than 2^29") }
+pub fn parse_alignment(
+    mut err: rustc_errors::DiagnosticBuilder<'_>,
+    node: &ast::NestedMetaItem,
+) -> Result<u32, ()> {
+    if let ast::NestedMetaItem::Literal(lit) = node {
+        if let ast::LitKind::Int(val, ast::LitIntType::Unsuffixed) = lit.kind {
+            match is_alignment_valid(val) {
+                Ok(align) => {
+                    err.cancel();
+                    return Ok(align);
+                }
+                Err(msg) => {
+                    err.span_label(lit.span, msg);
+                }
+            }
+        } else if let ast::LitKind::Str(sym, style) = lit.kind {
+            match sym.as_str().parse::<u128>() {
+                Ok(num) => match is_alignment_valid(num) {
+                    Ok(align) => {
+                        err.multipart_suggestion(
+                            "remove the quotes",
+                            vec![
+                                (
+                                    lit.span.with_hi(lit.span.lo() + BytePos(style.prefix_len())),
+                                    "".to_string(),
+                                ),
+                                (
+                                    lit.span.with_lo(lit.span.hi() - BytePos(style.suffix_len())),
+                                    "".to_string(),
+                                ),
+                            ],
+                            Applicability::MachineApplicable,
+                        );
+                        err.emit();
+                        return Ok(align);
+                    }
+                    Err(msg) => {
+                        err.span_label(lit.span, msg);
+                    }
+                },
+                Err(_) => {
+                    err.span_label(lit.span, "must be a non-negative number");
+                }
+            }
         } else {
-            Err("not a power of two")
+            err.span_label(lit.span, "not an unsuffixed integer");
         }
     } else {
-        Err("not an unsuffixed integer")
+        err.span_label(node.span(), "not a non-negative number");
+    }
+    err.emit();
+    Err(())
+}
+
+fn is_alignment_valid(n: u128) -> Result<u32, &'static str> {
+    if n.is_power_of_two() {
+        // rustc_target::abi::Align restricts align to <= 2^29
+        if n <= 1 << 29 { Ok(n as u32) } else { Err("larger than 2^29") }
+    } else {
+        Err("not a power of two")
     }
 }
