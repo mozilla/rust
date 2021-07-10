@@ -1591,8 +1591,10 @@ impl EncodeContext<'a, 'tcx> {
                 Ok(())
             },
             |(this, _, expn_data_table, expn_hash_table), index, expn_data, hash| {
-                expn_data_table.set(index, this.lazy(expn_data));
-                expn_hash_table.set(index, this.lazy(hash));
+                if let Some(index) = index.as_local() {
+                    expn_data_table.set(index.as_u32(), this.lazy(expn_data));
+                    expn_hash_table.set(index.as_u32(), this.lazy(hash));
+                }
                 Ok(())
             },
         );
