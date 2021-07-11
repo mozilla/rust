@@ -479,17 +479,25 @@ crate fn href(did: DefId, cx: &Context<'_>) -> Option<(String, ItemType, Vec<Str
         if shortty == ItemType::Module { &fqp[..] } else { &fqp[..fqp.len() - 1] }
     }
 
-    if !did.is_local() && !cache.access_levels.is_public(did) && !cache.document_private {
+    if !did.is_local()
+        && !cache.access_levels.is_public(did)
+        && !cache.document_private
+        && !cache.primitive_locations.values().any(|&id| id == did)
+    {
+        debug!(?cache.primitive_locations, "returning None for {:?}", did);
         return None;
     }
 
     let (fqp, shortty, mut url_parts) = match cache.paths.get(&did) {
         Some(&(ref fqp, shortty)) => (fqp, shortty, {
             let module_fqp = to_module_fqp(shortty, fqp);
+            debug!(?fqp, ?shortty, ?module_fqp);
             href_relative_parts(module_fqp, relative_to)
         }),
         None => {
+            debug!("no local cache hit for {:?}", did);
             let &(ref fqp, shortty) = cache.external_paths.get(&did)?;
+            debug!(?fqp, ?shortty, "external cache hit");
             let module_fqp = to_module_fqp(shortty, fqp);
             (
                 fqp,
@@ -507,6 +515,7 @@ crate fn href(did: DefId, cx: &Context<'_>) -> Option<(String, ItemType, Vec<Str
             )
         }
     };
+    debug!(?url_parts);
     let last = &fqp.last().unwrap()[..];
     let filename;
     match shortty {
