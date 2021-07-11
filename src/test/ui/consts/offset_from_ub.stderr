@@ -13,7 +13,7 @@ LL |           unsafe { intrinsics::ptr_offset_from(self, origin) }
    |                    unable to turn bytes into a pointer
    |                    inside `ptr::const_ptr::<impl *const u8>::offset_from` at $SRC_DIR/core/src/ptr/const_ptr.rs:LL:COL
    |                    inside `NOT_PTR` at $DIR/offset_from_ub.rs:24:14
-   | 
+   |
   ::: $DIR/offset_from_ub.rs:23:1
    |
 LL | / pub const NOT_PTR: usize = {
