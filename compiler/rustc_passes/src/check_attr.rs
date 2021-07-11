@@ -791,8 +791,14 @@ impl CheckAttrVisitor<'tcx> {
                         | sym::notable_trait
                         | sym::passes
                         | sym::plugins
-                        | sym::primitive
                         | sym::test => {}
+
+                        sym::primitive => {
+                            if !self.tcx.features().doc_primitive {
+                                // self.tcx.struct_span_err(i_meta.span, "doc(primitive) is being made unstable again")
+                                rustc_session::parse::feature_err(&self.tcx.sess.parse_sess, sym::doc_primitive, i_meta.span, "doc(primitive) should never have been stable").emit();
+                            }
+                        }
 
                         _ => {
                             self.tcx.struct_span_lint_hir(
