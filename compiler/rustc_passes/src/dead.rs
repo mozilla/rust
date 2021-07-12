@@ -187,6 +187,24 @@ impl<'tcx> MarkSymbolVisitor<'tcx> {
         }
     }
 
+    fn should_ignore_impl(&self, impl_def_id: DefId) -> bool {
+        // Get the trait which this impl implements
+        let trait_maybe_def_id = self.tcx.impl_trait_ref(impl_def_id).map(|tr| tr.def_id);
+        // Get the DefIds of Clone and Debug
+        let clone_maybe_def_id = self.tcx.lang_items().clone_trait();
+        let debug_maybe_def_id = self.tcx.get_diagnostic_item(sym::debug_trait);
+
+        if trait_maybe_def_id.is_some()
+            && (trait_maybe_def_id == clone_maybe_def_id
+                || trait_maybe_def_id == debug_maybe_def_id)
+            && self.tcx.has_attr(impl_def_id, sym::automatically_derived)
+        {
+            true
+        } else {
+            false
+        }
+    }
+
     fn visit_node(&mut self, node: Node<'tcx>) {
         let had_repr_c = self.repr_has_repr_c;
         let had_inherited_pub_visibility = self.inherited_pub_visibility;
@@ -211,6 +229,17 @@ impl<'tcx> MarkSymbolVisitor<'tcx> {
                         intravisit::walk_item(self, &item);
                     }
                     hir::ItemKind::ForeignMod { .. } => {}
+                    hir::ItemKind::Impl(_) => {
+                        if self.should_ignore_impl(item.def_id.to_def_id()) {
+                            // We are looking at an implementation of `Clone` or `Debug` that was
+                            // automatically derived via #[derive(...)]. Ignore this for dead code
+                            // analysis (derived implementations of Debug and Clone always trivially
+                            // use all fields, so they would hide unused field warnings for such
+                            // structs/enums, cf. issue #84647).
+                        } else {
+                            intravisit::walk_item(self, &item);
+                        }
+                    }
                     _ => {
                         intravisit::walk_item(self, &item);
                     }
@@ -220,7 +249,23 @@ impl<'tcx> MarkSymbolVisitor<'tcx> {
                 intravisit::walk_trait_item(self, trait_item);
             }
             Node::ImplItem(impl_item) => {
-                intravisit::walk_impl_item(self, impl_item);
+                if let hir::ImplItemKind::Fn(_, _) = impl_item.kind {
+                    // Get the impl
+                    let impl_maybe_def_id = self.tcx.impl_of_method(impl_item.def_id.to_def_id());
+                    if impl_maybe_def_id
+                        .map_or(false, |impl_def_id| self.should_ignore_impl(impl_def_id))
+                    {
+                        // Again, we are looking at an automatically derived impl of `Clone` or
+                        // `Debug` from #[derive(...)]. Skip as above. (Even though we do not call
+                        // intravisit::walk_item() on automatically derived implementations (see
+                        // above), sometimes the methods still get added to self.worklist, so we
+                        // skip them again here.)
+                    } else {
+                        intravisit::walk_impl_item(self, impl_item);
+                    }
+                } else {
+                    intravisit::walk_impl_item(self, impl_item);
+                }
             }
             Node::ForeignItem(foreign_item) => {
                 intravisit::walk_foreign_item(self, &foreign_item);

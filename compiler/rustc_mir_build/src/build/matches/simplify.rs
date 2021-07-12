@@ -172,14 +172,19 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 Ok(())
             }
 
-            PatKind::Binding { name, mutability, mode, var, ty, ref subpattern, is_primary: _ } => {
+            PatKind::Binding {
+                name: _,
+                mutability: _,
+                mode,
+                var,
+                ty: _,
+                ref subpattern,
+                is_primary: _,
+            } => {
                 candidate.bindings.push(Binding {
-                    name,
-                    mutability,
                     span: match_pair.pattern.span,
                     source: match_pair.place.clone().into_place(self.tcx, self.typeck_results),
                     var_id: var,
-                    var_ty: ty,
                     binding_mode: mode,
                 });
 

@@ -2184,12 +2184,7 @@ impl Clean<Item> for (&hir::MacroDef<'_>, Option<Symbol>) {
             }
         };
 
-        Item::from_hir_id_and_parts(
-            item.hir_id(),
-            Some(name),
-            MacroItem(Macro { source, imported_from: None }),
-            cx,
-        )
+        Item::from_hir_id_and_parts(item.hir_id(), Some(name), MacroItem(Macro { source }), cx)
     }
 }
 
