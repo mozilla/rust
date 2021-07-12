@@ -1,0 +1,24 @@
+- // MIR for `swap` before CopyPropagation
++ // MIR for `swap` after CopyPropagation
+  
+  fn swap(_1: (u32, u32)) -> (u32, u32) {
+      debug a => _1;                       // in scope 0 at $DIR/copy_propagation.rs:9:13: 9:18
+      let mut _0: (u32, u32);              // return place in scope 0 at $DIR/copy_propagation.rs:9:35: 9:45
+      let mut _2: u32;                     // in scope 0 at $DIR/copy_propagation.rs:10:6: 10:9
+      let mut _3: u32;                     // in scope 0 at $DIR/copy_propagation.rs:10:11: 10:14
+  
+      bb0: {
+          StorageLive(_2);                 // scope 0 at $DIR/copy_propagation.rs:10:6: 10:9
+          _2 = (_1.1: u32);                // scope 0 at $DIR/copy_propagation.rs:10:6: 10:9
+          StorageLive(_3);                 // scope 0 at $DIR/copy_propagation.rs:10:11: 10:14
+          _3 = (_1.0: u32);                // scope 0 at $DIR/copy_propagation.rs:10:11: 10:14
+-         (_0.0: u32) = move _2;           // scope 0 at $DIR/copy_propagation.rs:10:5: 10:15
+-         (_0.1: u32) = move _3;           // scope 0 at $DIR/copy_propagation.rs:10:5: 10:15
++         (_0.0: u32) = (_1.1: u32);       // scope 0 at $DIR/copy_propagation.rs:10:5: 10:15
++         (_0.1: u32) = (_1.0: u32);       // scope 0 at $DIR/copy_propagation.rs:10:5: 10:15
+          StorageDead(_3);                 // scope 0 at $DIR/copy_propagation.rs:10:14: 10:15
+          StorageDead(_2);                 // scope 0 at $DIR/copy_propagation.rs:10:14: 10:15
+          return;                          // scope 0 at $DIR/copy_propagation.rs:11:2: 11:2
+      }
+  }
+  
