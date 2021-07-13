@@ -564,7 +564,7 @@ fn string<T: Display>(
                 "self" | "Self" => write!(
                     &mut path,
                     "<span class=\"{}\">{}</span>",
-                    Class::Self_(LightSpan::empty()).as_html(),
+                    Class::Self_(LightSpan::dummy()).as_html(),
                     t
                 ),
                 "crate" | "super" => {
