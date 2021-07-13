@@ -27,7 +27,6 @@ use crate::{
     looks_like_rust_object_file, CodegenResults, CompiledModule, CrateInfo, NativeLib,
     METADATA_FILENAME,
 };
-use std::cmp::Ordering;
 
 use cc::windows_registry;
 use object::elf;
@@ -472,20 +471,16 @@ fn collate_raw_dylibs(
         }
     }
 
-    fn compare_imports(x: &DllImport, y: &DllImport) -> Ordering {
-        x.name
-            .as_str()
-            .cmp(&y.name.as_str())
-            .then(x.ordinal.cmp(&y.ordinal))
-            .then(x.calling_convention.cmp(&y.calling_convention))
-            .then_with(|| x.span.cmp(&y.span))
-    }
-
+    // Rustc already signals an error if we have two imports with the same name but different
+    // calling conventions (or function signatures), so we don't have pay attention to those
+    // when ordering.
+    // FIXME: when we add support for ordinals, figure out if we need to do anything if we
+    // have two DllImport values with the same name but different ordinals.
     let mut result: Vec<(String, Vec<DllImport>)> = dylib_table
         .into_iter()
         .map(|(lib_name, import_table)| {
             let mut imports = Vec::from_iter(import_table.into_iter());
-            imports.sort_unstable_by(compare_imports);
+            imports.sort_unstable_by_key(|x: &DllImport| x.name.as_str());
             (lib_name, imports)
         })
         .collect::<Vec<_>>();
@@ -498,8 +493,6 @@ fn collate_raw_dylibs(
     // (when relevant) argument list sizes.  Rustc only signals an error for this if the
     // declarations are at the same scope level; if one shadows the other, we only get a lint
     // warning.
-    // FIXME: when we add support for ordinals, figure out if we need to do anything if we
-    // have two DllImport values with the same name but different ordinals.
     for (library, imports) in &result {
         let mut import_table: FxHashMap<Symbol, DllCallingConvention> = FxHashMap::default();
         for import in imports {

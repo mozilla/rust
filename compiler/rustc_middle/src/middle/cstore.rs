@@ -94,9 +94,7 @@ pub struct DllImport {
 ///
 /// The usize value, where present, indicates the size of the function's argument list
 /// in bytes.
-#[derive(
-    Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encodable, Decodable, Hash, HashStable
-)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Encodable, Decodable, Hash, HashStable)]
 pub enum DllCallingConvention {
     C,
     Stdcall(usize),
