@@ -12,7 +12,7 @@ use rustc_hir::definitions::{DefPathHash, Definitions};
 use rustc_session::Session;
 use rustc_span::source_map::SourceMap;
 use rustc_span::symbol::Symbol;
-use rustc_span::{BytePos, CachingSourceMapView, SourceFile, SpanData};
+use rustc_span::{BytePos, CachingSourceMapView, SourceFile, Span, SpanData};
 
 use smallvec::SmallVec;
 use std::cmp::Ord;
@@ -75,8 +75,7 @@ impl<'a> StableHashingContext<'a> {
         cstore: &'a dyn CrateStore,
         always_ignore_spans: bool,
     ) -> Self {
-        let hash_spans_initial =
-            !always_ignore_spans && !sess.opts.debugging_opts.incremental_ignore_spans;
+        let hash_spans_initial = !always_ignore_spans;
 
         StableHashingContext {
             sess,
@@ -235,6 +234,11 @@ impl<'a> rustc_span::HashStableContext for StableHashingContext<'a> {
             static CACHE: rustc_span::ExpnIdCache = Default::default();
         }
         &CACHE
+    }
+
+    #[inline]
+    fn def_span(&self, def_id: LocalDefId) -> Span {
+        self.definitions.def_span(def_id)
     }
 
     fn span_data_to_lines_and_cols(

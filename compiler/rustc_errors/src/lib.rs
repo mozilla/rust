@@ -350,10 +350,12 @@ pub enum StashKey {
     ItemNoType,
 }
 
-fn default_track_diagnostic(_: &Diagnostic) {}
+fn default_track_diagnostic(_: &Diagnostic, f: &mut dyn FnMut()) {
+    (*f)()
+}
 
-pub static TRACK_DIAGNOSTICS: AtomicRef<fn(&Diagnostic)> =
-    AtomicRef::new(&(default_track_diagnostic as fn(&_)));
+pub static TRACK_DIAGNOSTICS: AtomicRef<fn(&Diagnostic, &mut dyn FnMut())> =
+    AtomicRef::new(&(default_track_diagnostic as _));
 
 #[derive(Copy, Clone, Default)]
 pub struct HandlerFlags {
@@ -831,43 +833,43 @@ impl HandlerInner {
             && !diagnostic.is_force_warn()
         {
             if diagnostic.has_future_breakage() {
-                (*TRACK_DIAGNOSTICS)(diagnostic);
+                (*TRACK_DIAGNOSTICS)(diagnostic, &mut || {});
             }
             return;
         }
 
-        (*TRACK_DIAGNOSTICS)(diagnostic);
+        (*TRACK_DIAGNOSTICS)(diagnostic, &mut || {
+            if diagnostic.level == Allow {
+                return;
+            }
 
-        if diagnostic.level == Allow {
-            return;
-        }
+            if let Some(ref code) = diagnostic.code {
+                self.emitted_diagnostic_codes.insert(code.clone());
+            }
 
-        if let Some(ref code) = diagnostic.code {
-            self.emitted_diagnostic_codes.insert(code.clone());
-        }
+            let already_emitted = |this: &mut Self| {
+                let mut hasher = StableHasher::new();
+                diagnostic.hash(&mut hasher);
+                let diagnostic_hash = hasher.finish();
+                !this.emitted_diagnostics.insert(diagnostic_hash)
+            };
 
-        let already_emitted = |this: &mut Self| {
-            let mut hasher = StableHasher::new();
-            diagnostic.hash(&mut hasher);
-            let diagnostic_hash = hasher.finish();
-            !this.emitted_diagnostics.insert(diagnostic_hash)
-        };
-
-        // Only emit the diagnostic if we've been asked to deduplicate and
-        // haven't already emitted an equivalent diagnostic.
-        if !(self.flags.deduplicate_diagnostics && already_emitted(self)) {
-            self.emitter.emit_diagnostic(diagnostic);
+            // Only emit the diagnostic if we've been asked to deduplicate and
+            // haven't already emitted an equivalent diagnostic.
+            if !(self.flags.deduplicate_diagnostics && already_emitted(self)) {
+                self.emitter.emit_diagnostic(diagnostic);
+                if diagnostic.is_error() {
+                    self.deduplicated_err_count += 1;
+                } else if diagnostic.level == Warning {
+                    self.deduplicated_warn_count += 1;
+                }
+            }
             if diagnostic.is_error() {
-                self.deduplicated_err_count += 1;
-            } else if diagnostic.level == Warning {
-                self.deduplicated_warn_count += 1;
+                self.bump_err_count();
+            } else {
+                self.bump_warn_count();
             }
-        }
-        if diagnostic.is_error() {
-            self.bump_err_count();
-        } else {
-            self.bump_warn_count();
-        }
+        });
     }
 
     fn emit_artifact_notification(&mut self, path: &Path, artifact_type: &str) {
