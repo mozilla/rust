@@ -1200,10 +1200,8 @@ pub trait PrettyPrinter<'tcx>:
             // FIXME(eddyb) for `--emit=mir`/`-Z dump-mir`, we should provide the
             // correct `ty::ParamEnv` to allow printing *all* constant values.
             (_, ty::Array(..) | ty::Tuple(..) | ty::Adt(..)) if !ty.has_param_types_or_consts() => {
-                let contents = self.tcx().destructure_const(
-                    ty::ParamEnv::reveal_all()
-                        .and(self.tcx().mk_const(ty::Const { val: ty::ConstKind::Value(ct), ty })),
-                );
+                let contents =
+                    self.tcx().destructure_const(ty::ParamEnv::reveal_all().and((ct, ty)));
                 let fields = contents.fields.iter().copied();
 
                 match *ty.kind() {
@@ -1456,6 +1454,14 @@ impl<F: fmt::Write> Printer<'tcx> for FmtPrinter<'_, 'tcx, F> {
 
     fn print_const(self, ct: &'tcx ty::Const<'tcx>) -> Result<Self::Const, Self::Error> {
         self.pretty_print_const(ct, true)
+    }
+
+    fn print_const_value(
+        self,
+        val: ConstValue<'tcx>,
+        ty: Ty<'tcx>,
+    ) -> Result<Self::Const, Self::Error> {
+        self.pretty_print_const_value(val, ty, true)
     }
 
     fn path_crate(mut self, cnum: CrateNum) -> Result<Self::Path, Self::Error> {
