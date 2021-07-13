@@ -77,7 +77,9 @@ where P: Execute + 'static {
 }
 
 fn main() {
-    task(annotate( //~ implementation of `FamilyLt` is not general enough
+    task(annotate( //~ type mismatch
+        //~^ the size
+        //~^^ the trait bound
         Annotate::<RefMutFamily<usize>>::new(),
         |value: &mut usize| {
             *value = 2;

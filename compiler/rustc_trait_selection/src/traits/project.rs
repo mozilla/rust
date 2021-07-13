@@ -311,6 +311,7 @@ struct AssocTypeNormalizer<'a, 'b, 'tcx> {
     cause: ObligationCause<'tcx>,
     obligations: &'a mut Vec<PredicateObligation<'tcx>>,
     depth: usize,
+    universes: Vec<Option<ty::UniverseIndex>>,
 }
 
 impl<'a, 'b, 'tcx> AssocTypeNormalizer<'a, 'b, 'tcx> {
@@ -321,12 +322,16 @@ impl<'a, 'b, 'tcx> AssocTypeNormalizer<'a, 'b, 'tcx> {
         depth: usize,
         obligations: &'a mut Vec<PredicateObligation<'tcx>>,
     ) -> AssocTypeNormalizer<'a, 'b, 'tcx> {
-        AssocTypeNormalizer { selcx, param_env, cause, obligations, depth }
+        AssocTypeNormalizer { selcx, param_env, cause, obligations, depth, universes: vec![] }
     }
 
     fn fold<T: TypeFoldable<'tcx>>(&mut self, value: T) -> T {
         let value = self.selcx.infcx().resolve_vars_if_possible(value);
         debug!(?value);
+
+        if value.has_escaping_bound_vars() {
+            bug!("To fold a value with bound vars, wrap in a `Binder`");
+        }
 
         if !needs_normalization(&value, self.param_env.reveal()) {
             value
@@ -339,6 +344,16 @@ impl<'a, 'b, 'tcx> AssocTypeNormalizer<'a, 'b, 'tcx> {
 impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
     fn tcx<'c>(&'c self) -> TyCtxt<'tcx> {
         self.selcx.tcx()
+    }
+
+    fn fold_binder<T: TypeFoldable<'tcx>>(
+        &mut self,
+        t: ty::Binder<'tcx, T>,
+    ) -> ty::Binder<'tcx, T> {
+        self.universes.push(None);
+        let t = t.super_fold_with(self);
+        self.universes.pop();
+        t
     }
 
     fn fold_ty(&mut self, ty: Ty<'tcx>) -> Ty<'tcx> {
@@ -385,10 +400,7 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
                 }
             }
 
-            ty::Projection(data) => {
-                let infcx = self.selcx.infcx();
-                let (data, mapped_regions, mapped_types, mapped_consts) =
-                    BoundVarReplacer::replace_bound_vars(infcx, data);
+            ty::Projection(data) if !data.has_escaping_bound_vars() => {
                 let data = data.super_fold_with(self);
                 let normalized_ty = normalize_projection_type(
                     self.selcx,
@@ -398,13 +410,6 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
                     self.depth,
                     &mut self.obligations,
                 );
-                let normalized_ty = PlaceholderReplacer::replace_placeholders(
-                    infcx,
-                    mapped_regions,
-                    mapped_types,
-                    mapped_consts,
-                    normalized_ty,
-                );
                 debug!(
                     ?self.depth,
                     ?ty,
@@ -413,6 +418,45 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
                     "AssocTypeNormalizer: normalized type"
                 );
                 normalized_ty
+            }
+
+            ty::Projection(orig_data) => {
+                let infcx = self.selcx.infcx();
+                let replaced =
+                    BoundVarReplacer::replace_bound_vars(infcx, &mut self.universes, orig_data);
+                if let Some((data, mapped_regions, mapped_types, mapped_consts)) = replaced {
+                    let data = data.super_fold_with(self);
+                    let normalized_ty = opt_normalize_projection_type(
+                        self.selcx,
+                        self.param_env,
+                        data,
+                        self.cause.clone(),
+                        self.depth,
+                        &mut self.obligations,
+                    )
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| ty.super_fold_with(self));
+
+                    let normalized_ty = PlaceholderReplacer::replace_placeholders(
+                        infcx,
+                        mapped_regions,
+                        mapped_types,
+                        mapped_consts,
+                        &self.universes,
+                        normalized_ty,
+                    );
+                    debug!(
+                        ?self.depth,
+                        ?ty,
+                        ?normalized_ty,
+                        obligations.len = ?self.obligations.len(),
+                        "AssocTypeNormalizer: normalized type"
+                    );
+                    normalized_ty
+                } else {
+                    ty.super_fold_with(self)
+                }
             }
 
             _ => ty.super_fold_with(self),
@@ -430,24 +474,42 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
 }
 
 pub struct BoundVarReplacer<'me, 'tcx> {
-    pub infcx: &'me InferCtxt<'me, 'tcx>,
-    pub mapped_regions: BTreeMap<ty::PlaceholderRegion, ty::BoundRegion>,
-    pub mapped_types: BTreeMap<ty::PlaceholderType, ty::BoundTy>,
-    pub mapped_consts: BTreeMap<ty::PlaceholderConst<'tcx>, ty::BoundVar>,
-    pub universes: BTreeMap<ty::DebruijnIndex, ty::UniverseIndex>,
-    pub current_index: ty::DebruijnIndex,
+    infcx: &'me InferCtxt<'me, 'tcx>,
+    // These three maps track the bound variable that were replaced by placeholders. It might be
+    // nice to remove these since we already have the `kind` in the placeholder; we really just need
+    // the `var` (but we *could* bring that into scope if we were to track them as we pass them).
+    mapped_regions: BTreeMap<ty::PlaceholderRegion, ty::BoundRegion>,
+    mapped_types: BTreeMap<ty::PlaceholderType, ty::BoundTy>,
+    mapped_consts: BTreeMap<ty::PlaceholderConst<'tcx>, ty::BoundVar>,
+    // The current depth relative to *this* folding, *not* the entire normalization. In other words,
+    // the depth of binders we've passed here.
+    current_index: ty::DebruijnIndex,
+    // The `UniverseIndex` of the binding levels above us. These are optional, since we are lazy:
+    // we don't actually create a universe until we see a bound var we have to replace.
+    universe_indices: &'me mut Vec<Option<ty::UniverseIndex>>,
+    // FIXME: So, this is a less-than-ideal solution to a problem we want to solve eventually. Ideally, we
+    // shouldn't need to worry about bound vars for which we haven't passed (`self.current_index`)
+    // or that we don't explicitly know about (`self.universe_indices`). This is true for
+    // `AssocTypeNormalizer` but not `QueryNormalizer` currently. When we can always know about
+    // any binding levels above us, we can remove this. (The alternative would be
+    // `outer_exclusive_binder`, but that only exists on `Ty`. Otherwise, we would have to visit
+    // through the `T`, which we specifically want to avoid not being lazy.)
+    failed: bool,
 }
 
 impl<'me, 'tcx> BoundVarReplacer<'me, 'tcx> {
+    /// Returns `Some` if we *were* able to replace bound vars. If there are any bound vars that
+    /// use a binding level above `universe_indices.len()`, we fail.
     pub fn replace_bound_vars<T: TypeFoldable<'tcx>>(
         infcx: &'me InferCtxt<'me, 'tcx>,
+        universe_indices: &'me mut Vec<Option<ty::UniverseIndex>>,
         value: T,
-    ) -> (
+    ) -> Option<(
         T,
         BTreeMap<ty::PlaceholderRegion, ty::BoundRegion>,
         BTreeMap<ty::PlaceholderType, ty::BoundTy>,
         BTreeMap<ty::PlaceholderConst<'tcx>, ty::BoundVar>,
-    ) {
+    )> {
         let mapped_regions: BTreeMap<ty::PlaceholderRegion, ty::BoundRegion> = BTreeMap::new();
         let mapped_types: BTreeMap<ty::PlaceholderType, ty::BoundTy> = BTreeMap::new();
         let mapped_consts: BTreeMap<ty::PlaceholderConst<'tcx>, ty::BoundVar> = BTreeMap::new();
@@ -457,13 +519,16 @@ impl<'me, 'tcx> BoundVarReplacer<'me, 'tcx> {
             mapped_regions,
             mapped_types,
             mapped_consts,
-            universes: BTreeMap::new(),
             current_index: ty::INNERMOST,
+            universe_indices,
+            failed: false,
         };
 
         let value = value.super_fold_with(&mut replacer);
 
-        (value, replacer.mapped_regions, replacer.mapped_types, replacer.mapped_consts)
+        (!replacer.failed).then(|| {
+            (value, replacer.mapped_regions, replacer.mapped_types, replacer.mapped_consts)
+        })
     }
 }
 
@@ -484,14 +549,24 @@ impl TypeFolder<'tcx> for BoundVarReplacer<'_, 'tcx> {
 
     fn fold_region(&mut self, r: ty::Region<'tcx>) -> ty::Region<'tcx> {
         match *r {
-            ty::ReLateBound(debruijn, br) => {
+            ty::ReLateBound(debruijn, _)
+                if debruijn.as_usize() + 1
+                    > self.current_index.as_usize() + self.universe_indices.len() =>
+            {
+                self.failed = true;
+                r
+            }
+            ty::ReLateBound(debruijn, br) if debruijn >= self.current_index => {
                 let infcx = self.infcx;
-                let placeholder_db_index =
-                    ty::DebruijnIndex::from_u32(self.current_index.as_u32() - debruijn.as_u32());
-                let universe = *self
-                    .universes
-                    .entry(placeholder_db_index)
-                    .or_insert_with(|| infcx.create_next_universe());
+                let index = self.universe_indices.len() - debruijn.as_usize()
+                    + self.current_index.as_usize()
+                    - 1;
+                let universe = self.universe_indices[index].unwrap_or_else(|| {
+                    for i in self.universe_indices.iter_mut().take(index + 1) {
+                        *i = i.or_else(|| Some(infcx.create_next_universe()))
+                    }
+                    self.universe_indices[index].unwrap()
+                });
                 let p = ty::PlaceholderRegion { universe, name: br.kind };
                 self.mapped_regions.insert(p.clone(), br);
                 self.infcx.tcx.mk_region(ty::RePlaceholder(p))
@@ -502,14 +577,24 @@ impl TypeFolder<'tcx> for BoundVarReplacer<'_, 'tcx> {
 
     fn fold_ty(&mut self, t: Ty<'tcx>) -> Ty<'tcx> {
         match *t.kind() {
-            ty::Bound(debruijn, bound_ty) => {
+            ty::Bound(debruijn, _)
+                if debruijn.as_usize() + 1
+                    > self.current_index.as_usize() + self.universe_indices.len() =>
+            {
+                self.failed = true;
+                t
+            }
+            ty::Bound(debruijn, bound_ty) if debruijn >= self.current_index => {
                 let infcx = self.infcx;
-                let placeholder_db_index =
-                    ty::DebruijnIndex::from_u32(self.current_index.as_u32() - debruijn.as_u32());
-                let universe = *self
-                    .universes
-                    .entry(placeholder_db_index)
-                    .or_insert_with(|| infcx.create_next_universe());
+                let index = self.universe_indices.len() - debruijn.as_usize()
+                    + self.current_index.as_usize()
+                    - 1;
+                let universe = self.universe_indices[index].unwrap_or_else(|| {
+                    for i in self.universe_indices.iter_mut().take(index + 1) {
+                        *i = i.or_else(|| Some(infcx.create_next_universe()))
+                    }
+                    self.universe_indices[index].unwrap()
+                });
                 let p = ty::PlaceholderType { universe, name: bound_ty.var };
                 self.mapped_types.insert(p.clone(), bound_ty);
                 self.infcx.tcx.mk_ty(ty::Placeholder(p))
@@ -521,14 +606,26 @@ impl TypeFolder<'tcx> for BoundVarReplacer<'_, 'tcx> {
 
     fn fold_const(&mut self, ct: &'tcx ty::Const<'tcx>) -> &'tcx ty::Const<'tcx> {
         match *ct {
-            ty::Const { val: ty::ConstKind::Bound(debruijn, bound_const), ty } => {
+            ty::Const { val: ty::ConstKind::Bound(debruijn, _), ty: _ }
+                if debruijn.as_usize() + 1
+                    > self.current_index.as_usize() + self.universe_indices.len() =>
+            {
+                self.failed = true;
+                ct
+            }
+            ty::Const { val: ty::ConstKind::Bound(debruijn, bound_const), ty }
+                if debruijn >= self.current_index =>
+            {
                 let infcx = self.infcx;
-                let placeholder_db_index =
-                    ty::DebruijnIndex::from_u32(self.current_index.as_u32() - debruijn.as_u32());
-                let universe = *self
-                    .universes
-                    .entry(placeholder_db_index)
-                    .or_insert_with(|| infcx.create_next_universe());
+                let index = self.universe_indices.len() - debruijn.as_usize()
+                    + self.current_index.as_usize()
+                    - 1;
+                let universe = self.universe_indices[index].unwrap_or_else(|| {
+                    for i in self.universe_indices.iter_mut().take(index + 1) {
+                        *i = i.or_else(|| Some(infcx.create_next_universe()))
+                    }
+                    self.universe_indices[index].unwrap()
+                });
                 let p = ty::PlaceholderConst {
                     universe,
                     name: ty::BoundConst { var: bound_const, ty },
@@ -542,12 +639,14 @@ impl TypeFolder<'tcx> for BoundVarReplacer<'_, 'tcx> {
     }
 }
 
+// The inverse of `BoundVarReplacer`: replaces placeholders with the bound vars from which they came.
 pub struct PlaceholderReplacer<'me, 'tcx> {
-    pub infcx: &'me InferCtxt<'me, 'tcx>,
-    pub mapped_regions: BTreeMap<ty::PlaceholderRegion, ty::BoundRegion>,
-    pub mapped_types: BTreeMap<ty::PlaceholderType, ty::BoundTy>,
-    pub mapped_consts: BTreeMap<ty::PlaceholderConst<'tcx>, ty::BoundVar>,
-    pub current_index: ty::DebruijnIndex,
+    infcx: &'me InferCtxt<'me, 'tcx>,
+    mapped_regions: BTreeMap<ty::PlaceholderRegion, ty::BoundRegion>,
+    mapped_types: BTreeMap<ty::PlaceholderType, ty::BoundTy>,
+    mapped_consts: BTreeMap<ty::PlaceholderConst<'tcx>, ty::BoundVar>,
+    universe_indices: &'me Vec<Option<ty::UniverseIndex>>,
+    current_index: ty::DebruijnIndex,
 }
 
 impl<'me, 'tcx> PlaceholderReplacer<'me, 'tcx> {
@@ -556,6 +655,7 @@ impl<'me, 'tcx> PlaceholderReplacer<'me, 'tcx> {
         mapped_regions: BTreeMap<ty::PlaceholderRegion, ty::BoundRegion>,
         mapped_types: BTreeMap<ty::PlaceholderType, ty::BoundTy>,
         mapped_consts: BTreeMap<ty::PlaceholderConst<'tcx>, ty::BoundVar>,
+        universe_indices: &'me Vec<Option<ty::UniverseIndex>>,
         value: T,
     ) -> T {
         let mut replacer = PlaceholderReplacer {
@@ -563,6 +663,7 @@ impl<'me, 'tcx> PlaceholderReplacer<'me, 'tcx> {
             mapped_regions,
             mapped_types,
             mapped_consts,
+            universe_indices,
             current_index: ty::INNERMOST,
         };
         value.super_fold_with(&mut replacer)
@@ -603,7 +704,15 @@ impl TypeFolder<'tcx> for PlaceholderReplacer<'_, 'tcx> {
                 let replace_var = self.mapped_regions.get(&p);
                 match replace_var {
                     Some(replace_var) => {
-                        self.tcx().mk_region(ty::ReLateBound(self.current_index, *replace_var))
+                        let index = self
+                            .universe_indices
+                            .iter()
+                            .position(|u| matches!(u, Some(pu) if *pu == p.universe))
+                            .unwrap_or_else(|| bug!("Unexpected placeholder universe."));
+                        let db = ty::DebruijnIndex::from_usize(
+                            self.universe_indices.len() - index + self.current_index.as_usize() - 1,
+                        );
+                        self.tcx().mk_region(ty::ReLateBound(db, *replace_var))
                     }
                     None => r1,
                 }
@@ -622,7 +731,15 @@ impl TypeFolder<'tcx> for PlaceholderReplacer<'_, 'tcx> {
                 let replace_var = self.mapped_types.get(&p);
                 match replace_var {
                     Some(replace_var) => {
-                        self.tcx().mk_ty(ty::Bound(self.current_index, *replace_var))
+                        let index = self
+                            .universe_indices
+                            .iter()
+                            .position(|u| matches!(u, Some(pu) if *pu == p.universe))
+                            .unwrap_or_else(|| bug!("Unexpected placeholder universe."));
+                        let db = ty::DebruijnIndex::from_usize(
+                            self.universe_indices.len() - index + self.current_index.as_usize() - 1,
+                        );
+                        self.tcx().mk_ty(ty::Bound(db, *replace_var))
                     }
                     None => ty,
                 }
@@ -637,10 +754,18 @@ impl TypeFolder<'tcx> for PlaceholderReplacer<'_, 'tcx> {
         if let ty::Const { val: ty::ConstKind::Placeholder(p), ty } = *ct {
             let replace_var = self.mapped_consts.get(&p);
             match replace_var {
-                Some(replace_var) => self.tcx().mk_const(ty::Const {
-                    val: ty::ConstKind::Bound(self.current_index, *replace_var),
-                    ty,
-                }),
+                Some(replace_var) => {
+                    let index = self
+                        .universe_indices
+                        .iter()
+                        .position(|u| matches!(u, Some(pu) if *pu == p.universe))
+                        .unwrap_or_else(|| bug!("Unexpected placeholder universe."));
+                    let db = ty::DebruijnIndex::from_usize(
+                        self.universe_indices.len() - index + self.current_index.as_usize() - 1,
+                    );
+                    self.tcx()
+                        .mk_const(ty::Const { val: ty::ConstKind::Bound(db, *replace_var), ty })
+                }
                 None => ct,
             }
         } else {

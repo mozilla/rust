@@ -23,7 +23,7 @@ where
 
 fn main() {
     let struc = MyStruct;
-    meow(struc, |foo| { //~ implementation of `MyTrait` is not general enough
+    meow(struc, |foo| { //~ type mismatch
         println!("{:?}", foo);
     })
 }

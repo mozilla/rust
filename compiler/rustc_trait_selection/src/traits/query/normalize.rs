@@ -62,6 +62,7 @@ impl<'cx, 'tcx> AtExt<'tcx> for At<'cx, 'tcx> {
             error: false,
             cache: SsoHashMap::new(),
             anon_depth: 0,
+            universes: vec![],
         };
 
         let result = value.fold_with(&mut normalizer);
@@ -92,11 +93,22 @@ struct QueryNormalizer<'cx, 'tcx> {
     cache: SsoHashMap<Ty<'tcx>, Ty<'tcx>>,
     error: bool,
     anon_depth: usize,
+    universes: Vec<Option<ty::UniverseIndex>>,
 }
 
 impl<'cx, 'tcx> TypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
     fn tcx<'c>(&'c self) -> TyCtxt<'tcx> {
         self.infcx.tcx
+    }
+
+    fn fold_binder<T: TypeFoldable<'tcx>>(
+        &mut self,
+        t: ty::Binder<'tcx, T>,
+    ) -> ty::Binder<'tcx, T> {
+        self.universes.push(None);
+        let t = t.super_fold_with(self);
+        self.universes.pop();
+        t
     }
 
     #[instrument(level = "debug", skip(self))]
@@ -162,8 +174,15 @@ impl<'cx, 'tcx> TypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
             ty::Projection(data) => {
                 let tcx = self.infcx.tcx;
                 let infcx = self.infcx;
-                let (data, mapped_regions, mapped_types, mapped_consts) =
-                    crate::traits::project::BoundVarReplacer::replace_bound_vars(infcx, data);
+                let replaced = crate::traits::project::BoundVarReplacer::replace_bound_vars(
+                    infcx,
+                    &mut self.universes,
+                    data,
+                );
+                let (data, mapped_regions, mapped_types, mapped_consts) = match replaced {
+                    Some(r) => r,
+                    None => return ty.super_fold_with(self),
+                };
                 let data = data.super_fold_with(self);
 
                 let mut orig_values = OriginalQueryValues::default();
@@ -212,6 +231,7 @@ impl<'cx, 'tcx> TypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
                     mapped_regions,
                     mapped_types,
                     mapped_consts,
+                    &self.universes,
                     normalized_ty,
                 )
             }
