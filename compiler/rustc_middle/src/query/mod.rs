@@ -28,7 +28,6 @@ rustc_queries! {
     /// prefer wrappers like `tcx.visit_all_items_in_krate()`.
     query hir_crate(key: ()) -> &'tcx Crate<'tcx> {
         eval_always
-        no_hash
         desc { "get the crate HIR" }
     }
 
@@ -36,7 +35,6 @@ rustc_queries! {
     /// Avoid calling this query directly.
     query index_hir(_: ()) -> &'tcx crate::hir::IndexedHir<'tcx> {
         eval_always
-        no_hash
         desc { "index HIR" }
     }
 
@@ -45,7 +43,6 @@ rustc_queries! {
     /// This can be conveniently accessed by `tcx.hir().visit_item_likes_in_module`.
     /// Avoid calling this query directly.
     query hir_module_items(key: LocalDefId) -> &'tcx hir::ModuleItems {
-        eval_always
         desc { |tcx| "HIR module items in `{}`", tcx.def_path_str(key.to_def_id()) }
     }
 
@@ -54,7 +51,6 @@ rustc_queries! {
     /// This can be conveniently accessed by methods on `tcx.hir()`.
     /// Avoid calling this query directly.
     query hir_owner(key: LocalDefId) -> Option<crate::hir::Owner<'tcx>> {
-        eval_always
         desc { |tcx| "HIR owner of `{}`", tcx.def_path_str(key.to_def_id()) }
     }
 
@@ -63,7 +59,6 @@ rustc_queries! {
     /// This can be conveniently accessed by methods on `tcx.hir()`.
     /// Avoid calling this query directly.
     query hir_owner_parent(key: LocalDefId) -> hir::HirId {
-        eval_always
         desc { |tcx| "HIR parent of `{}`", tcx.def_path_str(key.to_def_id()) }
     }
 
@@ -72,7 +67,6 @@ rustc_queries! {
     /// This can be conveniently accessed by methods on `tcx.hir()`.
     /// Avoid calling this query directly.
     query hir_owner_nodes(key: LocalDefId) -> Option<&'tcx crate::hir::OwnerNodes<'tcx>> {
-        eval_always
         desc { |tcx| "HIR owner items in `{}`", tcx.def_path_str(key.to_def_id()) }
     }
 
@@ -81,7 +75,6 @@ rustc_queries! {
     /// This can be conveniently accessed by methods on `tcx.hir()`.
     /// Avoid calling this query directly.
     query hir_attrs(key: LocalDefId) -> rustc_middle::hir::AttributeMap<'tcx> {
-        eval_always
         desc { |tcx| "HIR owner attributes in `{}`", tcx.def_path_str(key.to_def_id()) }
     }
 
@@ -602,7 +595,6 @@ rustc_queries! {
     /// Methods in these implementations don't need to be exported.
     query inherent_impls(key: DefId) -> &'tcx [DefId] {
         desc { |tcx| "collecting inherent impls for `{}`", tcx.def_path_str(key) }
-        eval_always
     }
 
     /// The result of unsafety-checking this `LocalDefId`.
@@ -762,15 +754,12 @@ rustc_queries! {
     /// Not meant to be used directly outside of coherence.
     query crate_inherent_impls(k: ()) -> CrateInherentImpls {
         storage(ArenaCacheSelector<'tcx>)
-        eval_always
         desc { "all inherent impls defined in crate" }
     }
 
     /// Checks all types in the crate for overlap in their inherent impls. Reports errors.
     /// Not meant to be used directly outside of coherence.
-    query crate_inherent_impls_overlap_check(_: ())
-        -> () {
-        eval_always
+    query crate_inherent_impls_overlap_check(_: ()) -> () {
         desc { "check for overlap between inherent impls defined in this crate" }
     }
 
@@ -863,11 +852,9 @@ rustc_queries! {
 
     /// Performs part of the privacy check and computes "access levels".
     query privacy_access_levels(_: ()) -> &'tcx AccessLevels {
-        eval_always
         desc { "privacy access levels" }
     }
     query check_private_in_public(_: ()) -> () {
-        eval_always
         desc { "checking for private elements in public interfaces" }
     }
 
@@ -901,12 +888,6 @@ rustc_queries! {
 
     query def_span(def_id: DefId) -> Span {
         desc { |tcx| "looking up span for `{}`", tcx.def_path_str(def_id) }
-        // FIXME(mw): DefSpans are not really inputs since they are derived from
-        // HIR. But at the moment HIR hashing still contains some hacks that allow
-        // to make type debuginfo to be source location independent. Declaring
-        // DefSpan an input makes sure that changes to these are always detected
-        // regardless of HIR hashing.
-        eval_always
     }
 
     query def_ident_span(def_id: DefId) -> Option<Span> {
@@ -1348,7 +1329,6 @@ rustc_queries! {
         desc { "fetching what a dependency looks like" }
     }
     query crate_name(_: CrateNum) -> Symbol {
-        eval_always
         desc { "fetching what a crate is named" }
     }
     query item_children(def_id: DefId) -> &'tcx [Export<hir::HirId>] {
@@ -1360,24 +1340,20 @@ rustc_queries! {
 
     query get_lib_features(_: ()) -> LibFeatures {
         storage(ArenaCacheSelector<'tcx>)
-        eval_always
         desc { "calculating the lib features map" }
     }
-    query defined_lib_features(_: CrateNum)
-        -> &'tcx [(Symbol, Option<Symbol>)] {
+    query defined_lib_features(_: CrateNum) -> &'tcx [(Symbol, Option<Symbol>)] {
         desc { "calculating the lib features defined in a crate" }
     }
     /// Returns the lang items defined in another crate by loading it from metadata.
     query get_lang_items(_: ()) -> LanguageItems {
         storage(ArenaCacheSelector<'tcx>)
-        eval_always
         desc { "calculating the lang items map" }
     }
 
     /// Returns all diagnostic items defined in all crates.
     query all_diagnostic_items(_: ()) -> FxHashMap<Symbol, DefId> {
         storage(ArenaCacheSelector<'tcx>)
-        eval_always
         desc { "calculating the diagnostic items map" }
     }
 
@@ -1428,7 +1404,6 @@ rustc_queries! {
 
     query upvars_mentioned(def_id: DefId) -> Option<&'tcx FxIndexMap<hir::HirId, hir::Upvar>> {
         desc { |tcx| "collecting upvars mentioned in `{}`", tcx.def_path_str(def_id) }
-        eval_always
     }
     query maybe_unused_trait_import(def_id: LocalDefId) -> bool {
         desc { |tcx| "maybe_unused_trait_import for `{}`", tcx.def_path_str(def_id.to_def_id()) }
@@ -1467,7 +1442,6 @@ rustc_queries! {
     }
 
     query collect_and_partition_mono_items(_: ()) -> (&'tcx DefIdSet, &'tcx [CodegenUnit<'tcx>]) {
-        eval_always
         desc { "collect_and_partition_mono_items" }
     }
     query is_codegened_item(def_id: DefId) -> bool {
@@ -1476,7 +1450,6 @@ rustc_queries! {
 
     /// All items participating in code generation together with items inlined into them.
     query codegened_and_inlined_items(_: ()) -> &'tcx DefIdSet {
-        eval_always
        desc { "codegened_and_inlined_items" }
     }
 

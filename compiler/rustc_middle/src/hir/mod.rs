@@ -19,6 +19,13 @@ use rustc_index::vec::{Idx, IndexVec};
 use rustc_span::DUMMY_SP;
 use std::collections::BTreeMap;
 
+impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for rustc_hir::Crate<'tcx> {
+    fn hash_stable(&self, hcx: &mut StableHashingContext<'a>, hasher: &mut StableHasher) {
+        crate::ty::tls::with(|tcx| tcx.index_hir(()).nodes_hash).hash_stable(hcx, hasher);
+        self.modules.hash_stable(hcx, hasher);
+    }
+}
+
 /// Result of HIR indexing.
 #[derive(Debug)]
 pub struct IndexedHir<'hir> {
@@ -29,6 +36,14 @@ pub struct IndexedHir<'hir> {
     /// Map from each owner to its parent's HirId inside another owner.
     // This map is separate from `map` to eventually allow for per-owner indexing.
     parenting: FxHashMap<LocalDefId, HirId>,
+    /// Hash of the content of HIR.
+    nodes_hash: Fingerprint,
+}
+
+impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for IndexedHir<'tcx> {
+    fn hash_stable(&self, hcx: &mut StableHashingContext<'a>, hasher: &mut StableHasher) {
+        self.nodes_hash.hash_stable(hcx, hasher)
+    }
 }
 
 /// Top-level HIR node for current owner. This only contains the node for which
@@ -137,7 +152,7 @@ pub fn provide(providers: &mut Providers) {
     providers.hir_crate = |tcx, ()| tcx.untracked_crate;
     providers.index_hir = map::index_hir;
     providers.crate_hash = map::crate_hash;
-    providers.hir_module_items = |tcx, id| &tcx.untracked_crate.modules[&id];
+    providers.hir_module_items = |tcx, id| &tcx.hir_crate(()).modules[&id];
     providers.hir_owner = |tcx, id| {
         let owner = tcx.index_hir(()).map[id].as_ref()?;
         let node = owner.nodes[ItemLocalId::new(0)].as_ref()?.node;
@@ -148,7 +163,7 @@ pub fn provide(providers: &mut Providers) {
         let index = tcx.index_hir(());
         index.parenting.get(&id).copied().unwrap_or(CRATE_HIR_ID)
     };
-    providers.hir_attrs = |tcx, id| AttributeMap { map: &tcx.untracked_crate.attrs, prefix: id };
+    providers.hir_attrs = |tcx, id| AttributeMap { map: &tcx.hir_crate(()).attrs, prefix: id };
     providers.def_span = |tcx, def_id| tcx.hir().span_if_local(def_id).unwrap_or(DUMMY_SP);
     providers.fn_arg_names = |tcx, id| {
         let hir = tcx.hir();

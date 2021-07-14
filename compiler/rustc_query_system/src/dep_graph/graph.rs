@@ -243,8 +243,10 @@ impl<K: DepKind> DepGraph<K> {
             let result = K::with_deps(task_deps.as_ref(), || task(cx, arg));
             let edges = task_deps.map_or_else(|| smallvec![], |lock| lock.into_inner().reads);
 
-            let mut hcx = dcx.create_stable_hashing_context();
-            let current_fingerprint = hash_result(&mut hcx, &result);
+            let current_fingerprint = self.with_ignore(|| {
+                let mut hcx = dcx.create_stable_hashing_context();
+                hash_result(&mut hcx, &result)
+            });
 
             let print_status = cfg!(debug_assertions) && dcx.sess().opts.debugging_opts.dep_tasks;
 
