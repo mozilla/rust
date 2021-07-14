@@ -1096,6 +1096,29 @@ impl<'a, 'b> InvocationCollector<'a, 'b> {
             }
         }
     }
+
+    /// Called before we recursively process an AST node
+    /// with `noop_visit_* / noop_flat_map_*`
+    /// This method assigns a `NodeId`, and sets that `NodeId`
+    /// as our current 'lint node id'. If a macro call is found
+    /// inside this AST node, we will use this AST node's `NodeId`
+    /// to emit lints associated with that macro (allowing
+    /// `#[allow]` / `#[deny]` to be applied close to
+    /// the macro invocation).
+    ///
+    /// Do *not* call this for a macro AST node
+    /// (e.g. `ExprKind::MacCall`) - we cannot emit lints
+    /// at these AST nodes, since they are removed and
+    /// replaced with the result of macro expansion.
+    ///
+    /// All other `NodeId`s are assigned by `visit_id`.
+    fn assign_id(&mut self, id: &mut ast::NodeId) {
+        if self.monotonic {
+            debug_assert_eq!(*id, ast::DUMMY_NODE_ID);
+            *id = self.cx.resolver.next_node_id();
+            self.cx.current_expansion.lint_node_id = *id;
+        }
+    }
 }
 
 impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
@@ -1118,6 +1141,7 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
                 self.check_attributes(&expr.attrs);
                 self.collect_bang(mac, expr.span, AstFragmentKind::Expr).make_expr().into_inner()
             } else {
+                self.assign_id(&mut expr.id);
                 ensure_sufficient_stack(|| noop_visit_expr(&mut expr, self));
                 expr
             }
@@ -1133,6 +1157,7 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
                 .make_arms();
         }
 
+        self.assign_id(&mut arm.id);
         noop_flat_map_arm(arm, self)
     }
 
@@ -1145,6 +1170,7 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
                 .make_expr_fields();
         }
 
+        self.assign_id(&mut field.id);
         noop_flat_map_expr_field(field, self)
     }
 
@@ -1157,6 +1183,7 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
                 .make_pat_fields();
         }
 
+        self.assign_id(&mut fp.id);
         noop_flat_map_pat_field(fp, self)
     }
 
@@ -1169,6 +1196,7 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
                 .make_params();
         }
 
+        self.assign_id(&mut p.id);
         noop_flat_map_param(p, self)
     }
 
@@ -1181,6 +1209,7 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
                 .make_field_defs();
         }
 
+        self.assign_id(&mut sf.id);
         noop_flat_map_field_def(sf, self)
     }
 
@@ -1193,6 +1222,7 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
                 .make_variants();
         }
 
+        self.assign_id(&mut variant.id);
         noop_flat_map_variant(variant, self)
     }
 
@@ -1214,6 +1244,7 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
                     .make_opt_expr()
                     .map(|expr| expr.into_inner())
             } else {
+                self.assign_id(&mut expr.id);
                 Some({
                     noop_visit_expr(&mut expr, self);
                     expr
@@ -1225,7 +1256,10 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
     fn visit_pat(&mut self, pat: &mut P<ast::Pat>) {
         match pat.kind {
             PatKind::MacCall(_) => {}
-            _ => return noop_visit_pat(pat, self),
+            _ => {
+                self.assign_id(&mut pat.id);
+                return noop_visit_pat(pat, self);
+            }
         }
 
         visit_clobber(pat, |mut pat| match mem::replace(&mut pat.kind, PatKind::Wild) {
@@ -1278,6 +1312,7 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
             &mut self.cx.current_expansion.dir_ownership,
             DirOwnership::UnownedViaBlock,
         );
+        self.assign_id(&mut block.id);
         noop_visit_block(block, self);
         self.cx.current_expansion.dir_ownership = orig_dir_ownership;
     }
@@ -1377,6 +1412,7 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
                 let orig_dir_ownership =
                     mem::replace(&mut self.cx.current_expansion.dir_ownership, dir_ownership);
 
+                self.assign_id(&mut item.id);
                 let result = noop_flat_map_item(item, self);
 
                 // Restore the module info.
@@ -1386,6 +1422,7 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
                 result
             }
             _ => {
+                self.assign_id(&mut item.id);
                 item.attrs = attrs;
                 noop_flat_map_item(item, self)
             }
@@ -1411,7 +1448,10 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
                     _ => unreachable!(),
                 })
             }
-            _ => noop_flat_map_assoc_item(item, self),
+            _ => {
+                self.assign_id(&mut item.id);
+                noop_flat_map_assoc_item(item, self)
+            }
         }
     }
 
@@ -1434,14 +1474,20 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
                     _ => unreachable!(),
                 })
             }
-            _ => noop_flat_map_assoc_item(item, self),
+            _ => {
+                self.assign_id(&mut item.id);
+                noop_flat_map_assoc_item(item, self)
+            }
         }
     }
 
     fn visit_ty(&mut self, ty: &mut P<ast::Ty>) {
         match ty.kind {
             ast::TyKind::MacCall(_) => {}
-            _ => return noop_visit_ty(ty, self),
+            _ => {
+                self.assign_id(&mut ty.id);
+                return noop_visit_ty(ty, self);
+            }
         };
 
         visit_clobber(ty, |mut ty| match mem::replace(&mut ty.kind, ast::TyKind::Err) {
@@ -1478,7 +1524,10 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
                     _ => unreachable!(),
                 })
             }
-            _ => noop_flat_map_foreign_item(foreign_item, self),
+            _ => {
+                self.assign_id(&mut foreign_item.id);
+                noop_flat_map_foreign_item(foreign_item, self)
+            }
         }
     }
 
@@ -1498,13 +1547,15 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
                 .make_generic_params();
         }
 
+        self.assign_id(&mut param.id);
         noop_flat_map_generic_param(param, self)
     }
 
     fn visit_id(&mut self, id: &mut ast::NodeId) {
-        if self.monotonic {
-            debug_assert_eq!(*id, ast::DUMMY_NODE_ID);
-            *id = self.cx.resolver.next_node_id()
+        // We may have already assigned a `NodeId`
+        // by calling `assign_id`
+        if self.monotonic && *id == ast::DUMMY_NODE_ID {
+            *id = self.cx.resolver.next_node_id();
         }
     }
 }
