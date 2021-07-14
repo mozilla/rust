@@ -4,7 +4,7 @@ pub use libc::{c_long, size_t, ssize_t, suseconds_t, time_t, timeval};
 pub const SOLID_NET_ERR_BASE: c_int = -2000;
 pub const EINPROGRESS: c_int = SOLID_NET_ERR_BASE - libc::EINPROGRESS;
 
-pub const AF_INET6: i32 = 0;
+pub const AF_INET6: i32 = 10;
 pub const AF_INET: i32 = 2;
 pub const IPPROTO_IP: i32 = 0;
 pub const IPPROTO_IPV6: i32 = 41;
