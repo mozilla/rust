@@ -15,14 +15,11 @@
 //!
 //! Instead of detecting indirect modifications, locals that have their address taken never
 //! participate in copy propagation.
-//!
-//! When moving in-between the blocks, all recorded values are invalidated. To do that in O(1)
-//! time, generation numbers have a global component that is increased after each block.
 
 use crate::transform::MirPass;
 use crate::util::ever_borrowed_locals;
+use rustc_data_structures::fx::FxHashMap;
 use rustc_index::bit_set::BitSet;
-use rustc_index::vec::IndexVec;
 use rustc_middle::mir::visit::*;
 use rustc_middle::mir::*;
 use rustc_middle::ty::{List, TyCtxt};
@@ -40,8 +37,7 @@ fn propagate_copies(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
     let mut values = LocalValues {
         tcx,
         borrowed_locals: ever_borrowed_locals(body),
-        values: IndexVec::from_elem_n(LocalValue::default(), body.local_decls.len()),
-        block_generation: 0,
+        values: FxHashMap::default(),
         // Copying from places with projections tends to generate more LLVM IR.
         // Disable it by default.
         copy_projections: tcx.sess.mir_opt_level() > 2,
@@ -68,9 +64,7 @@ struct LocalValues<'tcx> {
     /// Locals that have their address taken. They do not participate in copy propagation.
     borrowed_locals: BitSet<Local>,
     /// A symbolic value of each local.
-    values: IndexVec<Local, LocalValue<'tcx>>,
-    /// Block generation number. Used to invalidate locals' values in-between the blocks in O(1) time.
-    block_generation: u32,
+    values: FxHashMap<Local, LocalValue<'tcx>>,
     /// Enables copying from places with projections.
     copy_projections: bool,
 }
@@ -86,28 +80,25 @@ struct LocalValue<'tcx> {
     src: Option<Place<'tcx>>,
 }
 
+/// Local generation number. Increased after each mutation.
 #[derive(Copy, Clone, Default, PartialEq, Eq)]
-struct Generation {
-    /// Local generation number. Increased after each mutation.
-    local: u32,
-    /// Block generation number. Increased in-between the blocks.
-    block: u32,
-}
+struct Generation(u32);
 
 impl<'tcx> LocalValues<'tcx> {
     /// Invalidates all locals' values.
     fn invalidate_all(&mut self) {
-        assert!(self.block_generation != u32::MAX);
-        self.block_generation += 1;
+        self.values.clear();
     }
 
     /// Invalidates the local's value.
     fn invalidate_local(&mut self, local: Local) {
-        let value = &mut self.values[local];
-        assert!(value.generation.local != u32::MAX);
-        value.generation.local += 1;
-        value.src_generation = Generation::default();
-        value.src = None;
+        // Note that we can only invalidate recorded locals!
+        if let Some(value) = self.values.get_mut(&local) {
+            assert!(value.generation.0 != u32::MAX);
+            value.generation.0 += 1;
+            value.src_generation = Generation::default();
+            value.src = None;
+        }
     }
 
     fn record_assignment(&mut self, statement: &Statement<'tcx>) {
@@ -151,19 +142,23 @@ impl<'tcx> LocalValues<'tcx> {
             return;
         }
 
+        // Ensure that src has an entry so that we can detect invalidation.
+        let src_generation =
+            self.values.entry(src.local).or_insert(LocalValue::default()).generation;
+
         // Record `dst = src` assignment.
-        let src_generation = self.values[src.local].generation;
-        let value = &mut self.values[dst];
-        value.generation.local += 1;
-        value.generation.block = self.block_generation;
+        let value = &mut self.values.entry(dst).or_insert(LocalValue::default());
+        value.generation.0 += 1;
         value.src = Some(*src);
         value.src_generation = src_generation;
     }
 
     /// Replaces a use of dst with its current value.
     fn propagate_local(&mut self, dst: &mut Local) {
-        let dst_value = &self.values[*dst];
-
+        let dst_value = match self.values.get(dst) {
+            None => return,
+            Some(dst_value) => dst_value,
+        };
         let src = match dst_value.src {
             Some(src) => src,
             None => return,
@@ -174,12 +169,8 @@ impl<'tcx> LocalValues<'tcx> {
         };
         // Last definition of dst was of the form `dst = src`.
 
-        // Check that dst was defined in this block.
-        if dst_value.generation.block != self.block_generation {
-            return;
-        }
         // Check that src still has the same value.
-        if dst_value.src_generation != self.values[src].generation {
+        if dst_value.src_generation != self.values.get(&src).unwrap().generation {
             return;
         }
 
@@ -189,7 +180,10 @@ impl<'tcx> LocalValues<'tcx> {
 
     /// Replaces a use of dst with its current value.
     fn propagate_place(&mut self, dst: &mut Place<'tcx>) {
-        let dst_value = &self.values[dst.local];
+        let dst_value = match self.values.get(&dst.local) {
+            None => return,
+            Some(dst_value) => dst_value,
+        };
 
         let src = match dst_value.src {
             Some(src) => src,
@@ -197,12 +191,8 @@ impl<'tcx> LocalValues<'tcx> {
         };
         // Last definition of dst.local was of the form `dst.local = src`.
 
-        // Check that dst.local was defined in this block.
-        if dst_value.generation.block != self.block_generation {
-            return;
-        }
         // Check that src still has the same value.
-        if dst_value.src_generation != self.values[src.local].generation {
+        if dst_value.src_generation != self.values.get(&src.local).unwrap().generation {
             return;
         }
 
