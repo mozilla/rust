@@ -435,6 +435,10 @@ nav.sub {
 	border-bottom-left-radius: 5px;
 }
 
+.example-wrap > pre.rust a:hover {
+	text-decoration: underline;
+}
+
 .rustdoc:not(.source) .example-wrap > pre.rust {
 	width: 100%;
 	overflow-x: auto;
