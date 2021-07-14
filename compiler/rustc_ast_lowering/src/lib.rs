@@ -807,7 +807,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             parent_def_id,
             node_id,
             DefPathData::LifetimeNs(str_name),
-            ExpnId::root(),
+            ExpnId::ROOT,
             span,
         );
 
@@ -1176,7 +1176,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                         parent_def_id,
                         impl_trait_node_id,
                         DefPathData::ImplTrait,
-                        ExpnId::root(),
+                        ExpnId::ROOT,
                         constraint.span,
                     );
 
@@ -1244,7 +1244,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                                 parent_def_id,
                                 node_id,
                                 DefPathData::AnonConst,
-                                ExpnId::root(),
+                                ExpnId::ROOT,
                                 ty.span,
                             );
 
@@ -1714,7 +1714,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                         self.parent,
                         def_node_id,
                         DefPathData::LifetimeNs(name.ident().name),
-                        ExpnId::root(),
+                        ExpnId::ROOT,
                         lifetime.span,
                     );
 

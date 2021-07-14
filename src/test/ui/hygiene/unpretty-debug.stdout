@@ -19,10 +19,10 @@ fn y /* 0#0 */() { }
 
 /*
 Expansions:
-0: parent: ExpnId(0), call_site_ctxt: #0, def_site_ctxt: #0, kind: Root
-1: parent: ExpnId(0), call_site_ctxt: #0, def_site_ctxt: #0, kind: Macro(Bang, "foo")
+ExpnId { krate: crate0, local_id: 0 }: parent: ExpnId { krate: crate0, local_id: 0 }, call_site_ctxt: #0, def_site_ctxt: #0, kind: Root
+ExpnId { krate: crate0, local_id: 1 }: parent: ExpnId { krate: crate0, local_id: 0 }, call_site_ctxt: #0, def_site_ctxt: #0, kind: Macro(Bang, "foo")
 
 SyntaxContexts:
-#0: parent: #0, outer_mark: (ExpnId(0), Opaque)
-#1: parent: #0, outer_mark: (ExpnId(1), SemiTransparent)
+#0: parent: #0, outer_mark: (ExpnId { krate: crate0, local_id: 0 }, Opaque)
+#1: parent: #0, outer_mark: (ExpnId { krate: crate0, local_id: 1 }, SemiTransparent)
 */

@@ -411,7 +411,10 @@ impl<'a> TraitDef<'a> {
                     _ => unreachable!(),
                 };
                 let container_id = cx.current_expansion.id.expn_data().parent;
-                let always_copy = has_no_type_params && cx.resolver.has_derive_copy(container_id);
+                let always_copy = has_no_type_params
+                    && container_id
+                        .as_local()
+                        .map_or(false, |container_id| cx.resolver.has_derive_copy(container_id));
                 let use_temporaries = is_packed && always_copy;
 
                 let newitem = match item.kind {

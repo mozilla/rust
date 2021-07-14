@@ -157,7 +157,7 @@ impl ParseSess {
             span_diagnostic: handler,
             unstable_features: UnstableFeatures::from_environment(None),
             config: FxHashSet::default(),
-            edition: ExpnId::root().expn_data().edition,
+            edition: ExpnId::ROOT.expn_data().edition,
             missing_fragment_specifiers: Default::default(),
             raw_identifier_spans: Lock::new(Vec::new()),
             source_map,

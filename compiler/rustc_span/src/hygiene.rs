@@ -29,12 +29,13 @@ use crate::symbol::{kw, sym, Symbol};
 use crate::with_session_globals;
 use crate::{HashStableContext, Span, DUMMY_SP};
 
-use crate::def_id::{CrateNum, DefId, CRATE_DEF_INDEX, LOCAL_CRATE};
+use crate::def_id::{CrateNum, DefId, StableCrateId, CRATE_DEF_ID, LOCAL_CRATE};
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_data_structures::sync::{Lock, Lrc};
 use rustc_data_structures::unhash::UnhashMap;
+use rustc_index::vec::IndexVec;
 use rustc_macros::HashStable_Generic;
 use rustc_serialize::{Decodable, Decoder, Encodable, Encoder};
 use std::fmt;
@@ -58,13 +59,58 @@ pub struct SyntaxContextData {
     dollar_crate_name: Symbol,
 }
 
+rustc_index::newtype_index! {
+    /// A unique ID associated with a macro invocation and expansion.
+    pub struct ExpnIndex {
+        ENCODABLE = custom
+    }
+}
+
 /// A unique ID associated with a macro invocation and expansion.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct ExpnId(u32);
+pub struct ExpnId {
+    pub krate: CrateNum,
+    pub local_id: ExpnIndex,
+}
+
+rustc_index::newtype_index! {
+    /// A unique ID associated with a macro invocation and expansion.
+    pub struct LocalExpnId {
+        ENCODABLE = custom
+    }
+}
 
 /// A unique hash value associated to an expansion.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Encodable, Decodable, HashStable_Generic)]
 pub struct ExpnHash(Fingerprint);
+
+impl ExpnHash {
+    /// Returns the [StableCrateId] identifying the crate this [ExpnHash]
+    /// originates from.
+    #[inline]
+    pub fn stable_crate_id(self) -> StableCrateId {
+        StableCrateId(self.0.as_value().0)
+    }
+
+    /// Returns the crate-local part of the [ExpnHash].
+    ///
+    /// Used for tests.
+    #[inline]
+    pub fn local_hash(self) -> u64 {
+        self.0.as_value().1
+    }
+
+    #[inline]
+    pub fn is_root(self) -> bool {
+        self.0 == Fingerprint::ZERO
+    }
+
+    /// Builds a new [ExpnHash] with the given [StableCrateId] and
+    /// `local_hash`, where `local_hash` must be unique within its crate.
+    fn new(stable_crate_id: StableCrateId, local_hash: u64) -> ExpnHash {
+        ExpnHash(Fingerprint::new(stable_crate_id.0, local_hash))
+    }
+}
 
 /// A property of a macro expansion that determines how identifiers
 /// produced by that expansion are resolved.
@@ -86,32 +132,86 @@ pub enum Transparency {
     Opaque,
 }
 
-impl ExpnId {
-    pub fn fresh_empty() -> Self {
+impl LocalExpnId {
+    /// The ID of the theoretical expansion that generates freshly parsed, unexpanded AST.
+    pub const ROOT: LocalExpnId = LocalExpnId::from_u32(0);
+
+    pub fn from_raw(idx: ExpnIndex) -> LocalExpnId {
+        LocalExpnId::from_u32(idx.as_u32())
+    }
+
+    pub fn as_raw(self) -> ExpnIndex {
+        ExpnIndex::from_u32(self.as_u32())
+    }
+
+    pub fn fresh_empty() -> LocalExpnId {
         HygieneData::with(|data| data.fresh_expn(None))
     }
 
-    pub fn fresh(expn_data: ExpnData, ctx: impl HashStableContext) -> Self {
+    pub fn fresh(expn_data: ExpnData, ctx: impl HashStableContext) -> LocalExpnId {
+        debug_assert_eq!(expn_data.parent.krate, LOCAL_CRATE);
         let expn_id = HygieneData::with(|data| data.fresh_expn(Some(expn_data)));
         update_disambiguator(expn_id, ctx);
         expn_id
     }
 
+    #[inline]
+    pub fn expn_hash(self) -> ExpnHash {
+        HygieneData::with(|data| data.local_expn_hash(self))
+    }
+
+    #[inline]
+    pub fn expn_data(self) -> ExpnData {
+        HygieneData::with(|data| data.local_expn_data(self).clone())
+    }
+
+    #[inline]
+    pub fn to_expn_id(self) -> ExpnId {
+        ExpnId { krate: LOCAL_CRATE, local_id: self.as_raw() }
+    }
+
+    #[inline]
+    pub fn set_expn_data(self, expn_data: ExpnData, ctx: impl HashStableContext) {
+        debug_assert_eq!(expn_data.parent.krate, LOCAL_CRATE);
+        HygieneData::with(|data| {
+            let old_expn_data = &mut data.local_expn_data[self];
+            assert!(old_expn_data.is_none(), "expansion data is reset for an expansion ID");
+            *old_expn_data = Some(expn_data);
+        });
+        update_disambiguator(self, ctx)
+    }
+
+    #[inline]
+    pub fn is_descendant_of(self, ancestor: LocalExpnId) -> bool {
+        self.to_expn_id().is_descendant_of(ancestor.to_expn_id())
+    }
+
+    /// `expn_id.outer_expn_is_descendant_of(ctxt)` is equivalent to but faster than
+    /// `expn_id.is_descendant_of(ctxt.outer_expn())`.
+    #[inline]
+    pub fn outer_expn_is_descendant_of(self, ctxt: SyntaxContext) -> bool {
+        self.to_expn_id().outer_expn_is_descendant_of(ctxt)
+    }
+
+    /// Returns span for the macro which originally caused this expansion to happen.
+    ///
+    /// Stops backtracing at include! boundary.
+    #[inline]
+    pub fn expansion_cause(self) -> Option<Span> {
+        self.to_expn_id().expansion_cause()
+    }
+
+    #[inline]
+    #[track_caller]
+    pub fn parent(self) -> LocalExpnId {
+        self.expn_data().parent.as_local().unwrap()
+    }
+}
+
+impl ExpnId {
     /// The ID of the theoretical expansion that generates freshly parsed, unexpanded AST.
-    #[inline]
-    pub fn root() -> Self {
-        ExpnId(0)
-    }
-
-    #[inline]
-    pub fn as_u32(self) -> u32 {
-        self.0
-    }
-
-    #[inline]
-    pub fn from_u32(raw: u32) -> ExpnId {
-        ExpnId(raw)
-    }
+    /// Invariant: we do not create any ExpnId with local_id == 0 and krate != 0.
+    pub const ROOT: ExpnId = ExpnId { krate: LOCAL_CRATE, local_id: ExpnIndex::from_u32(0) };
 
     #[inline]
     pub fn expn_hash(self) -> ExpnHash {
@@ -124,20 +224,19 @@ impl ExpnId {
     }
 
     #[inline]
-    pub fn expn_data(self) -> ExpnData {
-        HygieneData::with(|data| data.expn_data(self).clone())
+    pub fn as_local(self) -> Option<LocalExpnId> {
+        if self.krate == LOCAL_CRATE { Some(LocalExpnId::from_raw(self.local_id)) } else { None }
     }
 
     #[inline]
-    pub fn set_expn_data(self, mut expn_data: ExpnData, ctx: impl HashStableContext) {
-        HygieneData::with(|data| {
-            let old_expn_data = &mut data.expn_data[self.0 as usize];
-            assert!(old_expn_data.is_none(), "expansion data is reset for an expansion ID");
-            assert_eq!(expn_data.orig_id, None);
-            expn_data.orig_id = Some(self.as_u32());
-            *old_expn_data = Some(expn_data);
-        });
-        update_disambiguator(self, ctx)
+    #[track_caller]
+    pub fn expect_local(self) -> LocalExpnId {
+        self.as_local().unwrap()
+    }
+
+    #[inline]
+    pub fn expn_data(self) -> ExpnData {
+        HygieneData::with(|data| data.expn_data(self).clone())
     }
 
     pub fn is_descendant_of(self, ancestor: ExpnId) -> bool {
@@ -175,37 +274,40 @@ pub struct HygieneData {
     /// Each expansion should have an associated expansion data, but sometimes there's a delay
     /// between creation of an expansion ID and obtaining its data (e.g. macros are collected
     /// first and then resolved later), so we use an `Option` here.
-    expn_data: Vec<Option<ExpnData>>,
-    expn_hashes: Vec<ExpnHash>,
+    local_expn_data: IndexVec<LocalExpnId, Option<ExpnData>>,
+    local_expn_hashes: IndexVec<LocalExpnId, ExpnHash>,
+    foreign_expn_data: FxHashMap<ExpnId, ExpnData>,
+    foreign_expn_hashes: FxHashMap<ExpnId, ExpnHash>,
     expn_hash_to_expn_id: UnhashMap<ExpnHash, ExpnId>,
     syntax_context_data: Vec<SyntaxContextData>,
     syntax_context_map: FxHashMap<(SyntaxContext, ExpnId, Transparency), SyntaxContext>,
-    /// Maps the `Fingerprint` of an `ExpnData` to the next disambiguator value.
+    /// Maps the `local_hash` of an `ExpnData` to the next disambiguator value.
     /// This is used by `update_disambiguator` to keep track of which `ExpnData`s
     /// would have collisions without a disambiguator.
     /// The keys of this map are always computed with `ExpnData.disambiguator`
     /// set to 0.
-    expn_data_disambiguators: FxHashMap<Fingerprint, u32>,
+    expn_data_disambiguators: FxHashMap<u64, u32>,
 }
 
 impl HygieneData {
     crate fn new(edition: Edition) -> Self {
-        let mut root_data = ExpnData::default(
+        let root_data = ExpnData::default(
             ExpnKind::Root,
             DUMMY_SP,
             edition,
-            Some(DefId::local(CRATE_DEF_INDEX)),
+            Some(CRATE_DEF_ID.to_def_id()),
             None,
         );
-        root_data.orig_id = Some(0);
 
         HygieneData {
-            expn_data: vec![Some(root_data)],
-            expn_hashes: vec![ExpnHash(Fingerprint::ZERO)],
-            expn_hash_to_expn_id: std::iter::once((ExpnHash(Fingerprint::ZERO), ExpnId(0)))
+            local_expn_data: IndexVec::from_elem_n(Some(root_data), 1),
+            local_expn_hashes: IndexVec::from_elem_n(ExpnHash(Fingerprint::ZERO), 1),
+            foreign_expn_data: FxHashMap::default(),
+            foreign_expn_hashes: FxHashMap::default(),
+            expn_hash_to_expn_id: std::iter::once((ExpnHash(Fingerprint::ZERO), ExpnId::ROOT))
                 .collect(),
             syntax_context_data: vec![SyntaxContextData {
-                outer_expn: ExpnId::root(),
+                outer_expn: ExpnId::ROOT,
                 outer_transparency: Transparency::Opaque,
                 parent: SyntaxContext(0),
                 opaque: SyntaxContext(0),
@@ -221,29 +323,41 @@ impl HygieneData {
         with_session_globals(|session_globals| f(&mut *session_globals.hygiene_data.borrow_mut()))
     }
 
-    fn fresh_expn(&mut self, mut expn_data: Option<ExpnData>) -> ExpnId {
-        let raw_id = self.expn_data.len() as u32;
-        if let Some(data) = expn_data.as_mut() {
-            assert_eq!(data.orig_id, None);
-            data.orig_id = Some(raw_id);
-        }
-        self.expn_data.push(expn_data);
-        self.expn_hashes.push(ExpnHash(Fingerprint::ZERO));
-        ExpnId(raw_id)
+    fn fresh_expn(&mut self, expn_data: Option<ExpnData>) -> LocalExpnId {
+        let expn_id = self.local_expn_data.push(expn_data);
+        let _eid = self.local_expn_hashes.push(ExpnHash(Fingerprint::ZERO));
+        debug_assert_eq!(expn_id, _eid);
+        expn_id
+    }
+
+    #[inline]
+    fn local_expn_hash(&self, expn_id: LocalExpnId) -> ExpnHash {
+        self.local_expn_hashes[expn_id]
     }
 
     #[inline]
     fn expn_hash(&self, expn_id: ExpnId) -> ExpnHash {
-        self.expn_hashes[expn_id.0 as usize]
+        match expn_id.as_local() {
+            Some(expn_id) => self.local_expn_hashes[expn_id],
+            None => self.foreign_expn_hashes[&expn_id],
+        }
+    }
+
+    fn local_expn_data(&self, expn_id: LocalExpnId) -> &ExpnData {
+        self.local_expn_data[expn_id].as_ref().expect("no expansion data for an expansion ID")
     }
 
     fn expn_data(&self, expn_id: ExpnId) -> &ExpnData {
-        self.expn_data[expn_id.0 as usize].as_ref().expect("no expansion data for an expansion ID")
+        if let Some(expn_id) = expn_id.as_local() {
+            self.local_expn_data[expn_id].as_ref().expect("no expansion data for an expansion ID")
+        } else {
+            &self.foreign_expn_data[&expn_id]
+        }
     }
 
     fn is_descendant_of(&self, mut expn_id: ExpnId, ancestor: ExpnId) -> bool {
         while expn_id != ancestor {
-            if expn_id == ExpnId::root() {
+            if expn_id.local_id.as_u32() == 0 {
                 return false;
             }
             expn_id = self.expn_data(expn_id).parent;
@@ -316,7 +430,7 @@ impl HygieneData {
         expn_id: ExpnId,
         transparency: Transparency,
     ) -> SyntaxContext {
-        assert_ne!(expn_id, ExpnId::root());
+        assert_ne!(expn_id, ExpnId::ROOT);
         if transparency == Transparency::Opaque {
             return self.apply_mark_internal(ctxt, expn_id, transparency);
         }
@@ -453,17 +567,21 @@ pub fn debug_hygiene_data(verbose: bool) -> String {
         } else {
             let mut s = String::from("");
             s.push_str("Expansions:");
-            data.expn_data.iter().enumerate().for_each(|(id, expn_info)| {
-                let expn_info = expn_info.as_ref().expect("no expansion data for an expansion ID");
+            let mut debug_expn_data = |(id, expn_info): (&ExpnId, &ExpnData)| {
                 s.push_str(&format!(
-                    "\n{}: parent: {:?}, call_site_ctxt: {:?}, def_site_ctxt: {:?}, kind: {:?}",
+                    "\n{:?}: parent: {:?}, call_site_ctxt: {:?}, def_site_ctxt: {:?}, kind: {:?}",
                     id,
                     expn_info.parent,
                     expn_info.call_site.ctxt(),
                     expn_info.def_site.ctxt(),
                     expn_info.kind,
-                ));
+                ))
+            };
+            data.local_expn_data.iter_enumerated().for_each(|(id, expn_info)| {
+                let expn_info = expn_info.as_ref().expect("no expansion data for an expansion ID");
+                debug_expn_data((&id.to_expn_id(), expn_info))
             });
+            data.foreign_expn_data.iter().for_each(debug_expn_data);
             s.push_str("\n\nSyntaxContexts:");
             data.syntax_context_data.iter().enumerate().for_each(|(id, ctxt)| {
                 s.push_str(&format!(
@@ -696,7 +814,7 @@ impl Span {
         transparency: Transparency,
         ctx: impl HashStableContext,
     ) -> Span {
-        let expn_id = ExpnId::fresh(expn_data, ctx);
+        let expn_id = LocalExpnId::fresh(expn_data, ctx).to_expn_id();
         HygieneData::with(|data| {
             self.with_ctxt(data.apply_mark(SyntaxContext::root(), expn_id, transparency))
         })
@@ -738,20 +856,6 @@ pub struct ExpnData {
     /// call_site span would have its own ExpnData, with the call_site
     /// pointing to the `foo!` invocation.
     pub call_site: Span,
-    /// The crate that originally created this `ExpnData`. During
-    /// metadata serialization, we only encode `ExpnData`s that were
-    /// created locally - when our serialized metadata is decoded,
-    /// foreign `ExpnId`s will have their `ExpnData` looked up
-    /// from the crate specified by `Crate
-    krate: CrateNum,
-    /// The raw that this `ExpnData` had in its original crate.
-    /// An `ExpnData` can be created before being assigned an `ExpnId`,
-    /// so this might be `None` until `set_expn_data` is called
-    // This is used only for serialization/deserialization purposes:
-    // two `ExpnData`s that differ only in their `orig_id` should
-    // be considered equivalent.
-    #[stable_hasher(ignore)]
-    orig_id: Option<u32>,
     /// Used to force two `ExpnData`s to have different `Fingerprint`s.
     /// Due to macro expansion, it's possible to end up with two `ExpnId`s
     /// that have identical `ExpnData`s. This violates the contract of `HashStable`
@@ -790,7 +894,6 @@ pub struct ExpnData {
     pub parent_module: Option<DefId>,
 }
 
-// These would require special handling of `orig_id`.
 impl !PartialEq for ExpnData {}
 impl !Hash for ExpnData {}
 
@@ -818,8 +921,6 @@ impl ExpnData {
             edition,
             macro_def_id,
             parent_module,
-            krate: LOCAL_CRATE,
-            orig_id: None,
             disambiguator: 0,
         }
     }
@@ -834,7 +935,7 @@ impl ExpnData {
     ) -> ExpnData {
         ExpnData {
             kind,
-            parent: ExpnId::root(),
+            parent: ExpnId::ROOT,
             call_site,
             def_site: DUMMY_SP,
             allow_internal_unstable: None,
@@ -843,8 +944,6 @@ impl ExpnData {
             edition,
             macro_def_id,
             parent_module,
-            krate: LOCAL_CRATE,
-            orig_id: None,
             disambiguator: 0,
         }
     }
@@ -869,7 +968,7 @@ impl ExpnData {
     }
 
     #[inline]
-    fn hash_expn(&self, ctx: &mut impl HashStableContext) -> Fingerprint {
+    fn hash_expn(&self, ctx: &mut impl HashStableContext) -> u64 {
         let mut hasher = StableHasher::new();
         self.hash_stable(ctx, &mut hasher);
         hasher.finish()
@@ -879,7 +978,7 @@ impl ExpnData {
 /// Expansion kind.
 #[derive(Clone, Debug, PartialEq, Encodable, Decodable, HashStable_Generic)]
 pub enum ExpnKind {
-    /// No expansion, aka root expansion. Only `ExpnId::root()` has this kind.
+    /// No expansion, aka root expansion. Only `ExpnId::ROOT` has this kind.
     Root,
     /// Expansion produced by a macro.
     Macro(MacroKind, Symbol),
@@ -1020,11 +1119,18 @@ pub struct HygieneEncodeContext {
 }
 
 impl HygieneEncodeContext {
+    /// Record the fact that we need to serialize the corresponding `ExpnData`.
+    pub fn mark(&self, expn: ExpnId) {
+        if !self.serialized_expns.lock().contains(&expn) {
+            self.latest_expns.lock().insert(expn);
+        }
+    }
+
     pub fn encode<T, R>(
         &self,
         encoder: &mut T,
         mut encode_ctxt: impl FnMut(&mut T, u32, &SyntaxContextData) -> Result<(), R>,
-        mut encode_expn: impl FnMut(&mut T, u32, ExpnData, ExpnHash) -> Result<(), R>,
+        mut encode_expn: impl FnMut(&mut T, ExpnId, &ExpnData, ExpnHash) -> Result<(), R>,
     ) -> Result<(), R> {
         // When we serialize a `SyntaxContextData`, we may end up serializing
         // a `SyntaxContext` that we haven't seen before
@@ -1051,9 +1157,9 @@ impl HygieneEncodeContext {
 
             let latest_expns = { std::mem::take(&mut *self.latest_expns.lock()) };
 
-            for_all_expns_in(latest_expns.into_iter(), |index, expn, data, hash| {
+            for_all_expns_in(latest_expns.into_iter(), |expn, data, hash| {
                 if self.serialized_expns.lock().insert(expn) {
-                    encode_expn(encoder, index, data, hash)?;
+                    encode_expn(encoder, expn, data, hash)?;
                 }
                 Ok(())
             })?;
@@ -1072,78 +1178,72 @@ pub struct HygieneDecodeContext {
     // so that multiple occurrences of the same serialized id are decoded to the same
     // `SyntaxContext`
     remapped_ctxts: Lock<Vec<Option<SyntaxContext>>>,
-    // The same as `remapepd_ctxts`, but for `ExpnId`s
-    remapped_expns: Lock<Vec<Option<ExpnId>>>,
 }
 
-pub fn decode_expn_id<'a, D: Decoder, G>(
-    d: &mut D,
-    mode: ExpnDataDecodeMode<'a, G>,
-    decode_data: impl FnOnce(&mut D, u32) -> Result<(ExpnData, ExpnHash), D::Error>,
-) -> Result<ExpnId, D::Error>
-where
-    G: FnOnce(CrateNum) -> &'a HygieneDecodeContext,
-{
-    let index = u32::decode(d)?;
-    let context = match mode {
-        ExpnDataDecodeMode::IncrComp(context) => context,
-        ExpnDataDecodeMode::Metadata(get_context) => {
-            let krate = CrateNum::decode(d)?;
-            get_context(krate)
-        }
-    };
+/// Register an expansion which has been decoded from the on-disk-cache for the local crate.
+pub fn register_local_expn_id(data: ExpnData, hash: ExpnHash) -> ExpnId {
+    HygieneData::with(|hygiene_data| {
+        let expn_id = hygiene_data.local_expn_data.next_index();
+        hygiene_data.local_expn_data.push(Some(data));
+        let _eid = hygiene_data.local_expn_hashes.push(hash);
+        debug_assert_eq!(expn_id, _eid);
 
+        let expn_id = expn_id.to_expn_id();
+
+        let _old_id = hygiene_data.expn_hash_to_expn_id.insert(hash, expn_id);
+        debug_assert!(_old_id.is_none());
+        expn_id
+    })
+}
+
+/// Register an expansion which has been decoded from the metadata of a foreign crate.
+pub fn register_expn_id(
+    krate: CrateNum,
+    local_id: ExpnIndex,
+    data: ExpnData,
+    hash: ExpnHash,
+) -> ExpnId {
+    let expn_id = ExpnId { krate, local_id };
+    HygieneData::with(|hygiene_data| {
+        let _old_data = hygiene_data.foreign_expn_data.insert(expn_id, data);
+        debug_assert!(_old_data.is_none());
+        let _old_hash = hygiene_data.foreign_expn_hashes.insert(expn_id, hash);
+        debug_assert!(_old_hash.is_none());
+        let _old_id = hygiene_data.expn_hash_to_expn_id.insert(hash, expn_id);
+        debug_assert!(_old_id.is_none());
+    });
+    expn_id
+}
+
+/// Decode an expansion from the metadata of a foreign crate.
+pub fn decode_expn_id(
+    krate: CrateNum,
+    index: u32,
+    decode_data: impl FnOnce(ExpnId) -> (ExpnData, ExpnHash),
+) -> ExpnId {
     // Do this after decoding, so that we decode a `CrateNum`
     // if necessary
-    if index == ExpnId::root().as_u32() {
+    if index == 0 {
         debug!("decode_expn_id: deserialized root");
-        return Ok(ExpnId::root());
+        return ExpnId::ROOT;
     }
 
-    let outer_expns = &context.remapped_expns;
+    let index = ExpnIndex::from_u32(index);
 
-    // Ensure that the lock() temporary is dropped early
-    {
-        if let Some(expn_id) = outer_expns.lock().get(index as usize).copied().flatten() {
-            return Ok(expn_id);
-        }
+    // This function is used to decode metadata, so it cannot decode information about LOCAL_CRATE.
+    debug_assert_ne!(krate, LOCAL_CRATE);
+    let expn_id = ExpnId { krate, local_id: index };
+
+    // Fast path if the expansion has already been decoded.
+    if HygieneData::with(|hygiene_data| hygiene_data.foreign_expn_data.contains_key(&expn_id)) {
+        return expn_id;
     }
 
     // Don't decode the data inside `HygieneData::with`, since we need to recursively decode
     // other ExpnIds
-    let (mut expn_data, hash) = decode_data(d, index)?;
+    let (expn_data, hash) = decode_data(expn_id);
 
-    let expn_id = HygieneData::with(|hygiene_data| {
-        if let Some(&expn_id) = hygiene_data.expn_hash_to_expn_id.get(&hash) {
-            return expn_id;
-        }
-
-        let expn_id = ExpnId(hygiene_data.expn_data.len() as u32);
-
-        // If we just deserialized an `ExpnData` owned by
-        // the local crate, its `orig_id` will be stale,
-        // so we need to update it to its own value.
-        // This only happens when we deserialize the incremental cache,
-        // since a crate will never decode its own metadata.
-        if expn_data.krate == LOCAL_CRATE {
-            expn_data.orig_id = Some(expn_id.0);
-        }
-
-        hygiene_data.expn_data.push(Some(expn_data));
-        hygiene_data.expn_hashes.push(hash);
-        let _old_id = hygiene_data.expn_hash_to_expn_id.insert(hash, expn_id);
-        debug_assert!(_old_id.is_none());
-
-        let mut expns = outer_expns.lock();
-        let new_len = index as usize + 1;
-        if expns.len() < new_len {
-            expns.resize(new_len, None);
-        }
-        expns[index as usize] = Some(expn_id);
-        drop(expns);
-        expn_id
-    });
-    Ok(expn_id)
+    register_expn_id(krate, index, expn_data, hash)
 }
 
 // Decodes `SyntaxContext`, using the provided `HygieneDecodeContext`
@@ -1181,7 +1281,7 @@ pub fn decode_syntax_context<
         // Push a dummy SyntaxContextData to ensure that nobody else can get the
         // same ID as us. This will be overwritten after call `decode_Data`
         hygiene_data.syntax_context_data.push(SyntaxContextData {
-            outer_expn: ExpnId::root(),
+            outer_expn: ExpnId::ROOT,
             outer_transparency: Transparency::Transparent,
             parent: SyntaxContext::root(),
             opaque: SyntaxContext::root(),
@@ -1234,26 +1334,34 @@ fn for_all_ctxts_in<E, F: FnMut(u32, SyntaxContext, &SyntaxContextData) -> Resul
 
 fn for_all_expns_in<E>(
     expns: impl Iterator<Item = ExpnId>,
-    mut f: impl FnMut(u32, ExpnId, ExpnData, ExpnHash) -> Result<(), E>,
+    mut f: impl FnMut(ExpnId, &ExpnData, ExpnHash) -> Result<(), E>,
 ) -> Result<(), E> {
     let all_data: Vec<_> = HygieneData::with(|data| {
         expns
-            .map(|expn| {
-                let idx = expn.0 as usize;
-                (expn, data.expn_data[idx].clone(), data.expn_hashes[idx].clone())
-            })
+            .map(|expn| (expn, data.expn_data(expn).clone(), data.expn_hash(expn).clone()))
             .collect()
     });
     for (expn, data, hash) in all_data.into_iter() {
-        let data = data.unwrap_or_else(|| panic!("Missing data for {:?}", expn));
-        f(expn.0, expn, data, hash)?;
+        f(expn, &data, hash)?;
     }
     Ok(())
+}
+
+impl<E: Encoder> Encodable<E> for LocalExpnId {
+    fn encode(&self, e: &mut E) -> Result<(), E::Error> {
+        self.to_expn_id().encode(e)
+    }
 }
 
 impl<E: Encoder> Encodable<E> for ExpnId {
     default fn encode(&self, _: &mut E) -> Result<(), E::Error> {
         panic!("cannot encode `ExpnId` with `{}`", std::any::type_name::<E>());
+    }
+}
+
+impl<D: Decoder> Decodable<D> for LocalExpnId {
+    fn decode(d: &mut D) -> Result<Self, D::Error> {
+        ExpnId::decode(d).map(ExpnId::expect_local)
     }
 }
 
@@ -1272,58 +1380,6 @@ pub fn raw_encode_syntax_context<E: Encoder>(
         context.latest_ctxts.lock().insert(ctxt);
     }
     ctxt.0.encode(e)
-}
-
-pub fn raw_encode_expn_id<E: Encoder>(
-    expn: ExpnId,
-    context: &HygieneEncodeContext,
-    mode: ExpnDataEncodeMode,
-    e: &mut E,
-) -> Result<(), E::Error> {
-    // Record the fact that we need to serialize the corresponding
-    // `ExpnData`
-    let needs_data = || {
-        if !context.serialized_expns.lock().contains(&expn) {
-            context.latest_expns.lock().insert(expn);
-        }
-    };
-
-    match mode {
-        ExpnDataEncodeMode::IncrComp => {
-            // Always serialize the `ExpnData` in incr comp mode
-            needs_data();
-            expn.0.encode(e)
-        }
-        ExpnDataEncodeMode::Metadata => {
-            let data = expn.expn_data();
-            // We only need to serialize the ExpnData
-            // if it comes from this crate.
-            // We currently don't serialize any hygiene information data for
-            // proc-macro crates: see the `SpecializedEncoder<Span>` impl
-            // for crate metadata.
-            if data.krate == LOCAL_CRATE {
-                needs_data();
-            }
-            data.orig_id.expect("Missing orig_id").encode(e)?;
-            data.krate.encode(e)
-        }
-    }
-}
-
-pub enum ExpnDataEncodeMode {
-    IncrComp,
-    Metadata,
-}
-
-pub enum ExpnDataDecodeMode<'a, F: FnOnce(CrateNum) -> &'a HygieneDecodeContext> {
-    IncrComp(&'a HygieneDecodeContext),
-    Metadata(F),
-}
-
-impl<'a> ExpnDataDecodeMode<'a, Box<dyn FnOnce(CrateNum) -> &'a HygieneDecodeContext>> {
-    pub fn incr_comp(ctxt: &'a HygieneDecodeContext) -> Self {
-        ExpnDataDecodeMode::IncrComp(ctxt)
-    }
 }
 
 impl<E: Encoder> Encodable<E> for SyntaxContext {
@@ -1345,9 +1401,9 @@ impl<D: Decoder> Decodable<D> for SyntaxContext {
 /// This method is called only when an `ExpnData` is first associated
 /// with an `ExpnId` (when the `ExpnId` is initially constructed, or via
 /// `set_expn_data`). It is *not* called for foreign `ExpnId`s deserialized
-/// from another crate's metadata - since `ExpnData` includes a `krate` field,
+/// from another crate's metadata - since `ExpnHash` includes the stable crate id,
 /// collisions are only possible between `ExpnId`s within the same crate.
-fn update_disambiguator(expn_id: ExpnId, mut ctx: impl HashStableContext) {
+fn update_disambiguator(expn_id: LocalExpnId, mut ctx: impl HashStableContext) {
     let mut expn_data = expn_id.expn_data();
     // This disambiguator should not have been set yet.
     assert_eq!(
@@ -1384,12 +1440,13 @@ fn update_disambiguator(expn_id: ExpnId, mut ctx: impl HashStableContext) {
         });
     }
 
-    let expn_hash = ExpnHash(expn_hash);
+    let expn_hash =
+        ExpnHash::new(ctx.def_path_hash(LOCAL_CRATE.as_def_id()).stable_crate_id(), expn_hash);
     HygieneData::with(|data| {
-        data.expn_data[expn_id.0 as usize].as_mut().unwrap().disambiguator = disambiguator;
-        debug_assert_eq!(data.expn_hashes[expn_id.0 as usize].0, Fingerprint::ZERO);
-        data.expn_hashes[expn_id.0 as usize] = expn_hash;
-        let _old_id = data.expn_hash_to_expn_id.insert(expn_hash, expn_id);
+        data.local_expn_data[expn_id].as_mut().unwrap().disambiguator = disambiguator;
+        debug_assert_eq!(data.local_expn_hashes[expn_id].0, Fingerprint::ZERO);
+        data.local_expn_hashes[expn_id] = expn_hash;
+        let _old_id = data.expn_hash_to_expn_id.insert(expn_hash, expn_id.to_expn_id());
         debug_assert!(_old_id.is_none());
     });
 }
@@ -1412,7 +1469,7 @@ impl<CTX: HashStableContext> HashStable<CTX> for SyntaxContext {
 
 impl<CTX: HashStableContext> HashStable<CTX> for ExpnId {
     fn hash_stable(&self, ctx: &mut CTX, hasher: &mut StableHasher) {
-        let hash = if *self == ExpnId::root() {
+        let hash = if *self == ExpnId::ROOT {
             // Avoid fetching TLS storage for a trivial often-used value.
             Fingerprint::ZERO
         } else {
