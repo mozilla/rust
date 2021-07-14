@@ -107,6 +107,7 @@ crate fn run(options: Options) -> Result<(), ErrorReported> {
 
     let mut test_args = options.test_args.clone();
     let display_warnings = options.display_warnings;
+    let nocapture = options.nocapture;
     let externs = options.externs.clone();
     let json_unused_externs = options.json_unused_externs;
 
@@ -166,6 +167,9 @@ crate fn run(options: Options) -> Result<(), ErrorReported> {
     };
 
     test_args.insert(0, "rustdoctest".to_string());
+    if nocapture {
+        test_args.push("--nocapture".to_string());
+    }
 
     testing::test_main(
         &test_args,
@@ -460,7 +464,16 @@ fn run_test(
         cmd.current_dir(run_directory);
     }
 
-    match cmd.output() {
+    let result = if options.nocapture {
+        cmd.status().map(|status| process::Output {
+            status,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        })
+    } else {
+        cmd.output()
+    };
+    match result {
         Err(e) => return Err(TestFailure::ExecutionError(e)),
         Ok(out) => {
             if should_panic && out.status.success() {
