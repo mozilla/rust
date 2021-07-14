@@ -1112,7 +1112,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                             true,
                             ImplTraitContext::TypeAliasesOpaqueTy {
                                 capturable_lifetimes: &mut capturable_lifetimes,
-                                origin: hir::OpaqueTyOrigin::Misc,
+                                origin: hir::OpaqueTyOrigin::TyAlias,
                             },
                         )
                     }
