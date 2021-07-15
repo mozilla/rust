@@ -7,7 +7,7 @@ use rustc_middle::dep_graph::{DepKind, DepNode, DepNodeIndex, SerializedDepNodeI
 use rustc_middle::ty::query::on_disk_cache;
 use rustc_middle::ty::tls::{self, ImplicitCtxt};
 use rustc_middle::ty::{self, TyCtxt};
-use rustc_query_system::dep_graph::HasDepContext;
+use rustc_query_system::dep_graph::{HasDepContext, TaskDeps};
 use rustc_query_system::query::{QueryContext, QueryDescription, QueryJobId, QueryMap};
 
 use rustc_data_structures::sync::Lock;
@@ -113,6 +113,7 @@ impl QueryContext for QueryCtxt<'tcx> {
         &self,
         token: QueryJobId<Self::DepKind>,
         diagnostics: Option<&Lock<ThinVec<Diagnostic>>>,
+        task_deps: Option<&Lock<TaskDeps<Self::DepKind>>>,
         compute: impl FnOnce() -> R,
     ) -> R {
         // The `TyCtxt` stored in TLS has the same global interner lifetime
@@ -124,8 +125,8 @@ impl QueryContext for QueryCtxt<'tcx> {
                 tcx: **self,
                 query: Some(token),
                 diagnostics,
+                task_deps,
                 layout_depth: current_icx.layout_depth,
-                task_deps: current_icx.task_deps,
             };
 
             // Use the `ImplicitCtxt` while we execute the query.
