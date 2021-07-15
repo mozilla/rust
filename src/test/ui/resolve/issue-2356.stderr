@@ -10,7 +10,7 @@ error[E0425]: cannot find function `clone` in this scope
 LL |     clone();
    |     ^^^^^ help: you might have meant to call the method: `self.clone`
 
-error[E0425]: cannot find function `default` in this scope
+error[E0423]: expected function, found built-in attribute `default`
   --> $DIR/issue-2356.rs:31:5
    |
 LL |     default();
@@ -20,7 +20,7 @@ help: you might have meant to call the associated function
    |
 LL |     Self::default();
    |     ^^^^^^^^^^^^^
-help: consider importing this function
+help: consider importing this function instead
    |
 LL | use std::default::default;
    |
@@ -120,5 +120,5 @@ LL |     self += 1;
 
 error: aborting due to 17 previous errors
 
-Some errors have detailed explanations: E0424, E0425.
-For more information about an error, try `rustc --explain E0424`.
+Some errors have detailed explanations: E0423, E0424, E0425.
+For more information about an error, try `rustc --explain E0423`.

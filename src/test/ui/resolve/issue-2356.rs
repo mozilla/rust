@@ -29,7 +29,7 @@ impl Clone for Cat {
 impl Default for Cat {
   fn default() -> Self {
     default();
-    //~^ ERROR cannot find function `default`
+    //~^ ERROR expected function, found built-in attribute
     loop {}
   }
 }

@@ -357,6 +357,22 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
         as `const`, which may be removed or renamed in the future."
     ),
 
+    // RFC 3107
+    // FIXME(jhpratt) This is almost certainly not what is desired. No other macro usage in this
+    // file uses the `kw` module. Registering a helper attribute with the `Derive` macro would be
+    // preferred.
+    (
+        rustc_span::symbol::kw::Default,
+        AssumedUsed,
+        template!(Word),
+        Gated(
+            Stability::Unstable,
+            sym::derive_default_enum,
+            "`#[default]` enum variants are experimental",
+            cfg_fn!(derive_default_enum),
+        ),
+    ),
+
     // ==========================================================================
     // Internal attributes: Stability, deprecation, and unsafe:
     // ==========================================================================
