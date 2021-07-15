@@ -1,3 +1,5 @@
+// FIXME (#61486) implement v0 value mangling
+// [full] compile-flags: -Zsymbol-mangling-version=legacy
 // [full] run-pass
 // revisions: full min
 #![cfg_attr(full, feature(const_generics))]
