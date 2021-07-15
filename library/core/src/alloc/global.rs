@@ -20,24 +20,57 @@ use crate::ptr;
 ///
 /// # Example
 ///
-/// ```no_run
-/// use std::alloc::{GlobalAlloc, Layout, alloc};
+/// ```
+/// use std::alloc::{GlobalAlloc, Layout};
+/// use std::cell::UnsafeCell;
 /// use std::ptr::null_mut;
+/// use std::sync::atomic::{AtomicUsize, Ordering::{Acquire, SeqCst}};
 ///
-/// struct MyAllocator;
-///
-/// unsafe impl GlobalAlloc for MyAllocator {
-///     unsafe fn alloc(&self, _layout: Layout) -> *mut u8 { null_mut() }
-///     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {}
+/// const ARENA: usize = 128 * 1024;
+/// #[repr(C, align(131072))] // 131072 == ARENA.
+/// struct SimpleAllocator {
+///     arena: UnsafeCell<[u8; ARENA]>,
+///     remaining: AtomicUsize, // we allocate from the top, counting down
 /// }
 ///
 /// #[global_allocator]
-/// static A: MyAllocator = MyAllocator;
+/// static ALLOCATOR: SimpleAllocator = SimpleAllocator {
+///     arena: UnsafeCell::new([0x55; ARENA]),
+///     remaining: AtomicUsize::new(ARENA),
+/// };
+///
+/// unsafe impl Sync for SimpleAllocator { }
+///
+/// unsafe impl GlobalAlloc for SimpleAllocator {
+///     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+///         let size = layout.size();
+///         let align = layout.align();
+///
+///         // Both align==0 and align not power of 2 will mangle remaining (or panic), causing UB.
+///         // This is allowed by the `GlobalAllocator` and `Layout` contracts.
+///         let align_mask_to_round_down = !(align - 1);
+///
+///         let mut allocated = 0;
+///         if self.remaining.fetch_update(SeqCst, SeqCst, |mut remaining| {
+///             if size > remaining || align > ARENA { // align may be > size !
+///                 return None
+///             }
+///             remaining -= size;
+///             remaining &= align_mask_to_round_down;
+///             allocated = remaining;
+///             Some(remaining)
+///         }).is_err() {
+///             return null_mut();
+///         };
+///         (self.arena.get() as *mut u8).add(allocated)
+///     }
+///     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) { }
+/// }
 ///
 /// fn main() {
-///     unsafe {
-///         assert!(alloc(Layout::new::<u32>()).is_null())
-///     }
+///     let _s = format!("allocating a string!");
+///     let currently = ALLOCATOR.remaining.load(Acquire);
+///     println!("allocated so far: {}", ARENA - currently);
 /// }
 /// ```
 ///
