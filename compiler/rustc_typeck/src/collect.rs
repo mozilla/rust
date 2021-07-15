@@ -1442,6 +1442,25 @@ fn generics_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::Generics {
                 // of a const parameter type, e.g. `struct Foo<const N: usize, const M: [u8; N]>` is not allowed.
                 None
             } else if tcx.lazy_normalization() {
+                // Only provide backwards declared generics to cg defaults (#86580)
+                if let Some(param_id) = tcx.hir().opt_const_param_default_param_hir_id(hir_id) {
+                    let generics = tcx.generics_of(parent_def_id.to_def_id());
+                    let param_def = tcx.hir().local_def_id(param_id).to_def_id();
+                    let param_def_idx = generics.param_def_id_to_index[&param_def];
+                    let params = generics.params[..param_def_idx as usize].to_owned();
+                    let param_def_id_to_index =
+                        params.iter().map(|param| (param.def_id, param.index)).collect();
+
+                    return ty::Generics {
+                        parent: generics.parent,
+                        parent_count: generics.parent_count,
+                        params,
+                        param_def_id_to_index,
+                        has_self: generics.has_self,
+                        has_late_bound_regions: generics.has_late_bound_regions,
+                    };
+                }
+
                 // HACK(eddyb) this provides the correct generics when
                 // `feature(const_generics)` is enabled, so that const expressions
                 // used with const generics, e.g. `Foo<{N+1}>`, can work at all.
@@ -2360,7 +2379,8 @@ fn trait_explicit_predicates_and_bounds(
 }
 
 fn explicit_predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicates<'_> {
-    if let DefKind::Trait = tcx.def_kind(def_id) {
+    let def_kind = tcx.def_kind(def_id);
+    if let DefKind::Trait = def_kind {
         // Remove bounds on associated types from the predicates, they will be
         // returned by `explicit_item_bounds`.
         let predicates_and_bounds = tcx.trait_explicit_predicates_and_bounds(def_id.expect_local());
@@ -2405,6 +2425,16 @@ fn explicit_predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicat
             }
         }
     } else {
+        if matches!(def_kind, DefKind::AnonConst) && tcx.lazy_normalization() {
+            // Provide predicates of parent item of cg defaults manually as `generics_of`
+            // doesn't set the parent item as the parent for the generics (#86580)
+            let hir_id = tcx.hir().local_def_id_to_hir_id(def_id.expect_local());
+            if let Some(_) = tcx.hir().opt_const_param_default_param_hir_id(hir_id) {
+                let item_id = tcx.hir().get_parent_item(hir_id);
+                let item_def_id = tcx.hir().local_def_id(item_id).to_def_id();
+                return tcx.explicit_predicates_of(item_def_id);
+            }
+        }
         gather_explicit_predicates_of(tcx, def_id)
     }
 }
