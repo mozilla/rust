@@ -2270,12 +2270,8 @@ pub enum OpaqueTyOrigin {
     FnReturn,
     /// `async fn`
     AsyncFn,
-    /// `let _: impl Trait = ...`
-    Binding,
     /// type aliases: `type Foo = impl Trait;`
     TyAlias,
-    /// Impl trait consts, statics, bounds.
-    Misc,
 }
 
 /// The various kinds of types recognized by the compiler.

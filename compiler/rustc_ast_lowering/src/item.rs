@@ -343,7 +343,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 // opaque type Foo1: Trait
                 let ty = self.lower_ty(
                     ty,
-                    ImplTraitContext::OtherOpaqueTy {
+                    ImplTraitContext::TypeAliasesOpaqueTy {
                         capturable_lifetimes: &mut FxHashSet::default(),
                         origin: hir::OpaqueTyOrigin::TyAlias,
                     },
@@ -484,17 +484,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
         span: Span,
         body: Option<&Expr>,
     ) -> (&'hir hir::Ty<'hir>, hir::BodyId) {
-        let mut capturable_lifetimes;
-        let itctx = if self.sess.features_untracked().impl_trait_in_bindings {
-            capturable_lifetimes = FxHashSet::default();
-            ImplTraitContext::OtherOpaqueTy {
-                capturable_lifetimes: &mut capturable_lifetimes,
-                origin: hir::OpaqueTyOrigin::Misc,
-            }
-        } else {
-            ImplTraitContext::Disallowed(ImplTraitPosition::Binding)
-        };
-        let ty = self.lower_ty(ty, itctx);
+        let ty = self.lower_ty(ty, ImplTraitContext::Disallowed(ImplTraitPosition::Binding));
         (ty, self.lower_const_body(span, body))
     }
 
@@ -926,7 +916,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                     Some(ty) => {
                         let ty = self.lower_ty(
                             ty,
-                            ImplTraitContext::OtherOpaqueTy {
+                            ImplTraitContext::TypeAliasesOpaqueTy {
                                 capturable_lifetimes: &mut FxHashSet::default(),
                                 origin: hir::OpaqueTyOrigin::TyAlias,
                             },
