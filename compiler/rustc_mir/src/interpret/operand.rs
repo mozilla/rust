@@ -15,8 +15,9 @@ use rustc_target::abi::{Abi, HasDataLayout, LayoutOf, Size, TagEncoding};
 use rustc_target::abi::{VariantIdx, Variants};
 
 use super::{
-    alloc_range, from_known_layout, mir_assign_valid_types, ConstValue, GlobalId, InterpCx,
-    InterpResult, MPlaceTy, Machine, MemPlace, Place, PlaceTy, Pointer, Scalar, ScalarMaybeUninit,
+    alloc_range, from_known_layout, mir_assign_valid_types, AllocId, ConstValue, GlobalId,
+    InterpCx, InterpResult, MPlaceTy, Machine, MemPlace, Place, PlaceTy, Pointer, Provenance,
+    Scalar, ScalarMaybeUninit,
 };
 
 /// An `Immediate` represents a single immediate self-contained Rust value.
@@ -26,14 +27,24 @@ use super::{
 /// operations and wide pointers. This idea was taken from rustc's codegen.
 /// In particular, thanks to `ScalarPair`, arithmetic operations and casts can be entirely
 /// defined on `Immediate`, and do not have to work with a `Place`.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, HashStable, Hash)]
-pub enum Immediate<Tag = ()> {
+#[derive(Copy, Clone, PartialEq, Eq, HashStable, Hash)]
+pub enum Immediate<Tag = AllocId> {
     Scalar(ScalarMaybeUninit<Tag>),
     ScalarPair(ScalarMaybeUninit<Tag>, ScalarMaybeUninit<Tag>),
 }
 
 #[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
 rustc_data_structures::static_assert_size!(Immediate, 56);
+
+impl<Tag: Provenance> std::fmt::Debug for Immediate<Tag> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use Immediate::*;
+        match self {
+            Scalar(s) => f.debug_tuple("Scalar").field(s).finish(),
+            ScalarPair(s1, s2) => f.debug_tuple("ScalarPair").field(s1).field(s2).finish(),
+        }
+    }
+}
 
 impl<Tag> From<ScalarMaybeUninit<Tag>> for Immediate<Tag> {
     #[inline(always)]
@@ -49,20 +60,21 @@ impl<Tag> From<Scalar<Tag>> for Immediate<Tag> {
     }
 }
 
-impl<Tag> From<Pointer<Tag>> for Immediate<Tag> {
-    #[inline(always)]
-    fn from(val: Pointer<Tag>) -> Self {
-        Immediate::Scalar(Scalar::from(val).into())
-    }
-}
-
 impl<'tcx, Tag> Immediate<Tag> {
+    pub fn from_pointer(p: Pointer<Tag>, cx: &impl HasDataLayout) -> Self {
+        Immediate::Scalar(ScalarMaybeUninit::from_pointer(p, cx))
+    }
+
+    pub fn from_maybe_pointer(p: Pointer<Option<Tag>>, cx: &impl HasDataLayout) -> Self {
+        Immediate::Scalar(ScalarMaybeUninit::from_maybe_pointer(p, cx))
+    }
+
     pub fn new_slice(val: Scalar<Tag>, len: u64, cx: &impl HasDataLayout) -> Self {
         Immediate::ScalarPair(val.into(), Scalar::from_machine_usize(len, cx).into())
     }
 
-    pub fn new_dyn_trait(val: Scalar<Tag>, vtable: Pointer<Tag>) -> Self {
-        Immediate::ScalarPair(val.into(), vtable.into())
+    pub fn new_dyn_trait(val: Scalar<Tag>, vtable: Pointer<Tag>, cx: &impl HasDataLayout) -> Self {
+        Immediate::ScalarPair(val.into(), ScalarMaybeUninit::from_pointer(vtable, cx))
     }
 
     #[inline]
@@ -81,8 +93,8 @@ impl<'tcx, Tag> Immediate<Tag> {
 
 // ScalarPair needs a type to interpret, so we often have an immediate and a type together
 // as input for binary and cast operations.
-#[derive(Copy, Clone, Debug)]
-pub struct ImmTy<'tcx, Tag = ()> {
+#[derive(Copy, Clone)]
+pub struct ImmTy<'tcx, Tag = AllocId> {
     imm: Immediate<Tag>,
     pub layout: TyAndLayout<'tcx>,
 }
@@ -90,17 +102,24 @@ pub struct ImmTy<'tcx, Tag = ()> {
 #[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
 rustc_data_structures::static_assert_size!(ImmTy<'_>, 72);
 
-impl<Tag: Copy> std::fmt::Display for ImmTy<'tcx, Tag> {
+impl<'tcx, Tag: Provenance> std::fmt::Debug for ImmTy<'tcx, Tag> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ImmTy { imm, layout } = self;
+        f.debug_struct("ImmTy").field("imm", imm).field("layout", layout).finish()
+    }
+}
+
+impl<Tag: Provenance> std::fmt::Display for ImmTy<'tcx, Tag> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         /// Helper function for printing a scalar to a FmtPrinter
-        fn p<'a, 'tcx, F: std::fmt::Write, Tag>(
+        fn p<'a, 'tcx, F: std::fmt::Write, Tag: Provenance>(
             cx: FmtPrinter<'a, 'tcx, F>,
             s: ScalarMaybeUninit<Tag>,
             ty: Ty<'tcx>,
         ) -> Result<FmtPrinter<'a, 'tcx, F>, std::fmt::Error> {
             match s {
                 ScalarMaybeUninit::Scalar(s) => {
-                    cx.pretty_print_const_scalar(s.erase_tag(), ty, true)
+                    cx.pretty_print_const_scalar(s.erase_for_fmt(), ty, true)
                 }
                 ScalarMaybeUninit::Uninit => cx.typed_value(
                     |mut this| {
@@ -120,11 +139,11 @@ impl<Tag: Copy> std::fmt::Display for ImmTy<'tcx, Tag> {
                         p(cx, s, ty)?;
                         return Ok(());
                     }
-                    write!(f, "{}: {}", s.erase_tag(), self.layout.ty)
+                    write!(f, "{}: {}", s.erase_for_fmt(), self.layout.ty)
                 }
                 Immediate::ScalarPair(a, b) => {
                     // FIXME(oli-obk): at least print tuples and slices nicely
-                    write!(f, "({}, {}): {}", a.erase_tag(), b.erase_tag(), self.layout.ty,)
+                    write!(f, "({}, {}): {}", a.erase_for_fmt(), b.erase_for_fmt(), self.layout.ty,)
                 }
             }
         })
@@ -142,20 +161,37 @@ impl<'tcx, Tag> std::ops::Deref for ImmTy<'tcx, Tag> {
 /// An `Operand` is the result of computing a `mir::Operand`. It can be immediate,
 /// or still in memory. The latter is an optimization, to delay reading that chunk of
 /// memory and to avoid having to store arbitrary-sized data here.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, HashStable, Hash)]
-pub enum Operand<Tag = ()> {
+#[derive(Copy, Clone, PartialEq, Eq, HashStable, Hash)]
+pub enum Operand<Tag = AllocId> {
     Immediate(Immediate<Tag>),
     Indirect(MemPlace<Tag>),
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct OpTy<'tcx, Tag = ()> {
+impl<Tag: Provenance> std::fmt::Debug for Operand<Tag> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use Operand::*;
+        match self {
+            Immediate(i) => f.debug_tuple("Immediate").field(i).finish(),
+            Indirect(p) => f.debug_tuple("Indirect").field(p).finish(),
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+pub struct OpTy<'tcx, Tag = AllocId> {
     op: Operand<Tag>, // Keep this private; it helps enforce invariants.
     pub layout: TyAndLayout<'tcx>,
 }
 
 #[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
 rustc_data_structures::static_assert_size!(OpTy<'_, ()>, 80);
+
+impl<'tcx, Tag: Provenance> std::fmt::Debug for OpTy<'tcx, Tag> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let OpTy { op, layout } = self;
+        f.debug_struct("OpTy").field("op", op).field("layout", layout).finish()
+    }
+}
 
 impl<'tcx, Tag> std::ops::Deref for OpTy<'tcx, Tag> {
     type Target = Operand<Tag>;
@@ -217,7 +253,10 @@ impl<'tcx, Tag: Copy> ImmTy<'tcx, Tag> {
     }
 
     #[inline]
-    pub fn to_const_int(self) -> ConstInt {
+    pub fn to_const_int(self) -> ConstInt
+    where
+        Tag: Provenance,
+    {
         assert!(self.layout.ty.is_integral());
         let int = self.to_scalar().expect("to_const_int doesn't work on scalar pairs").assert_int();
         ConstInt::new(int, self.layout.ty.is_signed(), self.layout.ty.is_ptr_sized_integral())
@@ -225,19 +264,6 @@ impl<'tcx, Tag: Copy> ImmTy<'tcx, Tag> {
 }
 
 impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
-    /// Normalize `place.ptr` to a `Pointer` if this is a place and not a ZST.
-    /// Can be helpful to avoid lots of `force_ptr` calls later, if this place is used a lot.
-    #[inline]
-    pub fn force_op_ptr(
-        &self,
-        op: &OpTy<'tcx, M::PointerTag>,
-    ) -> InterpResult<'tcx, OpTy<'tcx, M::PointerTag>> {
-        match op.try_as_mplace(self) {
-            Ok(mplace) => Ok(self.force_mplace_ptr(mplace)?.into()),
-            Err(imm) => Ok(imm.into()), // Nothing to cast/force
-        }
-    }
-
     /// Try reading an immediate in memory; this is interesting particularly for `ScalarPair`.
     /// Returns `None` if the layout does not permit loading this as a value.
     fn try_read_immediate_from_mplace(
@@ -291,7 +317,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         &self,
         src: &OpTy<'tcx, M::PointerTag>,
     ) -> InterpResult<'tcx, Result<ImmTy<'tcx, M::PointerTag>, MPlaceTy<'tcx, M::PointerTag>>> {
-        Ok(match src.try_as_mplace(self) {
+        Ok(match src.try_as_mplace() {
             Ok(ref mplace) => {
                 if let Some(val) = self.try_read_immediate_from_mplace(mplace)? {
                     Ok(val)
@@ -324,6 +350,14 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         Ok(self.read_immediate(op)?.to_scalar_or_uninit())
     }
 
+    /// Read a pointer from a place.
+    pub fn read_pointer(
+        &self,
+        op: &OpTy<'tcx, M::PointerTag>,
+    ) -> InterpResult<'tcx, Pointer<Option<M::PointerTag>>> {
+        Ok(self.scalar_to_ptr(self.read_scalar(op)?.check_init()?))
+    }
+
     // Turn the wide MPlace into a string (must already be dereferenced!)
     pub fn read_str(&self, mplace: &MPlaceTy<'tcx, M::PointerTag>) -> InterpResult<'tcx, &str> {
         let len = mplace.len(self)?;
@@ -338,7 +372,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         op: &OpTy<'tcx, M::PointerTag>,
         field: usize,
     ) -> InterpResult<'tcx, OpTy<'tcx, M::PointerTag>> {
-        let base = match op.try_as_mplace(self) {
+        let base = match op.try_as_mplace() {
             Ok(ref mplace) => {
                 // We can reuse the mplace field computation logic for indirect operands.
                 let field = self.mplace_field(mplace, field)?;
@@ -381,7 +415,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             self.operand_field(op, index)
         } else {
             // Indexing into a big array. This must be an mplace.
-            let mplace = op.assert_mem_place(self);
+            let mplace = op.assert_mem_place();
             Ok(self.mplace_index(&mplace, index)?.into())
         }
     }
@@ -392,7 +426,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         variant: VariantIdx,
     ) -> InterpResult<'tcx, OpTy<'tcx, M::PointerTag>> {
         // Downcasts only change the layout
-        Ok(match op.try_as_mplace(self) {
+        Ok(match op.try_as_mplace() {
             Ok(ref mplace) => self.mplace_downcast(mplace, variant)?.into(),
             Err(..) => {
                 let layout = op.layout.for_variant(self, variant);
@@ -414,7 +448,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             Subslice { .. } | ConstantIndex { .. } | Index(_) => {
                 // The rest should only occur as mplace, we do not use Immediates for types
                 // allowing such operations.  This matches place_projection forcing an allocation.
-                let mplace = base.assert_mem_place(self);
+                let mplace = base.assert_mem_place();
                 self.mplace_projection(&mplace, proj_elem)?.into()
             }
         })
@@ -569,7 +603,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         // Other cases need layout.
         let tag_scalar = |scalar| -> InterpResult<'tcx, _> {
             Ok(match scalar {
-                Scalar::Ptr(ptr) => Scalar::Ptr(self.global_base_pointer(ptr)?),
+                Scalar::Ptr(ptr, size) => Scalar::Ptr(self.global_base_pointer(ptr)?, size),
                 Scalar::Int(int) => Scalar::Int(int),
             })
         };
@@ -580,9 +614,9 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                 // We rely on mutability being set correctly in that allocation to prevent writes
                 // where none should happen.
                 let ptr = self.global_base_pointer(Pointer::new(id, offset))?;
-                Operand::Indirect(MemPlace::from_ptr(ptr, layout.align.abi))
+                Operand::Indirect(MemPlace::from_ptr(ptr.into(), layout.align.abi))
             }
-            ConstValue::Scalar(x) => Operand::Immediate(tag_scalar(x)?.into()),
+            ConstValue::Scalar(x) => Operand::Immediate(tag_scalar(x.into())?.into()),
             ConstValue::Slice { data, start, end } => {
                 // We rely on mutability being set correctly in `data` to prevent writes
                 // where none should happen.
@@ -591,7 +625,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                     Size::from_bytes(start), // offset: `start`
                 );
                 Operand::Immediate(Immediate::new_slice(
-                    self.global_base_pointer(ptr)?.into(),
+                    Scalar::from_pointer(self.global_base_pointer(ptr)?, &*self.tcx),
                     u64::try_from(end.checked_sub(start).unwrap()).unwrap(), // len: `end - start`
                     self,
                 ))
@@ -658,9 +692,9 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         // Figure out which discriminant and variant this corresponds to.
         Ok(match *tag_encoding {
             TagEncoding::Direct => {
-                let tag_bits = self
-                    .force_bits(tag_val, tag_layout.size)
-                    .map_err(|_| err_ub!(InvalidTag(tag_val.erase_tag())))?;
+                let tag_bits = tag_val
+                    .to_bits(tag_layout.size)
+                    .map_err(|_| err_ub!(InvalidTag(tag_val.erase_for_fmt())))?;
                 // Cast bits from tag layout to discriminant layout.
                 let discr_val = self.cast_from_scalar(tag_bits, tag_layout, discr_layout.ty);
                 let discr_bits = discr_val.assert_bits(discr_layout.size);
@@ -677,7 +711,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                     }
                     _ => span_bug!(self.cur_span(), "tagged layout for non-adt non-generator"),
                 }
-                .ok_or_else(|| err_ub!(InvalidTag(tag_val.erase_tag())))?;
+                .ok_or_else(|| err_ub!(InvalidTag(tag_val.erase_for_fmt())))?;
                 // Return the cast value, and the index.
                 (discr_val, index.0)
             }
@@ -686,14 +720,14 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                 // discriminant (encoded in niche/tag) and variant index are the same.
                 let variants_start = niche_variants.start().as_u32();
                 let variants_end = niche_variants.end().as_u32();
-                let variant = match tag_val.to_bits_or_ptr(tag_layout.size, self) {
+                let variant = match tag_val.to_bits_or_ptr(tag_layout.size) {
                     Err(ptr) => {
                         // The niche must be just 0 (which an inbounds pointer value never is)
                         let ptr_valid = niche_start == 0
                             && variants_start == variants_end
-                            && !self.memory.ptr_may_be_null(ptr);
+                            && !self.memory.ptr_may_be_null(ptr.into());
                         if !ptr_valid {
-                            throw_ub!(InvalidTag(tag_val.erase_tag()))
+                            throw_ub!(InvalidTag(tag_val.erase_for_fmt()))
                         }
                         dataful_variant
                     }
