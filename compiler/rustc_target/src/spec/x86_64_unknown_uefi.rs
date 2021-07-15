@@ -5,7 +5,7 @@
 // The win64 ABI is used. It differs from the sysv64 ABI, so we must use a windows target with
 // LLVM. "x86_64-unknown-windows" is used to get the minimal subset of windows-specific features.
 
-use crate::spec::{CodeModel, Target};
+use crate::spec::Target;
 
 pub fn target() -> Target {
     let mut base = super::uefi_msvc_base::opts();
